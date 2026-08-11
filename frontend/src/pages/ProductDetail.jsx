@@ -3,7 +3,8 @@ import { useParams, useNavigate, useLocation } from "react-router-dom";
 import api, { formatApiErrorDetail } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { fmtIDR, fmtDate } from "@/config/crm";
-import { PACKAGE_STATUSES, ROOM_TYPES, PKG_STATUS_COLORS, DEP_STATUS_COLORS, UMRAH_FIELDS, COST_COMPONENTS } from "@/config/product";
+import { PACKAGE_STATUSES, ROOM_TYPES, PKG_STATUS_COLORS, DEP_STATUS_COLORS, UMRAH_FIELDS, COST_COMPONENTS, PRODUCT_TYPES, subLabel } from "@/config/product";
+import { ProductAdvancedFields } from "@/components/ProductAdvancedFields";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -41,7 +42,7 @@ export default function ProductDetail() {
   if (data === null) return <div className="p-12 text-center" data-testid="product-forbidden"><p className="text-red-600 font-medium">Package not available (403 / not found).</p><Button variant="outline" className="mt-4" onClick={() => navigate(backBase)}>Back</Button></div>;
 
   const p = data.package;
-  const isUmrah = p.product_type === "UMRAH";
+  const isUmrah = p.product_type === "UMROH";
 
   const setStatus = async (s) => {
     try { await api.patch(`/packages/${id}/status`, { stage: s }); toast.success(`Status: ${s}`); load(); }
@@ -89,7 +90,10 @@ export default function ProductDetail() {
               {p.terms && <div className="mt-4"><p className="text-xs font-semibold uppercase text-slate-500 mb-1">Terms & Conditions</p><p className="text-sm text-slate-600">{p.terms}</p></div>}
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mt-5 text-sm">
                 <Info label="Country" v={p.country} /><Info label="Duration" v={p.duration} /><Info label="Category" v={p.category} />
-                <Info label="Min / Max Pax" v={`${p.min_pax} - ${p.max_pax}`} /><Info label="Currency" v={p.currency} /><Info label="Tax" v={p.tax_treatment} />
+                <Info label="Sub Category" v={subLabel(p.product_type, p.sub_category)} />
+                <Info label="Min / Max Pax" v={`${p.min_pax} - ${p.max_pax}`} /><Info label="Currency" v={p.currency} />
+                <Info label="Pajak Kategori" v={`${p.tax_percent || 0}%${p.tax_amount ? " · " + fmtIDR(p.tax_amount) : ""}`} />
+                <Info label="Tax Treatment" v={p.tax_treatment} />
               </div>
             </CardContent></Card>
             <Card className="border-slate-200"><CardContent className="p-6 space-y-3">
@@ -97,6 +101,17 @@ export default function ProductDetail() {
               <Price label="Child Price" v={p.child_price} />
               <Price label="Infant Price" v={p.infant_price} />
               <Price label="Single Supplement" v={p.single_supplement} />
+              {p.sub_category === "PRIVATE" && (p.pricing_tiers || []).length > 0 && (
+                <div className="pt-3 border-t space-y-1" data-testid="detail-tiers">
+                  <p className="text-xs font-semibold uppercase text-slate-500">Harga Berjenjang</p>
+                  {p.pricing_tiers.map((t, i) => (
+                    <div key={i} className="flex justify-between text-sm"><span className="text-slate-500">{t.min_pax}–{t.max_pax} pax</span><span className="font-medium text-slate-800">{fmtIDR(t.price)}</span></div>
+                  ))}
+                </div>
+              )}
+              {p.sub_category === "OPEN_TRIP" && p.min_quota_pax > 0 && (
+                <div className="flex justify-between text-sm pt-2 border-t"><span className="text-slate-500">Min. Kuota Pax</span><span className="font-medium text-slate-800">{p.min_quota_pax}</span></div>
+              )}
               {canHpp && p.gross_margin != null && (
                 <div className="pt-3 border-t space-y-1">
                   <Price label="HPP (Cost/Pax)" v={p.cost_per_pax} />
@@ -273,10 +288,12 @@ function PackageEditDialog({ pkg, onClose, onSaved }) {
   const save = async () => {
     setSaving(true);
     try {
-      const body = { package_name: f.package_name, product_type: f.product_type, category: f.category, destination: f.destination,
+      const body = { package_name: f.package_name, product_type: f.product_type, sub_category: f.sub_category, category: f.category, destination: f.destination,
         country: f.country, duration: f.duration, description: f.description, cover_image: f.cover_image, gallery: f.gallery || [],
         min_pax: Number(f.min_pax), max_pax: Number(f.max_pax), selling_price: Number(f.selling_price), child_price: Number(f.child_price),
         infant_price: Number(f.infant_price), single_supplement: Number(f.single_supplement), currency: f.currency,
+        min_quota_pax: Number(f.min_quota_pax || 0), tour_price_portion: Number(f.tour_price_portion || 0),
+        pricing_tiers: (f.pricing_tiers || []).map((t) => ({ min_pax: Number(t.min_pax || 0), max_pax: Number(t.max_pax || 0), price: Number(t.price || 0) })),
         tax_treatment: f.tax_treatment, commission_eligibility: f.commission_eligibility, status: f.status,
         promo_text: f.promo_text, terms: f.terms, umrah: f.umrah };
       await api.put(`/packages/${pkg._id}`, body); toast.success("Package updated"); onSaved();
@@ -294,6 +311,8 @@ function PackageEditDialog({ pkg, onClose, onSaved }) {
           <EF label="Selling Price"><Input type="number" value={f.selling_price} onChange={(e) => set("selling_price")(e.target.value)} data-testid="edit-price-input" /></EF>
           <EF label="Child Price"><Input type="number" value={f.child_price} onChange={(e) => set("child_price")(e.target.value)} /></EF>
           <EF label="Status"><Select value={f.status} onValueChange={set("status")}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent className="bg-white">{PACKAGE_STATUSES.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent></Select></EF>
+          <EF label="Product Type"><Select value={f.product_type} onValueChange={set("product_type")}><SelectTrigger data-testid="edit-type-select"><SelectValue /></SelectTrigger><SelectContent className="bg-white">{PRODUCT_TYPES.map((t) => <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>)}</SelectContent></Select></EF>
+          <ProductAdvancedFields f={f} set={set} />
           <EF label="Description" full><Textarea value={f.description} onChange={(e) => set("description")(e.target.value)} /></EF>
           <EF label="Promo Text" full><Input value={f.promo_text} onChange={(e) => set("promo_text")(e.target.value)} /></EF>
           <EF label="Terms" full><Textarea value={f.terms} onChange={(e) => set("terms")(e.target.value)} /></EF>

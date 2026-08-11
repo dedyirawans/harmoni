@@ -1101,6 +1101,29 @@ async def perms_of(user):
     return await get_user_permissions(user)
 
 
+PRODUCT_TYPES3 = ["UMROH", "TOUR", "UMROH_PLUS"]
+SUB_CATEGORIES = ["PRIVATE", "OPEN_TRIP", "SEAT_IN_COACH"]
+
+
+def norm_type(t):
+    return "UMROH" if t == "UMRAH" else t
+
+
+def resolve_category_tax(pkg, settings):
+    ct = (settings or {}).get("category_tax", {})
+    pt = norm_type(pkg.get("product_type"))
+    if pt == "TOUR":
+        pct = float(ct.get("tour_percent", 0) or 0)
+        base = float(pkg.get("selling_price") or 0)
+    elif pt == "UMROH_PLUS":
+        pct = float(ct.get("umroh_plus_percent", 0) or 0)
+        base = float(pkg.get("tour_price_portion") or 0)  # only tour portion taxed
+    else:  # UMROH
+        pct = float(ct.get("umroh_percent", 0) or 0)
+        base = 0
+    return pct, round(base * pct / 100)
+
+
 def strip_hpp(pkg: dict, can_hpp: bool) -> dict:
     d = serialize(dict(pkg))
     if not can_hpp:
@@ -1112,6 +1135,10 @@ def strip_hpp(pkg: dict, can_hpp: bool) -> dict:
 class PackageModel(BaseModel):
     package_name: str
     product_type: str = "TOUR"
+    sub_category: Optional[str] = ""
+    min_quota_pax: Optional[int] = 0
+    tour_price_portion: Optional[float] = 0
+    pricing_tiers: Optional[List[dict]] = []
     category: Optional[str] = ""
     destination: Optional[str] = ""
     country: Optional[str] = ""
@@ -1199,15 +1226,24 @@ async def list_packages(product_type: Optional[str] = None, status: Optional[str
     elif status and status != "all":
         query["status"] = status
     docs = await db.packages.find(query).sort("created_at", -1).to_list(1000)
-    return [strip_hpp(d, can_hpp) for d in docs]
+    sysdoc = await db.system_settings.find_one({"key": "system"})
+    settings = (sysdoc or {}).get("settings", {})
+    out = []
+    for d in docs:
+        item = strip_hpp(d, can_hpp)
+        pct, amt = resolve_category_tax(d, settings)
+        item["tax_percent"] = pct
+        item["tax_amount"] = amt
+        out.append(item)
+    return out
 
 
 @api_router.post("/packages")
 async def create_package(body: PackageModel, request: Request, user: dict = Depends(require_permission("product.manage"))):
-    if body.product_type not in ("TOUR", "UMRAH"):
+    if body.product_type not in PRODUCT_TYPES3:
         raise HTTPException(status_code=400, detail="Invalid product type")
     count = await db.packages.count_documents({})
-    prefix = "UMR" if body.product_type == "UMRAH" else "TOUR"
+    prefix = {"UMROH": "UMR", "TOUR": "TOUR", "UMROH_PLUS": "UMRPLUS"}[body.product_type]
     doc = body.model_dump()
     doc.update({"package_code": f"{prefix}-{count + 1:04d}", "version": 1,
                 "created_at": now_iso(), "created_by": user["name"]})
@@ -1230,6 +1266,10 @@ async def get_package(pid: str, user: dict = Depends(require_any_permission("pro
     itins = [serialize(d) for d in await db.package_itineraries.find({"package_id": pid}).sort("day", 1).to_list(200)]
     deps = [compute_departure(serialize(d)) for d in await db.departures.find({"package_id": pid}).sort("departure_date", 1).to_list(200)]
     result = {"package": strip_hpp(pkg, can_hpp), "itineraries": itins, "departures": deps}
+    sysdoc = await db.system_settings.find_one({"key": "system"})
+    pct, amt = resolve_category_tax(pkg, (sysdoc or {}).get("settings", {}))
+    result["package"]["tax_percent"] = pct
+    result["package"]["tax_amount"] = amt
     if can_hpp:
         cost = await db.package_costs.find_one({"package_id": pid})
         result["costing"] = serialize(cost) if cost else None
@@ -1402,6 +1442,38 @@ async def all_departures(user: dict = Depends(require_any_permission("departures
     return out
 
 
+@api_router.get("/packages/{pid}/price")
+async def package_price(pid: str, pax: int = 1, hotel: Optional[str] = None,
+                        user: dict = Depends(require_any_permission("product.view", "packages.view", "hpp.view"))):
+    pkg = await db.packages.find_one({"_id": ObjectId(pid)})
+    if not pkg:
+        raise HTTPException(status_code=404, detail="Package not found")
+    sub = pkg.get("sub_category")
+    base = float(pkg.get("selling_price") or 0)
+    if sub == "PRIVATE":
+        match = None
+        for t in pkg.get("pricing_tiers", []):
+            hp_ok = (not hotel) or (t.get("hotel") == hotel)
+            lo = int(t.get("min_pax") or 0)
+            hi = int(t.get("max_pax") or 9999)
+            if hp_ok and lo <= pax <= hi:
+                match = t
+                break
+        return {"mode": "private", "pax": pax, "hotel": hotel,
+                "price_per_pax": round(float(match["price"])) if match else round(base),
+                "tiers": pkg.get("pricing_tiers", [])}
+    if sub == "OPEN_TRIP":
+        minq = int(pkg.get("min_quota_pax") or 0)
+        if minq and pax and pax < minq:
+            eff = (minq * base) / pax
+        else:
+            eff = base
+        return {"mode": "open_trip", "pax": pax, "min_quota_pax": minq,
+                "base_price": round(base), "price_per_pax": round(eff),
+                "quota_met": (not minq) or pax >= minq}
+    return {"mode": "fixed", "pax": pax, "price_per_pax": round(base)}
+
+
 
 
 
@@ -1478,6 +1550,7 @@ async def seed():
             "commission": {"default_percent": 2.5},
             "n8n": {"webhook_url": "", "enabled": False},
             "notification": {"email_enabled": True, "whatsapp_enabled": False},
+            "category_tax": {"umroh_percent": 0, "tour_percent": 1.1, "umroh_plus_percent": 1.1},
             "login_page": DEFAULT_LOGIN_PAGE,
         }})
 
@@ -1532,6 +1605,11 @@ async def seed():
                  "status": "pending", "sales_pic_id": sid, "sales_pic_name": sname, "branch": sbranch, "created_at": now_iso()},
             ])
 
+    await db.packages.update_many({"product_type": "UMRAH"}, {"$set": {"product_type": "UMROH"}})
+    await db.system_settings.update_one(
+        {"key": "system", "settings.category_tax": {"$exists": False}},
+        {"$set": {"settings.category_tax": {"umroh_percent": 0, "tour_percent": 1.1, "umroh_plus_percent": 1.1}}})
+    await db.packages.update_many({"sub_category": {"$exists": False}}, {"$set": {"sub_category": "OPEN_TRIP"}})
     if await db.packages.count_documents({}) == 0:
         umrah = {
             "package_code": "UMR-0001", "package_name": "Umrah Reguler 9 Hari", "product_type": "UMRAH",

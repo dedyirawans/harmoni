@@ -1,4 +1,34 @@
-export const PRODUCT_TYPES = ["TOUR", "UMRAH"];
+export const PRODUCT_TYPES = [
+  { value: "UMROH", label: "Umroh" },
+  { value: "TOUR", label: "Paket Tour" },
+  { value: "UMROH_PLUS", label: "Umroh Plus" },
+];
+
+export const TYPE_LABEL = { UMROH: "Umroh", TOUR: "Paket Tour", UMROH_PLUS: "Umroh Plus" };
+
+export const SUB_BY_TYPE = {
+  UMROH: [
+    { value: "PRIVATE", label: "Umroh Private" },
+    { value: "OPEN_TRIP", label: "Umroh Open Trip" },
+    { value: "SEAT_IN_COACH", label: "Umroh Seat in Coach" },
+  ],
+  TOUR: [
+    { value: "PRIVATE", label: "Private Tour" },
+    { value: "OPEN_TRIP", label: "Tour Open Trip" },
+    { value: "SEAT_IN_COACH", label: "Tour Seat in Coach" },
+  ],
+  UMROH_PLUS: [
+    { value: "PRIVATE", label: "Private" },
+    { value: "OPEN_TRIP", label: "Open Trip" },
+    { value: "SEAT_IN_COACH", label: "Seat in Coach" },
+  ],
+};
+
+export const subLabel = (type, sub) => {
+  const arr = SUB_BY_TYPE[type] || [];
+  return (arr.find((s) => s.value === sub) || {}).label || sub || "";
+};
+
 export const PACKAGE_STATUSES = ["DRAFT", "ACTIVE", "INACTIVE", "ARCHIVED"];
 export const ROOM_TYPES = ["QUAD", "TRIPLE", "DOUBLE", "SUITE"];
 

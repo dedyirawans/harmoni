@@ -43,6 +43,15 @@ Super Admin can edit sales/accounting permissions via Settings > Roles & Permiss
 ## Next tasks
 - Phase 4: Quotations, Bookings & travelers (versioned pricing), Invoices/Payments.
 
+## Phase 3.1 — Product Categorization & Advanced Pricing/Tax (2026-06) — DONE
+- **Categories**: UMROH / TOUR / UMROH_PLUS with human labels; **Sub-categories**: PRIVATE / OPEN_TRIP / SEAT_IN_COACH.
+- **PRIVATE tiered pricing**: array of {min_pax, max_pax, price}; /packages/{id}/price returns per-pax by pax bracket.
+- **OPEN_TRIP min quota**: min_quota_pax; when pax < quota, per-pax price = min_quota_pax*base/pax.
+- **UMROH_PLUS tour_price_portion**: only tour portion taxed.
+- **Category tax settings** (Settings > Global > 'Pajak per Kategori Produk'): umroh_percent(0)/tour_percent(1.1)/umroh_plus_percent(1.1). TOUR taxed on selling_price, UMROH_PLUS on tour_price_portion, UMROH untaxed.
+- UI: shared component ProductAdvancedFields.jsx used in create + edit dialogs; ProductDetail overview shows Sub Category + Pajak Kategori and tier/min-quota breakdown.
+- Tests: backend 12/12 (test_phase3_pricing_tax.py), frontend 9/9 flows + Phase1-3 regression clean (iteration_6.json).
+
 ## Phase 3 — Product / Tour & Umrah Package Management (2026-06) — DONE
 - **Packages**: master (code, name, TOUR/UMRAH type, category, destination, duration, pricing tiers, tax, commission, status DRAFT/ACTIVE/INACTIVE/ARCHIVED, promo, terms, Umrah details incl. Makkah/Madinah hotel+nights, airline, visa, muthawwif, room type). Grid + filters + search.
 - **Itinerary builder**: per-day CRUD, duplicate, and drag-and-drop reorder (admin); read-only for Sales.

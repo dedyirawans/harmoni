@@ -3,7 +3,8 @@ import { useNavigate, useLocation } from "react-router-dom";
 import api, { formatApiErrorDetail } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { fmtIDR } from "@/config/crm";
-import { PRODUCT_TYPES, PACKAGE_STATUSES, ROOM_TYPES, PKG_STATUS_COLORS, UMRAH_FIELDS } from "@/config/product";
+import { PRODUCT_TYPES, PACKAGE_STATUSES, ROOM_TYPES, PKG_STATUS_COLORS, UMRAH_FIELDS, subLabel } from "@/config/product";
+import { ProductAdvancedFields } from "@/components/ProductAdvancedFields";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -54,7 +55,9 @@ export default function Products() {
     try {
       const p = { ...form, min_pax: Number(form.min_pax), max_pax: Number(form.max_pax),
         selling_price: Number(form.selling_price), child_price: Number(form.child_price),
-        infant_price: Number(form.infant_price), single_supplement: Number(form.single_supplement) };
+        infant_price: Number(form.infant_price), single_supplement: Number(form.single_supplement),
+        min_quota_pax: Number(form.min_quota_pax || 0), tour_price_portion: Number(form.tour_price_portion || 0),
+        pricing_tiers: (form.pricing_tiers || []).map((t) => ({ min_pax: Number(t.min_pax || 0), max_pax: Number(t.max_pax || 0), price: Number(t.price || 0) })) };
       await api.post("/packages", p);
       toast.success("Package created"); setOpen(false); setForm(EMPTY); load();
     } catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); }
@@ -75,12 +78,13 @@ export default function Products() {
               <DialogHeader><DialogTitle className="font-display">New Package</DialogTitle><DialogDescription>Create a tour or umrah package.</DialogDescription></DialogHeader>
               <div className="grid grid-cols-2 gap-4 py-2">
                 <F label="Package Name *" full><Input value={form.package_name} onChange={(e) => set("package_name")(e.target.value)} data-testid="package-name-input" /></F>
-                <F label="Product Type"><Select value={form.product_type} onValueChange={set("product_type")}><SelectTrigger data-testid="package-type-select"><SelectValue /></SelectTrigger><SelectContent className="bg-white">{PRODUCT_TYPES.map((t) => <SelectItem key={t} value={t}>{t}</SelectItem>)}</SelectContent></Select></F>
+                <F label="Product Type"><Select value={form.product_type} onValueChange={set("product_type")}><SelectTrigger data-testid="package-type-select"><SelectValue /></SelectTrigger><SelectContent className="bg-white">{PRODUCT_TYPES.map((t) => <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>)}</SelectContent></Select></F>
                 <F label="Category"><Input value={form.category} onChange={(e) => set("category")(e.target.value)} placeholder="e.g. Umrah VIP / Japan" /></F>
                 <F label="Destination"><Input value={form.destination} onChange={(e) => set("destination")(e.target.value)} /></F>
                 <F label="Country"><Input value={form.country} onChange={(e) => set("country")(e.target.value)} /></F>
                 <F label="Duration"><Input value={form.duration} onChange={(e) => set("duration")(e.target.value)} placeholder="e.g. 9 Days" /></F>
                 <F label="Status"><Select value={form.status} onValueChange={set("status")}><SelectTrigger data-testid="package-status-select"><SelectValue /></SelectTrigger><SelectContent className="bg-white">{PACKAGE_STATUSES.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent></Select></F>
+                <ProductAdvancedFields f={form} set={set} />
                 <F label="Selling Price"><Input type="number" value={form.selling_price} onChange={(e) => set("selling_price")(e.target.value)} data-testid="package-price-input" /></F>
                 <F label="Child Price"><Input type="number" value={form.child_price} onChange={(e) => set("child_price")(e.target.value)} /></F>
                 <F label="Infant Price"><Input type="number" value={form.infant_price} onChange={(e) => set("infant_price")(e.target.value)} /></F>
@@ -90,7 +94,7 @@ export default function Products() {
                 <F label="Cover Image URL" full><Input value={form.cover_image} onChange={(e) => set("cover_image")(e.target.value)} /></F>
                 <F label="Description" full><Textarea value={form.description} onChange={(e) => set("description")(e.target.value)} /></F>
                 <F label="Promo Text" full><Input value={form.promo_text} onChange={(e) => set("promo_text")(e.target.value)} /></F>
-                {form.product_type === "UMRAH" && (
+                {form.product_type === "UMROH" && (
                   <div className="col-span-2 border-t pt-3">
                     <p className="text-xs font-semibold uppercase text-slate-500 mb-2">Umrah Details</p>
                     <div className="grid grid-cols-2 gap-3">
@@ -114,7 +118,7 @@ export default function Products() {
           <Search className="h-4 w-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" aria-hidden="true" />
           <Input className="pl-9" placeholder="Search package, destination..." value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.key === "Enter" && load()} data-testid="package-search-input" />
         </div>
-        <Select value={type} onValueChange={setType}><SelectTrigger className="w-40" data-testid="package-type-filter"><SelectValue /></SelectTrigger><SelectContent className="bg-white"><SelectItem value="all">All types</SelectItem>{PRODUCT_TYPES.map((t) => <SelectItem key={t} value={t}>{t}</SelectItem>)}</SelectContent></Select>
+        <Select value={type} onValueChange={setType}><SelectTrigger className="w-40" data-testid="package-type-filter"><SelectValue /></SelectTrigger><SelectContent className="bg-white"><SelectItem value="all">All types</SelectItem>{PRODUCT_TYPES.map((t) => <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>)}</SelectContent></Select>
         {canManage && <Select value={status} onValueChange={setStatus}><SelectTrigger className="w-40" data-testid="package-status-filter"><SelectValue /></SelectTrigger><SelectContent className="bg-white"><SelectItem value="all">All status</SelectItem>{PACKAGE_STATUSES.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent></Select>}
         <Button variant="outline" onClick={load}>Search</Button>
       </div>
@@ -130,7 +134,7 @@ export default function Products() {
               <div className="h-28 bg-slate-100 relative">
                 {p.cover_image ? <img src={p.cover_image} alt="" className="h-full w-full object-cover" /> : <div className="h-full w-full flex items-center justify-center"><PackageIcon className="h-8 w-8 text-slate-300" aria-hidden="true" /></div>}
                 <Badge variant="outline" className={`absolute top-2 right-2 ${PKG_STATUS_COLORS[p.status]}`}>{p.status}</Badge>
-                <Badge variant="outline" className="absolute top-2 left-2 bg-white/90 text-slate-700">{p.product_type}</Badge>
+                <Badge variant="outline" className="absolute top-2 left-2 bg-white/90 text-slate-700">{subLabel(p.product_type, p.sub_category) || p.product_type}</Badge>
               </div>
               <CardContent className="p-4">
                 <p className="text-[10px] font-mono text-slate-400">{p.package_code}</p>

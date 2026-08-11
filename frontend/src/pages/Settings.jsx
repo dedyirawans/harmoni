@@ -141,6 +141,31 @@ export default function Settings() {
             </Card>
 
             <Card className="border-slate-200 shadow-sm">
+              <CardHeader><CardTitle className="font-display text-lg">Pajak per Kategori Produk</CardTitle></CardHeader>
+              <CardContent className="space-y-4">
+                <p className="text-xs text-slate-500">Persentase pajak diterapkan otomatis: Tour dari harga jual, Umroh Plus dari porsi harga tour, Umroh tidak dikenakan pajak.</p>
+                <div className="space-y-2">
+                  <Label>Umroh (%)</Label>
+                  <Input type="number" value={system.category_tax?.umroh_percent ?? 0} disabled={!canManage}
+                    onChange={(e) => setSystem({ ...system, category_tax: { ...system.category_tax, umroh_percent: Number(e.target.value) } })}
+                    data-testid="tax-umroh-input" />
+                </div>
+                <div className="space-y-2">
+                  <Label>Paket Tour (%)</Label>
+                  <Input type="number" value={system.category_tax?.tour_percent ?? 0} disabled={!canManage}
+                    onChange={(e) => setSystem({ ...system, category_tax: { ...system.category_tax, tour_percent: Number(e.target.value) } })}
+                    data-testid="tax-tour-input" />
+                </div>
+                <div className="space-y-2">
+                  <Label>Umroh Plus (%)</Label>
+                  <Input type="number" value={system.category_tax?.umroh_plus_percent ?? 0} disabled={!canManage}
+                    onChange={(e) => setSystem({ ...system, category_tax: { ...system.category_tax, umroh_plus_percent: Number(e.target.value) } })}
+                    data-testid="tax-umroh-plus-input" />
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="border-slate-200 shadow-sm">
               <CardHeader><CardTitle className="font-display text-lg">Integration & Notifications</CardTitle></CardHeader>
               <CardContent className="space-y-4">
                 <div className="space-y-2">
