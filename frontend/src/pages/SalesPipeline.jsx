@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import api, { formatApiErrorDetail } from "@/lib/api";
-import { LEAD_STAGES, LEAD_LOST, STAGE_COLORS, LEAD_SOURCES, fmtIDR, fmtDate } from "@/config/crm";
+import { LEAD_STAGES, LEAD_LOST, STAGE_COLORS, STAGE_BAR, STAGE_LEFT, LEAD_SOURCES, fmtIDR, fmtDate } from "@/config/crm";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -85,16 +85,17 @@ export default function SalesPipeline() {
       {leads === null ? (
         <div className="p-12 flex justify-center"><Loader2 className="h-6 w-6 animate-spin text-blue-600" /></div>
       ) : (
-        <div className="flex gap-4 overflow-x-auto pb-4" data-testid="kanban-board">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4" data-testid="kanban-board">
           {ALL_STAGES.map((stage) => (
-            <div key={stage} className="w-72 shrink-0" data-testid={`kanban-col-${stage}`}>
-              <div className="flex items-center justify-between px-1 mb-2">
-                <span className="text-xs font-semibold uppercase tracking-wide text-slate-600">{stage}</span>
-                <Badge variant="outline" className="text-[10px] bg-slate-100 text-slate-600">{grouped(stage).length}</Badge>
+            <div key={stage} className="rounded-lg border border-slate-200 bg-white overflow-hidden flex flex-col" data-testid={`kanban-col-${stage}`}>
+              <div className={`h-1.5 w-full ${STAGE_BAR[stage]}`} aria-hidden="true" />
+              <div className={`flex items-center justify-between px-3 py-2 border-b ${STAGE_COLORS[stage]}`}>
+                <span className="text-xs font-bold uppercase tracking-wide">{stage}</span>
+                <Badge variant="outline" className="text-[10px] bg-white/70 border-transparent">{grouped(stage).length}</Badge>
               </div>
-              <div className="space-y-3 min-h-[100px] bg-slate-100/50 rounded-lg p-2">
+              <div className="space-y-3 min-h-[120px] p-2 flex-1">
                 {grouped(stage).map((l) => (
-                  <Card key={l._id} className="border-slate-200 shadow-sm hover:shadow-md transition-shadow duration-200" data-testid={`lead-card-${l._id}`}>
+                  <Card key={l._id} className={`border-slate-200 border-l-4 ${STAGE_LEFT[stage]} shadow-sm hover:shadow-md transition-shadow duration-200`} data-testid={`lead-card-${l._id}`}>
                     <CardContent className="p-3 space-y-2">
                       <div className="flex items-center justify-between">
                         <button onClick={() => l.customer_id && navigate(`/crm/${l.customer_id}`)} className="text-sm font-semibold text-slate-900 hover:text-blue-700 text-left flex items-center gap-1">

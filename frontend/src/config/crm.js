@@ -23,6 +23,30 @@ export const STAGE_COLORS = {
   LOST: "bg-red-50 text-red-700 border-red-200",
 };
 
+export const STAGE_BAR = {
+  NEW: "bg-slate-400",
+  CONTACTED: "bg-sky-500",
+  QUALIFIED: "bg-indigo-500",
+  QUOTATION: "bg-blue-500",
+  NEGOTIATION: "bg-violet-500",
+  BOOKING: "bg-amber-500",
+  PAID: "bg-emerald-500",
+  COMPLETED: "bg-green-600",
+  LOST: "bg-red-500",
+};
+
+export const STAGE_LEFT = {
+  NEW: "border-l-slate-400",
+  CONTACTED: "border-l-sky-500",
+  QUALIFIED: "border-l-indigo-500",
+  QUOTATION: "border-l-blue-500",
+  NEGOTIATION: "border-l-violet-500",
+  BOOKING: "border-l-amber-500",
+  PAID: "border-l-emerald-500",
+  COMPLETED: "border-l-green-600",
+  LOST: "border-l-red-500",
+};
+
 export const FOLLOWUP_ACTIVITIES = ["WhatsApp", "Call", "Email", "Meeting", "Send Quotation", "Payment Reminder", "Other"];
 export const GENDERS = ["Male", "Female"];
 
