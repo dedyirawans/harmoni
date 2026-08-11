@@ -51,6 +51,7 @@ export function AuthProvider({ children }) {
 
   const hasPerm = (perm) => {
     if (!user) return false;
+    if (user.role === "super_admin") return true;
     if (!perm) return true;
     return (user.permissions || []).includes(perm);
   };

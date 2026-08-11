@@ -1,0 +1,22 @@
+{
+  "summary": "Verified bug fix: Super Admin can now access /quotations and all other menus without 403. Frontend hasPerm role-based bypass for super_admin works. Regression RBAC still enforced for Sales (no Generate Invoice/Record Payment on booking detail) and Accounting (no New Quotation button on /quotations, Forbidden on /sales).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "hasPerm super_admin bypass is a good defensive fix; consider also refreshing /auth/me on route change or after backend role/permission mutations so cached permissions don't go stale for non-super-admin roles either."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "N/A (skipped per request)", "frontend": "100%"},
+  "test_credentials": "Super Admin: dedyirawan18@gmail.com/Admin@123; Sales: sales@safarcrm.com/Sales@123; Accounting: accounting@safarcrm.com/Account@123",
+  "seed_data_creation": "None",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Bug fixed and verified. AuthContext.hasPerm returns true for user.role==='super_admin'. All 8 Super Admin routes load without Forbidden. Sales booking detail correctly hides invoice.manage/payment.manage actions. Accounting correctly lacks New Quotation button on /quotations and gets Forbidden on /sales. 403 console errors while Accounting loads /quotations are expected (GET /api/quotations denied by backend since role lacks quotation.view — but ROUTE_PERMS lets them view the page shell; consider tightening to block route too, but not part of this bug).",
+  "rca of the issue": "Root cause: Frontend RequirePermission guard relied purely on cached permissions from /auth/me. After Phase 4 introduced new permissions like quotation.view, super_admin sessions with stale /me responses did not include the new perm, causing the guard to render Forbidden. Fix: hasPerm now short-circuits to true when user.role==='super_admin', mirroring backend which grants ALL_PERMISSIONS to super_admin. Verified by direct navigation to /quotations and all other menus."
+}

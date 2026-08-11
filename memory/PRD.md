@@ -1,5 +1,8 @@
 # Safar Travel CRM — Product Requirements (Living Doc)
 
+## Bug fix (2026-06)
+- Super Admin 403 on /quotations: hasPerm (AuthContext) now bypasses for role super_admin, matching backend ALL_PERMISSIONS. Verified iteration_9.json (frontend 100%).
+
 ## UI polish (2026-06)
 - Dashboard charts recolored: multi-color pipeline bars, gradient area for monthly trend, vivid donut + colored source bars.
 - List pages (Quotations, Bookings, Accounting invoices/receivables/reminders) converted to real tables with blue headers, column dividers, and zebra rows.
