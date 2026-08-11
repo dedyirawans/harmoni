@@ -10,8 +10,13 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogTrigger } from "@/components/ui/dialog";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Plus, Loader2, FileText, Check, X, ArrowRightCircle, Trash2 } from "lucide-react";
 import { toast } from "sonner";
+
+const HEAD = "bg-blue-600 text-white font-semibold text-xs uppercase tracking-wide border-r border-blue-500/40 last:border-r-0";
+const CELL = "border-r border-slate-100 last:border-r-0 align-middle";
+const ROW = "odd:bg-white even:bg-slate-50 hover:bg-blue-50/60 border-b border-slate-200";
 
 export default function Quotations() {
   const { hasPerm } = useAuth();
@@ -95,40 +100,45 @@ export default function Quotations() {
       {rows === null ? <div className="p-12 flex justify-center"><Loader2 className="h-6 w-6 animate-spin text-blue-600" /></div>
         : rows.length === 0 ? <Card className="border-slate-200"><CardContent className="p-12 text-center text-slate-500">Belum ada quotation.</CardContent></Card>
         : (
-          <div className="space-y-3" data-testid="quotations-list">
-            {rows.map((q) => (
-              <Card key={q._id} className="border-slate-200 shadow-sm" data-testid={`quotation-row-${q._id}`}>
-                <CardContent className="p-4 flex items-center justify-between flex-wrap gap-3">
-                  <div className="min-w-[220px]">
-                    <p className="font-mono text-[11px] text-slate-400">{q.quotation_number}</p>
-                    <p className="font-semibold text-slate-900">{q.customer_name}</p>
-                    <p className="text-sm text-slate-500">{q.package_name} · {q.pax} pax</p>
-                  </div>
-                  <div className="text-right">
-                    <p className="font-display text-lg font-bold text-slate-900">{fmtIDR(q.total)}</p>
-                    <p className="text-xs text-slate-400">Diskon {q.discount_percent}% · {fmtDate(q.created_at)}</p>
-                  </div>
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <Badge variant="outline" className={QUOT_STATUS_COLORS[q.status]}>{q.status}</Badge>
-                    <Badge variant="outline" className={DISCOUNT_STATUS_COLORS[q.discount_status]} data-testid={`quot-discount-status-${q._id}`}>Disc: {q.discount_status}</Badge>
-                    <Button size="sm" variant="outline" onClick={() => openPdf(q._id)} data-testid={`quot-pdf-${q._id}`}><FileText className="h-4 w-4 mr-1" />PDF</Button>
-                    {canApprove && q.discount_status === "PENDING" && (
-                      <>
-                        <Button size="sm" className="bg-emerald-600 hover:bg-emerald-700" onClick={() => act(() => api.patch(`/quotations/${q._id}/discount-approval`, { action: "approve" }), "Diskon disetujui")} data-testid={`quot-approve-${q._id}`}><Check className="h-4 w-4 mr-1" />Approve</Button>
-                        <Button size="sm" variant="outline" className="text-red-600" onClick={() => act(() => api.patch(`/quotations/${q._id}/discount-approval`, { action: "reject" }), "Diskon ditolak")} data-testid={`quot-reject-${q._id}`}><X className="h-4 w-4 mr-1" />Reject</Button>
-                      </>
-                    )}
-                    {canManage && ["DRAFT", "SENT"].includes(q.status) && (
-                      <Button size="sm" variant="outline" onClick={() => act(() => api.patch(`/quotations/${q._id}/status`, { status: "ACCEPTED" }), "Quotation accepted")} data-testid={`quot-accept-${q._id}`}>Accept</Button>
-                    )}
-                    {canBook && q.status === "ACCEPTED" && !q.converted_booking_id && (
-                      <Button size="sm" className="bg-blue-600 hover:bg-blue-700" onClick={() => act(() => api.post(`/quotations/${q._id}/convert`, { booking_source: "SALES" }), "Dikonversi ke booking")} data-testid={`quot-convert-${q._id}`}><ArrowRightCircle className="h-4 w-4 mr-1" />Convert</Button>
-                    )}
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
-          </div>
+          <Card className="border-slate-200 shadow-sm overflow-hidden">
+            <Table data-testid="quotations-list">
+              <TableHeader><TableRow className="hover:bg-transparent">
+                <TableHead className={HEAD}>Quotation</TableHead><TableHead className={HEAD}>Customer</TableHead>
+                <TableHead className={HEAD}>Package</TableHead><TableHead className={`${HEAD} text-right`}>Total</TableHead>
+                <TableHead className={HEAD}>Status</TableHead><TableHead className={HEAD}>Diskon</TableHead>
+                <TableHead className={`${HEAD} text-right`}>Aksi</TableHead>
+              </TableRow></TableHeader>
+              <TableBody>
+                {rows.map((q) => (
+                  <TableRow key={q._id} className={ROW} data-testid={`quotation-row-${q._id}`}>
+                    <TableCell className={`${CELL} font-mono text-xs`}>{q.quotation_number}</TableCell>
+                    <TableCell className={`${CELL} font-medium text-slate-900`}>{q.customer_name}</TableCell>
+                    <TableCell className={`${CELL} text-slate-500`}>{q.package_name}<span className="block text-xs text-slate-400">{q.pax} pax</span></TableCell>
+                    <TableCell className={`${CELL} text-right font-semibold`}>{fmtIDR(q.total)}<span className="block text-xs text-slate-400 font-normal">diskon {q.discount_percent}%</span></TableCell>
+                    <TableCell className={CELL}><Badge variant="outline" className={QUOT_STATUS_COLORS[q.status]}>{q.status}</Badge></TableCell>
+                    <TableCell className={CELL}><Badge variant="outline" className={DISCOUNT_STATUS_COLORS[q.discount_status]} data-testid={`quot-discount-status-${q._id}`}>{q.discount_status}</Badge></TableCell>
+                    <TableCell className={`${CELL} text-right`}>
+                      <div className="flex items-center gap-1 justify-end flex-wrap">
+                        <Button size="sm" variant="outline" onClick={() => openPdf(q._id)} data-testid={`quot-pdf-${q._id}`}><FileText className="h-4 w-4" /></Button>
+                        {canApprove && q.discount_status === "PENDING" && (
+                          <>
+                            <Button size="sm" className="bg-emerald-600 hover:bg-emerald-700" onClick={() => act(() => api.patch(`/quotations/${q._id}/discount-approval`, { action: "approve" }), "Diskon disetujui")} data-testid={`quot-approve-${q._id}`}><Check className="h-4 w-4" /></Button>
+                            <Button size="sm" variant="outline" className="text-red-600" onClick={() => act(() => api.patch(`/quotations/${q._id}/discount-approval`, { action: "reject" }), "Diskon ditolak")} data-testid={`quot-reject-${q._id}`}><X className="h-4 w-4" /></Button>
+                          </>
+                        )}
+                        {canManage && ["DRAFT", "SENT"].includes(q.status) && (
+                          <Button size="sm" variant="outline" onClick={() => act(() => api.patch(`/quotations/${q._id}/status`, { status: "ACCEPTED" }), "Quotation accepted")} data-testid={`quot-accept-${q._id}`}>Accept</Button>
+                        )}
+                        {canBook && q.status === "ACCEPTED" && !q.converted_booking_id && (
+                          <Button size="sm" className="bg-blue-600 hover:bg-blue-700" onClick={() => act(() => api.post(`/quotations/${q._id}/convert`, { booking_source: "SALES" }), "Dikonversi ke booking")} data-testid={`quot-convert-${q._id}`}><ArrowRightCircle className="h-4 w-4 mr-1" />Convert</Button>
+                        )}
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </Card>
         )}
     </div>
   );

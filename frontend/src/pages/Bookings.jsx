@@ -5,7 +5,12 @@ import { fmtIDR, fmtDate } from "@/config/crm";
 import { BOOKING_STATUS_COLORS } from "@/config/phase4";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Loader2, CalendarCheck } from "lucide-react";
+
+const HEAD = "bg-blue-600 text-white font-semibold text-xs uppercase tracking-wide border-r border-blue-500/40 last:border-r-0";
+const CELL = "border-r border-slate-100 last:border-r-0 align-middle";
+const ROW = "odd:bg-white even:bg-slate-50 hover:bg-blue-50/60 border-b border-slate-200 cursor-pointer";
 
 export default function Bookings() {
   const navigate = useNavigate();

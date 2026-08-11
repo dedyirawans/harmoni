@@ -8,11 +8,13 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { TrendingUp } from "lucide-react";
 import {
-  ResponsiveContainer, BarChart, Bar, LineChart, Line, PieChart, Pie, Cell,
+  ResponsiveContainer, BarChart, Bar, AreaChart, Area, PieChart, Pie, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend,
 } from "recharts";
 
-const BLUES = ["#2563eb", "#3b82f6", "#60a5fa", "#1d4ed8", "#93c5fd", "#0ea5e9", "#38bdf8", "#1e40af", "#bfdbfe"];
+const VIVID = ["#2563eb", "#f59e0b", "#10b981", "#8b5cf6", "#ef4444", "#0ea5e9", "#ec4899", "#14b8a6", "#f97316"];
+const STAGE_PALETTE = ["#94a3b8", "#0ea5e9", "#6366f1", "#3b82f6", "#8b5cf6", "#f59e0b", "#10b981", "#22c55e", "#ef4444"];
+const SOURCE_PALETTE = ["#2563eb", "#f59e0b", "#10b981", "#8b5cf6", "#ef4444", "#0ea5e9"];
 
 export default function Dashboard() {
   const { user, hasPerm } = useAuth();
@@ -95,21 +97,29 @@ export default function Dashboard() {
                 <CartesianGrid strokeDasharray="3 3" stroke="#eef2f7" vertical={false} />
                 <XAxis dataKey="name" tick={{ fontSize: 10, fill: "#64748b" }} interval={0} angle={-25} textAnchor="end" height={54} />
                 <YAxis allowDecimals={false} tick={{ fontSize: 11, fill: "#64748b" }} />
-                <Tooltip cursor={{ fill: "#eff6ff" }} />
-                <Bar dataKey="value" name="Leads" fill="#2563eb" radius={[4, 4, 0, 0]} />
+                <Tooltip cursor={{ fill: "#f1f5f9" }} />
+                <Bar dataKey="value" name="Leads" radius={[6, 6, 0, 0]}>
+                  {charts.leads_by_stage.map((_, i) => <Cell key={i} fill={STAGE_PALETTE[i % STAGE_PALETTE.length]} />)}
+                </Bar>
               </BarChart>
             </ResponsiveContainer>
           </ChartCard>
 
           <ChartCard title="Tren Leads 6 Bulan Terakhir" testid="chart-monthly-leads">
             <ResponsiveContainer width="100%" height={280}>
-              <LineChart data={charts.monthly_leads} margin={{ top: 8, right: 12, left: -18, bottom: 0 }}>
+              <AreaChart data={charts.monthly_leads} margin={{ top: 8, right: 12, left: -18, bottom: 0 }}>
+                <defs>
+                  <linearGradient id="gradLeads" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="#6366f1" stopOpacity={0.55} />
+                    <stop offset="100%" stopColor="#6366f1" stopOpacity={0.04} />
+                  </linearGradient>
+                </defs>
                 <CartesianGrid strokeDasharray="3 3" stroke="#eef2f7" vertical={false} />
                 <XAxis dataKey="name" tick={{ fontSize: 11, fill: "#64748b" }} />
                 <YAxis allowDecimals={false} tick={{ fontSize: 11, fill: "#64748b" }} />
                 <Tooltip />
-                <Line type="monotone" dataKey="value" name="Leads" stroke="#2563eb" strokeWidth={2.5} dot={{ r: 3, fill: "#2563eb" }} activeDot={{ r: 5 }} />
-              </LineChart>
+                <Area type="monotone" dataKey="value" name="Leads" stroke="#6366f1" strokeWidth={3} fill="url(#gradLeads)" dot={{ r: 3, fill: "#6366f1" }} activeDot={{ r: 6 }} />
+              </AreaChart>
             </ResponsiveContainer>
           </ChartCard>
 
@@ -117,8 +127,8 @@ export default function Dashboard() {
             {charts.packages_by_type.length === 0 ? <Empty /> : (
               <ResponsiveContainer width="100%" height={280}>
                 <PieChart>
-                  <Pie data={charts.packages_by_type} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={92} label={(e) => `${e.name}: ${e.value}`} labelLine={false} fontSize={11}>
-                    {charts.packages_by_type.map((_, i) => <Cell key={i} fill={BLUES[i % BLUES.length]} />)}
+                  <Pie data={charts.packages_by_type} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={48} outerRadius={92} paddingAngle={3} label={(e) => `${e.name}: ${e.value}`} labelLine={false} fontSize={11}>
+                    {charts.packages_by_type.map((_, i) => <Cell key={i} fill={VIVID[i % VIVID.length]} stroke="#fff" strokeWidth={2} />)}
                   </Pie>
                   <Tooltip />
                   <Legend wrapperStyle={{ fontSize: 12 }} />
@@ -134,8 +144,10 @@ export default function Dashboard() {
                   <CartesianGrid strokeDasharray="3 3" stroke="#eef2f7" horizontal={false} />
                   <XAxis type="number" allowDecimals={false} tick={{ fontSize: 11, fill: "#64748b" }} />
                   <YAxis type="category" dataKey="name" tick={{ fontSize: 11, fill: "#64748b" }} width={90} />
-                  <Tooltip cursor={{ fill: "#eff6ff" }} />
-                  <Bar dataKey="value" name="Leads" fill="#3b82f6" radius={[0, 4, 4, 0]} />
+                  <Tooltip cursor={{ fill: "#f1f5f9" }} />
+                  <Bar dataKey="value" name="Leads" radius={[0, 6, 6, 0]}>
+                    {charts.leads_by_source.map((_, i) => <Cell key={i} fill={SOURCE_PALETTE[i % SOURCE_PALETTE.length]} />)}
+                  </Bar>
                 </BarChart>
               </ResponsiveContainer>
             )}

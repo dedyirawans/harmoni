@@ -1,5 +1,10 @@
 # Safar Travel CRM — Product Requirements (Living Doc)
 
+## UI polish (2026-06)
+- Dashboard charts recolored: multi-color pipeline bars, gradient area for monthly trend, vivid donut + colored source bars.
+- List pages (Quotations, Bookings, Accounting invoices/receivables/reminders) converted to real tables with blue headers, column dividers, and zebra rows.
+- Quotations menu confirmed present for Super Admin.
+
 ## Phase 4 — Quotation, Booking, Traveler, Document, Invoice, Payment (2026-06) — DONE
 - **Quotation**: create from customer+package+pax+room+add-ons+discount; base price auto from Package Master (sales cannot alter). Amounts (subtotal/discount/tax/total) computed server-side. Statuses DRAFT/SENT/ACCEPTED/REJECTED/CONVERTED. Endpoints /api/quotations (+/status, /discount-approval, /pdf, /convert).
 - **Discount approval** (configurable in Settings `discount_approval`): 0–sales_max% auto-approve (SALES); sales_max–approval_max% PENDING (APPROVAL); >approval_max% PENDING (SUPER_ADMIN). Accept/Convert blocked until APPROVED. Super Admin approves via /discount-approval (perm quotation.approve).
