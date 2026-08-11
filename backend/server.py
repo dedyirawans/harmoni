@@ -54,7 +54,7 @@ DEFAULT_ROLE_PERMISSIONS = {
         "departures.view", "commission.view", "notifications.view",
     ],
     "accounting": [
-        "accounting.view", "transactions.view", "hpp.view", "tax.view",
+        "accounting.view", "transactions.view", "hpp.view", "tax.view", "product.view",
         "commission.view", "reports.view", "reports.export", "notifications.view",
     ],
 }
@@ -1080,6 +1080,329 @@ async def global_search(q: str, user: dict = Depends(require_permission("crm.vie
     return {"customers": customers, "leads": leads}
 
 
+# ============================================================================
+# PHASE 3 — PRODUCT / TOUR & UMRAH PACKAGE MANAGEMENT
+# ============================================================================
+PACKAGE_STATUSES = ["DRAFT", "ACTIVE", "INACTIVE", "ARCHIVED"]
+HPP_STRIP = ["hpp", "total_cost", "cost_per_pax", "gross_profit", "gross_margin", "costs", "cost_components"]
+COST_COMPONENTS = ["flight", "hotel", "visa", "transport", "guide", "muthawwif", "handling", "meal", "insurance", "other"]
+
+
+def require_any_permission(*perms):
+    async def checker(user: dict = Depends(get_current_user)) -> dict:
+        up = await get_user_permissions(user)
+        if not any(p in up for p in perms):
+            raise HTTPException(status_code=403, detail="403 Forbidden: insufficient permission")
+        return user
+    return checker
+
+
+async def perms_of(user):
+    return await get_user_permissions(user)
+
+
+def strip_hpp(pkg: dict, can_hpp: bool) -> dict:
+    d = serialize(dict(pkg))
+    if not can_hpp:
+        for k in HPP_STRIP:
+            d.pop(k, None)
+    return d
+
+
+class PackageModel(BaseModel):
+    package_name: str
+    product_type: str = "TOUR"
+    category: Optional[str] = ""
+    destination: Optional[str] = ""
+    country: Optional[str] = ""
+    duration: Optional[str] = ""
+    description: Optional[str] = ""
+    cover_image: Optional[str] = ""
+    gallery: Optional[List[str]] = []
+    min_pax: Optional[int] = 1
+    max_pax: Optional[int] = 40
+    selling_price: Optional[float] = 0
+    child_price: Optional[float] = 0
+    infant_price: Optional[float] = 0
+    single_supplement: Optional[float] = 0
+    currency: Optional[str] = "IDR"
+    tax_treatment: Optional[str] = "Non-PPN"
+    commission_eligibility: Optional[bool] = True
+    status: Optional[str] = "DRAFT"
+    promo_text: Optional[str] = ""
+    terms: Optional[str] = ""
+    umrah: Optional[dict] = {}
+
+
+class ItineraryModel(BaseModel):
+    day: Optional[int] = 1
+    date: Optional[str] = ""
+    location: Optional[str] = ""
+    activity: Optional[str] = ""
+    hotel: Optional[str] = ""
+    meal: Optional[str] = ""
+    transport: Optional[str] = ""
+    flight: Optional[str] = ""
+    description: Optional[str] = ""
+    notes: Optional[str] = ""
+    images: Optional[List[str]] = []
+
+
+class DepartureModel(BaseModel):
+    departure_date: str
+    return_date: Optional[str] = ""
+    quota: Optional[int] = 0
+    confirmed_pax: Optional[int] = 0
+    flight: Optional[str] = ""
+    hotel: Optional[str] = ""
+    price: Optional[float] = 0
+    status: Optional[str] = ""
+
+
+class CostingModel(BaseModel):
+    components: dict
+    pax_basis: Optional[int] = 1
+
+
+def compute_departure(dep: dict) -> dict:
+    quota = int(dep.get("quota") or 0)
+    confirmed = int(dep.get("confirmed_pax") or 0)
+    available = max(quota - confirmed, 0)
+    dep["available_seat"] = available
+    forced = dep.get("status")
+    if forced in ("CLOSED", "CANCELLED"):
+        return dep
+    if available <= 0:
+        dep["status"] = "FULL"
+    elif quota > 0 and available / quota <= 0.2:
+        dep["status"] = "ALMOST FULL"
+    else:
+        dep["status"] = "OPEN"
+    return dep
+
+
+@api_router.get("/packages")
+async def list_packages(product_type: Optional[str] = None, status: Optional[str] = None, q: Optional[str] = None,
+                        user: dict = Depends(require_any_permission("product.view", "packages.view", "hpp.view"))):
+    up = await perms_of(user)
+    can_hpp = "hpp.view" in up
+    can_manage = "product.manage" in up
+    query = {}
+    if product_type and product_type != "all":
+        query["product_type"] = product_type
+    if q:
+        query["$or"] = [{"package_name": {"$regex": q, "$options": "i"}},
+                        {"destination": {"$regex": q, "$options": "i"}},
+                        {"package_code": {"$regex": q, "$options": "i"}}]
+    if not can_manage and not can_hpp:
+        query["status"] = "ACTIVE"  # sales: only active
+    elif status and status != "all":
+        query["status"] = status
+    docs = await db.packages.find(query).sort("created_at", -1).to_list(1000)
+    return [strip_hpp(d, can_hpp) for d in docs]
+
+
+@api_router.post("/packages")
+async def create_package(body: PackageModel, request: Request, user: dict = Depends(require_permission("product.manage"))):
+    if body.product_type not in ("TOUR", "UMRAH"):
+        raise HTTPException(status_code=400, detail="Invalid product type")
+    count = await db.packages.count_documents({})
+    prefix = "UMR" if body.product_type == "UMRAH" else "TOUR"
+    doc = body.model_dump()
+    doc.update({"package_code": f"{prefix}-{count + 1:04d}", "version": 1,
+                "created_at": now_iso(), "created_by": user["name"]})
+    res = await db.packages.insert_one(doc)
+    new = serialize(await db.packages.find_one({"_id": res.inserted_id}))
+    await log_audit(user, "package", "create_package", request, record_id=new["_id"], new={"name": body.package_name})
+    return new
+
+
+@api_router.get("/packages/{pid}")
+async def get_package(pid: str, user: dict = Depends(require_any_permission("product.view", "packages.view", "hpp.view"))):
+    pkg = await db.packages.find_one({"_id": ObjectId(pid)})
+    if not pkg:
+        raise HTTPException(status_code=404, detail="Package not found")
+    up = await perms_of(user)
+    can_hpp = "hpp.view" in up
+    can_manage = "product.manage" in up
+    if not can_manage and not can_hpp and pkg.get("status") != "ACTIVE":
+        raise HTTPException(status_code=403, detail="403 Forbidden: package not available")
+    itins = [serialize(d) for d in await db.package_itineraries.find({"package_id": pid}).sort("day", 1).to_list(200)]
+    deps = [compute_departure(serialize(d)) for d in await db.departures.find({"package_id": pid}).sort("departure_date", 1).to_list(200)]
+    result = {"package": strip_hpp(pkg, can_hpp), "itineraries": itins, "departures": deps}
+    if can_hpp:
+        cost = await db.package_costs.find_one({"package_id": pid})
+        result["costing"] = serialize(cost) if cost else None
+    if can_manage:
+        result["versions"] = [serialize(v) for v in await db.package_versions.find({"package_id": pid}).sort("version", -1).to_list(100)]
+    return result
+
+
+@api_router.put("/packages/{pid}")
+async def update_package(pid: str, body: PackageModel, request: Request, user: dict = Depends(require_permission("product.manage"))):
+    old = await db.packages.find_one({"_id": ObjectId(pid)})
+    if not old:
+        raise HTTPException(status_code=404, detail="Package not found")
+    updates = body.model_dump()
+    new_version = old.get("version", 1)
+    if float(old.get("selling_price") or 0) != float(updates.get("selling_price") or 0):
+        await db.package_versions.insert_one({
+            "package_id": pid, "version": old.get("version", 1),
+            "selling_price": old.get("selling_price"), "snapshot": serialize(dict(old)), "created_at": now_iso(),
+        })
+        new_version = old.get("version", 1) + 1
+    updates["version"] = new_version
+    await db.packages.update_one({"_id": ObjectId(pid)}, {"$set": updates})
+    await log_audit(user, "package", "update_package", request, record_id=pid,
+                    old={"selling_price": old.get("selling_price"), "version": old.get("version")},
+                    new={"selling_price": updates.get("selling_price"), "version": new_version})
+    return serialize(await db.packages.find_one({"_id": ObjectId(pid)}))
+
+
+@api_router.patch("/packages/{pid}/status")
+async def package_status(pid: str, body: StageUpdate, request: Request, user: dict = Depends(require_permission("product.manage"))):
+    if body.stage not in PACKAGE_STATUSES:
+        raise HTTPException(status_code=400, detail="Invalid status")
+    old = await db.packages.find_one({"_id": ObjectId(pid)})
+    if not old:
+        raise HTTPException(status_code=404, detail="Package not found")
+    await db.packages.update_one({"_id": ObjectId(pid)}, {"$set": {"status": body.stage}})
+    await log_audit(user, "package", "update_status", request, record_id=pid,
+                    old={"status": old.get("status")}, new={"status": body.stage})
+    return {"status": body.stage}
+
+
+@api_router.delete("/packages/{pid}")
+async def archive_package(pid: str, request: Request, user: dict = Depends(require_permission("product.manage"))):
+    await db.packages.update_one({"_id": ObjectId(pid)}, {"$set": {"status": "ARCHIVED"}})
+    await log_audit(user, "package", "archive_package", request, record_id=pid)
+    return {"message": "Package archived"}
+
+
+# ---- Itineraries ----
+@api_router.post("/packages/{pid}/itineraries")
+async def add_itinerary(pid: str, body: ItineraryModel, user: dict = Depends(require_permission("product.manage"))):
+    doc = body.model_dump()
+    doc["package_id"] = pid
+    doc["created_at"] = now_iso()
+    res = await db.package_itineraries.insert_one(doc)
+    return serialize(await db.package_itineraries.find_one({"_id": res.inserted_id}))
+
+
+@api_router.put("/itineraries/{iid}")
+async def update_itinerary(iid: str, body: ItineraryModel, user: dict = Depends(require_permission("product.manage"))):
+    await db.package_itineraries.update_one({"_id": ObjectId(iid)}, {"$set": body.model_dump()})
+    return serialize(await db.package_itineraries.find_one({"_id": ObjectId(iid)}))
+
+
+@api_router.delete("/itineraries/{iid}")
+async def delete_itinerary(iid: str, user: dict = Depends(require_permission("product.manage"))):
+    await db.package_itineraries.delete_one({"_id": ObjectId(iid)})
+    return {"message": "Deleted"}
+
+
+@api_router.post("/itineraries/{iid}/duplicate")
+async def duplicate_itinerary(iid: str, user: dict = Depends(require_permission("product.manage"))):
+    src = await db.package_itineraries.find_one({"_id": ObjectId(iid)})
+    if not src:
+        raise HTTPException(status_code=404, detail="Not found")
+    clone = {k: v for k, v in src.items() if k != "_id"}
+    clone["day"] = int(clone.get("day") or 1) + 1
+    clone["created_at"] = now_iso()
+    res = await db.package_itineraries.insert_one(clone)
+    return serialize(await db.package_itineraries.find_one({"_id": res.inserted_id}))
+
+
+@api_router.put("/packages/{pid}/itineraries/reorder")
+async def reorder_itineraries(pid: str, body: dict, user: dict = Depends(require_permission("product.manage"))):
+    ids = body.get("ids", [])
+    for i, iid in enumerate(ids):
+        await db.package_itineraries.update_one({"_id": ObjectId(iid)}, {"$set": {"day": i + 1}})
+    return {"message": "Reordered"}
+
+
+# ---- Costing / HPP ----
+@api_router.get("/packages/{pid}/costing")
+async def get_costing(pid: str, user: dict = Depends(require_permission("hpp.view"))):
+    pkg = await db.packages.find_one({"_id": ObjectId(pid)})
+    if not pkg:
+        raise HTTPException(status_code=404, detail="Package not found")
+    cost = await db.package_costs.find_one({"package_id": pid})
+    return {"package_id": pid, "selling_price": pkg.get("selling_price"),
+            "costing": serialize(cost) if cost else {"components": {}, "total_cost": 0, "cost_per_pax": 0, "gross_profit": 0, "gross_margin": 0}}
+
+
+@api_router.put("/packages/{pid}/costing")
+async def save_costing(pid: str, body: CostingModel, request: Request, user: dict = Depends(require_permission("product.manage"))):
+    pkg = await db.packages.find_one({"_id": ObjectId(pid)})
+    if not pkg:
+        raise HTTPException(status_code=404, detail="Package not found")
+    comps = {k: float(body.components.get(k) or 0) for k in COST_COMPONENTS}
+    total = sum(comps.values())
+    selling = float(pkg.get("selling_price") or 0)
+    gp = selling - total
+    gm = round(gp / selling * 100, 2) if selling else 0
+    doc = {"package_id": pid, "components": comps, "total_cost": total, "cost_per_pax": total,
+           "gross_profit": gp, "gross_margin": gm, "updated_at": now_iso()}
+    await db.package_costs.update_one({"package_id": pid}, {"$set": doc}, upsert=True)
+    await db.packages.update_one({"_id": ObjectId(pid)}, {"$set": {"hpp": total, "total_cost": total,
+                                 "cost_per_pax": total, "gross_profit": gp, "gross_margin": gm}})
+    await log_audit(user, "hpp", "update_costing", request, record_id=pid, new={"total_cost": total, "gross_margin": gm})
+    return serialize(doc)
+
+
+# ---- Departures ----
+@api_router.get("/packages/{pid}/departures")
+async def package_departures(pid: str, user: dict = Depends(require_any_permission("product.view", "packages.view", "departures.view", "hpp.view"))):
+    deps = [compute_departure(serialize(d)) for d in await db.departures.find({"package_id": pid}).sort("departure_date", 1).to_list(200)]
+    return deps
+
+
+@api_router.post("/packages/{pid}/departures")
+async def add_departure(pid: str, body: DepartureModel, user: dict = Depends(require_permission("product.manage"))):
+    doc = body.model_dump()
+    doc["package_id"] = pid
+    doc["created_at"] = now_iso()
+    doc = compute_departure(doc)
+    res = await db.departures.insert_one(doc)
+    return compute_departure(serialize(await db.departures.find_one({"_id": res.inserted_id})))
+
+
+@api_router.put("/departures/{did}")
+async def update_departure(did: str, body: DepartureModel, user: dict = Depends(require_permission("product.manage"))):
+    doc = body.model_dump()
+    doc = compute_departure(doc)
+    await db.departures.update_one({"_id": ObjectId(did)}, {"$set": doc})
+    return compute_departure(serialize(await db.departures.find_one({"_id": ObjectId(did)})))
+
+
+@api_router.delete("/departures/{did}")
+async def delete_departure(did: str, user: dict = Depends(require_permission("product.manage"))):
+    await db.departures.delete_one({"_id": ObjectId(did)})
+    return {"message": "Deleted"}
+
+
+@api_router.get("/departures")
+async def all_departures(user: dict = Depends(require_any_permission("departures.view", "product.view", "packages.view", "hpp.view"))):
+    up = await perms_of(user)
+    can_manage = "product.manage" in up
+    can_hpp = "hpp.view" in up
+    pkg_query = {} if (can_manage or can_hpp) else {"status": "ACTIVE"}
+    pkgs = {str(p["_id"]): p for p in await db.packages.find(pkg_query).to_list(1000)}
+    deps = await db.departures.find({"package_id": {"$in": list(pkgs.keys())}}).sort("departure_date", 1).to_list(500)
+    out = []
+    for d in deps:
+        d = compute_departure(serialize(d))
+        p = pkgs.get(d["package_id"])
+        if p:
+            d["package_name"] = p.get("package_name")
+            d["destination"] = p.get("destination")
+            d["product_type"] = p.get("product_type")
+        out.append(d)
+    return out
+
+
+
 
 
 app.include_router(api_router)
@@ -1103,6 +1426,9 @@ async def seed():
     await db.customers.create_index("sales_pic_id")
     await db.leads.create_index("sales_pic_id")
     await db.follow_ups.create_index("sales_pic_id")
+    await db.packages.create_index("package_code")
+    await db.departures.create_index("package_id")
+    await db.package_itineraries.create_index("package_id")
 
     for role, perms in DEFAULT_ROLE_PERMISSIONS.items():
         if not await db.role_permissions.find_one({"role": role}):
@@ -1205,6 +1531,61 @@ async def seed():
                  "due_date": (datetime.now(timezone.utc) - timedelta(days=2)).date().isoformat(), "notes": "Confirm payment",
                  "status": "pending", "sales_pic_id": sid, "sales_pic_name": sname, "branch": sbranch, "created_at": now_iso()},
             ])
+
+    if await db.packages.count_documents({}) == 0:
+        umrah = {
+            "package_code": "UMR-0001", "package_name": "Umrah Reguler 9 Hari", "product_type": "UMRAH",
+            "category": "Umrah Regular", "destination": "Makkah & Madinah", "country": "Saudi Arabia",
+            "duration": "9 Days", "description": "Paket umrah reguler 9 hari dengan hotel dekat Masjid.",
+            "cover_image": "", "gallery": [], "min_pax": 4, "max_pax": 45,
+            "selling_price": 27500000, "child_price": 25000000, "infant_price": 5000000, "single_supplement": 6000000,
+            "currency": "IDR", "tax_treatment": "Non-PPN", "commission_eligibility": True, "status": "ACTIVE",
+            "promo_text": "Early bird diskon Rp1jt", "terms": "DP 50%, pelunasan H-30.", "version": 1,
+            "umrah": {"makkah_hotel": "Fairmont Makkah", "madinah_hotel": "Anwar Al Madinah Movenpick",
+                      "makkah_nights": 4, "madinah_nights": 3, "airline": "Saudia", "visa": "Umrah Visa",
+                      "transport": "Bus VIP", "handling": "Included", "muthawwif": "Included", "manasik": "2x",
+                      "zamzam": "5L", "insurance": "Included", "baggage": "23kg + 7kg", "room_type": "QUAD"},
+            "hpp": 22500000, "total_cost": 22500000, "cost_per_pax": 22500000, "gross_profit": 5000000, "gross_margin": 18.18,
+            "created_at": now_iso(), "created_by": "System",
+        }
+        tour = {
+            "package_code": "TOUR-0001", "package_name": "Turkey Tour 8 Hari", "product_type": "TOUR",
+            "category": "Turkey", "destination": "Istanbul & Cappadocia", "country": "Turkey",
+            "duration": "8 Days", "description": "Explore Istanbul, Cappadocia, and Bursa.",
+            "cover_image": "", "gallery": [], "min_pax": 2, "max_pax": 30,
+            "selling_price": 20000000, "child_price": 18000000, "infant_price": 3000000, "single_supplement": 4500000,
+            "currency": "IDR", "tax_treatment": "Non-PPN", "commission_eligibility": True, "status": "ACTIVE",
+            "promo_text": "", "terms": "Non-refundable after ticketing.", "version": 1, "umrah": {},
+            "hpp": 16000000, "total_cost": 16000000, "cost_per_pax": 16000000, "gross_profit": 4000000, "gross_margin": 20.0,
+            "created_at": now_iso(), "created_by": "System",
+        }
+        u = await db.packages.insert_one(umrah)
+        t = await db.packages.insert_one(tour)
+        uid, tid = str(u.inserted_id), str(t.inserted_id)
+        await db.package_costs.insert_many([
+            {"package_id": uid, "components": {"flight": 12000000, "hotel": 6500000, "visa": 1500000, "transport": 1000000,
+             "guide": 300000, "muthawwif": 400000, "handling": 300000, "meal": 500000, "insurance": 0, "other": 0},
+             "total_cost": 22500000, "cost_per_pax": 22500000, "gross_profit": 5000000, "gross_margin": 18.18, "updated_at": now_iso()},
+            {"package_id": tid, "components": {"flight": 9000000, "hotel": 4500000, "visa": 500000, "transport": 1200000,
+             "guide": 800000, "muthawwif": 0, "handling": 0, "meal": 0, "insurance": 0, "other": 0},
+             "total_cost": 16000000, "cost_per_pax": 16000000, "gross_profit": 4000000, "gross_margin": 20.0, "updated_at": now_iso()},
+        ])
+        await db.package_itineraries.insert_many([
+            {"package_id": uid, "day": 1, "location": "Jakarta → Jeddah", "activity": "Keberangkatan & penerbangan",
+             "hotel": "In-flight", "meal": "Dinner", "transport": "Flight", "flight": "SV817", "description": "Berkumpul di bandara.", "notes": "", "images": [], "created_at": now_iso()},
+            {"package_id": uid, "day": 2, "location": "Makkah", "activity": "Umrah pertama",
+             "hotel": "Fairmont Makkah", "meal": "Full board", "transport": "Bus", "flight": "", "description": "Tawaf & Sa'i.", "notes": "", "images": [], "created_at": now_iso()},
+            {"package_id": tid, "day": 1, "location": "Istanbul", "activity": "City tour Sultanahmet",
+             "hotel": "Istanbul Hotel", "meal": "Dinner", "transport": "Bus", "flight": "", "description": "Blue Mosque, Hagia Sophia.", "notes": "", "images": [], "created_at": now_iso()},
+        ])
+        await db.departures.insert_many([
+            {"package_id": uid, "departure_date": (datetime.now(timezone.utc) + timedelta(days=40)).date().isoformat(),
+             "return_date": (datetime.now(timezone.utc) + timedelta(days=49)).date().isoformat(), "quota": 45, "confirmed_pax": 30,
+             "flight": "Saudia", "hotel": "Fairmont", "price": 27500000, "available_seat": 15, "status": "OPEN", "created_at": now_iso()},
+            {"package_id": tid, "departure_date": (datetime.now(timezone.utc) + timedelta(days=60)).date().isoformat(),
+             "return_date": (datetime.now(timezone.utc) + timedelta(days=67)).date().isoformat(), "quota": 30, "confirmed_pax": 28,
+             "flight": "Turkish", "hotel": "Istanbul Hotel", "price": 20000000, "available_seat": 2, "status": "ALMOST FULL", "created_at": now_iso()},
+        ])
 
 
 @app.on_event("startup")

@@ -41,7 +41,17 @@ Super Admin can edit sales/accounting permissions via Settings > Roles & Permiss
 - P2: Integration (N8N/WhatsApp), branch-scoped data queries for Sales, dashboard analytics widgets.
 
 ## Next tasks
-- Phase 3: Product/Package management with HPP write-side, Booking & travelers, Quotations/Invoices.
+- Phase 4: Quotations, Bookings & travelers (versioned pricing), Invoices/Payments.
+
+## Phase 3 — Product / Tour & Umrah Package Management (2026-06) — DONE
+- **Packages**: master (code, name, TOUR/UMRAH type, category, destination, duration, pricing tiers, tax, commission, status DRAFT/ACTIVE/INACTIVE/ARCHIVED, promo, terms, Umrah details incl. Makkah/Madinah hotel+nights, airline, visa, muthawwif, room type). Grid + filters + search.
+- **Itinerary builder**: per-day CRUD, duplicate, and drag-and-drop reorder (admin); read-only for Sales.
+- **Departures**: CRUD with auto available_seat = quota − confirmed_pax and status OPEN/ALMOST FULL/FULL. Global /departures browse for Sales.
+- **Costing / HPP**: cost components (flight, hotel, visa, transport, guide, muthawwif, handling, meal, insurance, other) → total cost, gross profit, gross margin. VIEW: Super Admin + Accounting; EDIT: Super Admin only.
+- **Versioning**: changing selling price snapshots old version into package_versions and bumps version.
+- **RBAC**: Super Admin manages everything; Sales views only ACTIVE packages and NEVER receives HPP/cost/margin (stripped in API); Accounting views packages + costing read-only, cannot edit. Route guard now accepts multiple perms (product.view OR hpp.view) so Accounting reaches /products.
+- New collections: packages, package_versions, package_itineraries, package_costs, departures.
+- Tests: backend 16/16 Phase 3 + 31/31 regression; frontend 100% (iteration_4 + iteration_5). Files: /app/backend/tests/test_phase3_packages.py.
 
 ## Phase 2 — CRM & Sales Management (2026-06) — DONE
 - **Customers**: master (full_name, whatsapp, email, gender, DOB, NIK, passport, address, city, country, type, source, tags, notes) with auto code CUST-#####. Ownership-scoped list/search + type filter.

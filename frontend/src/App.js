@@ -20,6 +20,9 @@ import Customers from "@/pages/Customers";
 import Customer360 from "@/pages/Customer360";
 import SalesPipeline from "@/pages/SalesPipeline";
 import FollowUps from "@/pages/FollowUps";
+import Products from "@/pages/Products";
+import ProductDetail from "@/pages/ProductDetail";
+import Departures from "@/pages/Departures";
 
 const PAGES = {
   "/dashboard": Dashboard,
@@ -30,6 +33,9 @@ const PAGES = {
   "/crm": Customers,
   "/sales": SalesPipeline,
   "/follow-ups": FollowUps,
+  "/products": Products,
+  "/packages": Products,
+  "/departures": Departures,
 };
 
 function App() {
@@ -68,6 +74,32 @@ function App() {
                   <DashboardLayout>
                     <RequirePermission perm="crm.view">
                       <Customer360 />
+                    </RequirePermission>
+                  </DashboardLayout>
+                </ProtectedRoute>
+              }
+            />
+
+            <Route
+              path="/products/:id"
+              element={
+                <ProtectedRoute>
+                  <DashboardLayout>
+                    <RequirePermission perm={["product.view", "hpp.view"]}>
+                      <ProductDetail />
+                    </RequirePermission>
+                  </DashboardLayout>
+                </ProtectedRoute>
+              }
+            />
+
+            <Route
+              path="/packages/:id"
+              element={
+                <ProtectedRoute>
+                  <DashboardLayout>
+                    <RequirePermission perm="packages.view">
+                      <ProductDetail />
                     </RequirePermission>
                   </DashboardLayout>
                 </ProtectedRoute>

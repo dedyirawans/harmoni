@@ -1,0 +1,45 @@
+{
+  "summary": "Phase 3 Products/Packages/Departures/Costing tested. Backend: 16/16 new tests PASS (test_phase3_packages.py) covering (a) Sales HPP leakage protection on /packages list + /packages/{id} + 403 on costing & create; (b) Accounting list has gross_margin, GET costing 200, create 403; (c) Super Admin CRUD create pkg/itinerary/departure, departure auto-computed available_seat + OPEN/ALMOST FULL, save costing gross_margin=50%, price change bumps version to 2 and populates package_versions, itinerary reorder persists via PUT /packages/{id}/itineraries/reorder. Regression: test_phase2 + test_pipeline_move all pass (31/31 + 1 skipped). Frontend UI: Super Admin flow verified end-to-end via Playwright — create package -> appears in grid, open detail (Overview/Itinerary/Departures/Costing/Versions tabs all visible), add itinerary day, add departure (OPEN status rendered), save costing shows GM=50.00%, edit price via edit-package-button creates version 2 shown in Versions tab. Sales UI: no add-package-button, no costing/versions tab, no edit button, no hpp keys in /api/packages nor /api/packages/{id} JSON, no 'costing' key in detail JSON, /departures page loads. CRITICAL BUG: Accounting -> Packages menu link points to /products but the route guard blocks with 403 Forbidden. /api/auth/me for accounting returns permissions=[accounting.view, commission.view, hpp.view, notifications.view, reports.export, reports.view, tax.view, transactions.view] — MISSING product.view (which backend DEFAULT_PERMS_BY_ROLE.accounting DOES list at server.py:57). The stored/seeded permissions in DB are stale relative to the updated default. Frontend App.js /products route requires perm='product.view' via RequirePermission, so accounting is denied at the route guard even though backend GET /api/packages accepts hpp.view.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "Route guard /products and /products/:id (App.js)", "issue": "Accounting user gets 403 Forbidden UI when clicking Packages sidebar menu. Their /api/auth/me permissions do not include product.view (stale seed vs DEFAULT_PERMS_BY_ROLE at server.py:57). Backend list_packages/get_package accept hpp.view, but the frontend guard uses only product.view.", "selector": "sidebar link 'Packages' -> /products, ProtectedRoute + RequirePermission perm='product.view'", "priority": "HIGH"}
+    ],
+    "integration_issues": [
+      {"flow": "Accounting Packages menu -> Product list -> Detail (Costing/HPP tab)", "issue": "Cannot reach page at all due to 403 on /products route. Add-cost verification (read-only) not testable via UI. Backend paths are OK (confirmed by curl and pytest); only the route/permission mapping on the frontend and/or the persisted permissions for the accounting user need alignment.", "affected_selectors": ["[data-testid=products-page]", "[data-testid=tab-costing]"]}
+    ],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_phase3_packages.py",
+    "/app/test_reports/pytest/phase3_packages.xml"
+  ],
+  "action_items": [
+    "Fix Accounting access to /products page. Two options: (A) Update seed_users / role permissions to persist product.view for accounting (call role_permissions update or re-seed) OR run a one-time migration so existing accounting user has product.view. (B) Change ROUTE_PERMS['/products'] and /products/:id RequirePermission to accept EITHER 'product.view' OR 'hpp.view' (mirror backend require_any_permission). Recommended: do BOTH — fix perms AND make the route guard accept either.",
+    "Also update ROUTE_PERMS['/packages'] logic and /packages/:id guard similarly since both routes share the same Products.jsx / ProductDetail.jsx pages.",
+    "After fix, verify /api/auth/me includes 'product.view' for accounting@safarcrm.com and /products page loads, allowing accounting to open a package and see the Costing/HPP tab read-only."
+  ],
+  "critical_code_review_comments": [
+    "server.py at 1599 lines is over the 700-line guideline; Phase 3 section (packages/itineraries/departures/costing ~ lines 1080-1400) should be split into a router module (e.g. routers/products.py).",
+    "server.py:1197-1198 correctly hides non-ACTIVE packages from users without product.manage OR hpp.view; combined with strip_hpp() this cleanly isolates Sales.",
+    "compute_departure() correctly enforces available_seat = max(quota - confirmed, 0) with ALMOST FULL at <=20% and does not override CLOSED/CANCELLED forced statuses.",
+    "Versioning at server.py:1248-1253 snapshots the OLD package doc with its old version number then increments — order looks correct. Snapshot contains serialize(dict(old)) which includes ObjectId converted to str.",
+    "Frontend guard mismatch (documented above) — backend uses require_any_permission but React uses single-perm RequirePermission for /products, /packages, /products/:id, /packages/:id. This is fragile whenever a user has one of the accepted perms but not the primary one.",
+    "Products.jsx line 118: status filter only shown to canManage; good — Sales can't filter by non-ACTIVE anyway.",
+    "ProductDetail.jsx costing tab correctly disables cost inputs when !canManage (line 253) — read-only for Accounting once they can reach the page.",
+    "Package versions: no UI to restore/preview a specific version snapshot — only lists them. Acceptable for MVP but flag it."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_phase3_packages.py (new — 16 tests for Phase 3 packages/itineraries/departures/costing RBAC + versioning)"
+  ],
+  "success_rate": {"backend": "100% (16/16 new + 31/31 regression)", "frontend": "83% (super admin & sales flows OK; accounting blocked at route guard = 1 of 6 acceptance flows failing)"},
+  "test_credentials": "Same as /app/memory/test_credentials.md — Admin dedyirawan18@gmail.com/Admin@123, Sales sales@safarcrm.com/Sales@123, SalesB salesb@safarcrm.com/SalesB@123, Accounting accounting@safarcrm.com/Account@123.",
+  "seed_data_creation": "Created and archived TEST_UI_pkg (TOUR) via UI with 1 itinerary day, 2 departures (Jun 15 quota 20; and one via API for ALMOST FULL test), costing (flight 3M + hotel 2M -> gm 50%), price bumped to 12M (version 2). Cleaned up via DELETE /api/packages/{id} at end (soft-archive: sets status=ARCHIVED). test_phase3_packages.py also creates+cleans TEST_P3_pkg per run.",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backend Phase 3 fully verified — do NOT re-run heavy backend tests unless server.py packages section changes. Focus retest on: (1) Accounting login -> click Packages sidebar -> /products should load with grid + GM badges, no add-package-button. (2) Accounting opens a package -> Costing/HPP tab visible read-only, no save-costing-button, no add-itinerary-button. Verify /api/auth/me for accounting now includes product.view (curl fastest). Key data-testids on Products/ProductDetail: products-page, add-package-button, package-name-input, package-price-input, package-status-select, package-save-button, package-card-{id}, product-detail-page, tab-overview/itinerary/departures/costing/versions, add-itinerary-button, itin-location-input, itin-activity-input, save-itinerary-button, add-departure-button, dep-date-input, dep-quota-input, dep-price-input, save-departure-button, cost-flight/hotel/... , save-costing-button, gross-margin-value, edit-package-button, edit-price-input, save-package-edit, dep-row-{id}, itinerary-day-{id}. Test packages TEST_UI_* auto-archived; if leftover, admin can hard-delete from DB or filter status=ARCHIVED.",
+  "rca of the issue": "Accounting user in DB has stored permissions from an earlier seed run when server.py DEFAULT_PERMS_BY_ROLE.accounting did NOT include product.view. The default was later updated (server.py:57) but seed_users is not idempotent for permissions on existing users, so the accounting document's persisted permissions never got product.view. Frontend ROUTE_PERMS at nav.js:12 maps /products -> product.view (single perm), and App.js wraps /products in RequirePermission perm='product.view'. Because the user's perm list lacks product.view, the guard renders <Forbidden/> even though backend GET /api/packages accepts hpp.view (which the user has). Reproduction: login as accounting -> click 'Packages' in sidebar -> 403 page. Mitigation (either or both): (a) modify seed/init to upsert missing default perms on existing users, or add an admin migration script; (b) refactor RequirePermission to accept an array of perms and pass ['product.view','hpp.view'] on /products and /products/:id (mirrors backend require_any_permission)."
+}

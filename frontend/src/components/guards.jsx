@@ -20,6 +20,8 @@ export function ProtectedRoute({ children }) {
 
 export function RequirePermission({ perm, children }) {
   const { hasPerm } = useAuth();
-  if (perm && !hasPerm(perm)) return <Forbidden />;
-  return children;
+  if (!perm) return children;
+  const perms = Array.isArray(perm) ? perm : [perm];
+  if (perms.some((p) => hasPerm(p))) return children;
+  return <Forbidden />;
 }
