@@ -23,6 +23,10 @@ import FollowUps from "@/pages/FollowUps";
 import Products from "@/pages/Products";
 import ProductDetail from "@/pages/ProductDetail";
 import Departures from "@/pages/Departures";
+import Quotations from "@/pages/Quotations";
+import Bookings from "@/pages/Bookings";
+import BookingDetail from "@/pages/BookingDetail";
+import Accounting from "@/pages/Accounting";
 
 const PAGES = {
   "/dashboard": Dashboard,
@@ -36,6 +40,9 @@ const PAGES = {
   "/products": Products,
   "/packages": Products,
   "/departures": Departures,
+  "/quotations": Quotations,
+  "/booking": Bookings,
+  "/accounting": Accounting,
 };
 
 function App() {
@@ -100,6 +107,19 @@ function App() {
                   <DashboardLayout>
                     <RequirePermission perm="packages.view">
                       <ProductDetail />
+                    </RequirePermission>
+                  </DashboardLayout>
+                </ProtectedRoute>
+              }
+            />
+
+            <Route
+              path="/booking/:id"
+              element={
+                <ProtectedRoute>
+                  <DashboardLayout>
+                    <RequirePermission perm="booking.view">
+                      <BookingDetail />
                     </RequirePermission>
                   </DashboardLayout>
                 </ProtectedRoute>

@@ -1,5 +1,21 @@
 # Safar Travel CRM — Product Requirements (Living Doc)
 
+## Phase 4 — Quotation, Booking, Traveler, Document, Invoice, Payment (2026-06) — DONE
+- **Quotation**: create from customer+package+pax+room+add-ons+discount; base price auto from Package Master (sales cannot alter). Amounts (subtotal/discount/tax/total) computed server-side. Statuses DRAFT/SENT/ACCEPTED/REJECTED/CONVERTED. Endpoints /api/quotations (+/status, /discount-approval, /pdf, /convert).
+- **Discount approval** (configurable in Settings `discount_approval`): 0–sales_max% auto-approve (SALES); sales_max–approval_max% PENDING (APPROVAL); >approval_max% PENDING (SUPER_ADMIN). Accept/Convert blocked until APPROVED. Super Admin approves via /discount-approval (perm quotation.approve).
+- **Quotation & Invoice PDF** (reportlab): company logo, customer, package, itinerary, pax, pricing, discount, tax, total, T&C, sales PIC. Served via ?auth=<token>.
+- **Convert to Booking**: accepted+approved quotation → booking (BKG-#####) snapshotting package_version; no re-input. Booking sources: SALES, AUTO SALES, ADMIN, AGENT, PARTNER, WEBSITE, OTHER (AUTO SALES reserved for n8n Phase 7).
+- **Traveler/Jamaah**: many per booking (full/passport name, NIK, passport+expiry, DOB, gender, nationality, phone, emergency contact, room type, special request).
+- **Documents** (Emergent Object Storage): KTP/Passport/Photo/Visa/Marriage Book/Other; statuses Missing/Uploaded/Verified/Rejected; upload multipart, download via ?auth, status update.
+- **Invoice**: generated from booking (INV-#####) with amount/discount/tax/total/due date; status auto Unpaid/Partially Paid/Paid/Overdue from payments vs total.
+- **Payment**: record date/amount/type/method/bank/ref/notes (attachment_url string — file attach simplified); recompute invoice status.
+- **Receivable**: total invoice − payment = outstanding; aging Current/1-30/31-60/61-90/90+.
+- **Payment Reminder**: GET /api/payment-reminders computes H-30/H-14/H-7/H-3/DUE/OVERDUE structure for n8n (no notification sent yet).
+- **RBAC**: Sales(quotation.manage, booking.manage, traveler.manage, document.manage, invoice.view, payment.view) own-scoped; Accounting(booking.view, invoice.manage, payment.manage, receivable.view, document.manage) all-scoped; Super Admin full + quotation.approve.
+- Collections: quotations, bookings, travelers, documents, invoices, payments. Frontend pages: Quotations, Bookings, BookingDetail, Accounting.
+- Tests: backend full curl E2E pass; frontend 22/22 (iteration_8.json). Object storage initialized at startup.
+
+
 ## Original Problem Statement
 Build Phase 1 of a CRM Tour & Travel + Umrah web app (modern, clean, responsive, production-ready) with 3 roles: SUPER ADMIN, SALES, ACCOUNTING. Foundation & strict Role-Based Access Control.
 

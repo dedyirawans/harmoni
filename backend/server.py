@@ -45,6 +45,9 @@ ALL_PERMISSIONS = [
     "commission.view", "reports.view", "reports.export", "integration.view",
     "users.view", "users.manage", "settings.view", "settings.manage", "audit.view",
     "packages.view", "departures.view", "notifications.view",
+    "quotation.view", "quotation.manage", "quotation.approve", "booking.manage",
+    "traveler.manage", "document.manage", "invoice.view", "invoice.manage",
+    "payment.view", "payment.manage", "receivable.view",
 ]
 
 DEFAULT_ROLE_PERMISSIONS = {
@@ -52,10 +55,14 @@ DEFAULT_ROLE_PERMISSIONS = {
     "sales": [
         "dashboard.view", "crm.view", "sales.view", "packages.view",
         "departures.view", "commission.view", "notifications.view",
+        "booking.view", "quotation.view", "quotation.manage", "booking.manage",
+        "traveler.manage", "document.manage", "invoice.view", "payment.view",
     ],
     "accounting": [
         "accounting.view", "transactions.view", "hpp.view", "tax.view", "product.view",
         "commission.view", "reports.view", "reports.export", "notifications.view",
+        "booking.view", "quotation.view", "invoice.view", "invoice.manage",
+        "payment.view", "payment.manage", "receivable.view", "document.manage",
     ],
 }
 
@@ -1523,6 +1530,699 @@ async def package_price(pid: str, pax: int = 1, hotel: Optional[str] = None,
 
 
 
+# ============================================================================
+# PHASE 4 — QUOTATION, BOOKING, TRAVELER, DOCUMENT, INVOICE, PAYMENT
+# ============================================================================
+import uuid as _uuid
+import requests as _requests
+from fastapi import UploadFile, File, Form, Query, Header
+from fastapi.responses import Response
+from io import BytesIO
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.units import mm
+from reportlab.lib import colors
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image as RLImage
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+
+BOOKING_SOURCES = ["SALES", "AUTO SALES", "ADMIN", "AGENT", "PARTNER", "WEBSITE", "OTHER"]
+DOCUMENT_TYPES = ["KTP", "PASSPORT", "PHOTO", "VISA", "MARRIAGE_BOOK", "OTHER"]
+DOC_STATUSES = ["Missing", "Uploaded", "Verified", "Rejected"]
+
+_STORAGE_BASE = (os.environ.get("INTEGRATION_PROXY_URL") or "").strip() or "https://integrations.emergentagent.com"
+_STORAGE_URL = _STORAGE_BASE.rstrip("/") + "/objstore/api/v1/storage"
+_EMERGENT_KEY = os.environ.get("EMERGENT_LLM_KEY")
+_APP_NAME = "safarcrm"
+_storage_key = None
+
+
+def init_storage(force: bool = False):
+    global _storage_key
+    if _storage_key and not force:
+        return _storage_key
+    resp = _requests.post(f"{_STORAGE_URL}/init", json={"emergent_key": _EMERGENT_KEY}, timeout=30)
+    resp.raise_for_status()
+    _storage_key = resp.json()["storage_key"]
+    return _storage_key
+
+
+def put_object(path: str, data: bytes, content_type: str) -> dict:
+    key = init_storage()
+    resp = _requests.put(f"{_STORAGE_URL}/objects/{path}", headers={"X-Storage-Key": key, "Content-Type": content_type}, data=data, timeout=120)
+    if resp.status_code == 404:
+        key = init_storage(force=True)
+        resp = _requests.put(f"{_STORAGE_URL}/objects/{path}", headers={"X-Storage-Key": key, "Content-Type": content_type}, data=data, timeout=120)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def get_object(path: str):
+    key = init_storage()
+    resp = _requests.get(f"{_STORAGE_URL}/objects/{path}", headers={"X-Storage-Key": key}, timeout=60)
+    if resp.status_code == 404:
+        key = init_storage(force=True)
+        resp = _requests.get(f"{_STORAGE_URL}/objects/{path}", headers={"X-Storage-Key": key}, timeout=60)
+    resp.raise_for_status()
+    return resp.content, resp.headers.get("Content-Type", "application/octet-stream")
+
+
+async def get_settings_dict():
+    doc = await db.system_settings.find_one({"key": "system"})
+    return (doc or {}).get("settings", {})
+
+
+def compute_pax_price(pkg: dict, pax: int, hotel: Optional[str] = None) -> int:
+    sub = pkg.get("sub_category")
+    base = float(pkg.get("selling_price") or 0)
+    if sub == "PRIVATE":
+        for t in pkg.get("pricing_tiers", []):
+            hp_ok = (not hotel) or (t.get("hotel") == hotel)
+            lo = int(t.get("min_pax") or 0)
+            hi = int(t.get("max_pax") or 9999)
+            if hp_ok and lo <= pax <= hi:
+                return round(float(t["price"]))
+        return round(base)
+    if sub in ("OPEN_TRIP", "SEAT_IN_COACH"):
+        minq = int(pkg.get("min_quota_pax") or 0)
+        if minq and pax and pax < minq:
+            return round((minq * base) / pax)
+        return round(base)
+    return round(base)
+
+
+def resolve_discount_status(pct: float, settings: dict):
+    da = (settings or {}).get("discount_approval", {})
+    smax = float(da.get("sales_max_percent", 5) or 0)
+    amax = float(da.get("approval_max_percent", 10) or 0)
+    if pct <= smax:
+        return "APPROVED", "SALES"
+    if pct <= amax:
+        return "PENDING", "APPROVAL"
+    return "PENDING", "SUPER_ADMIN"
+
+
+async def next_number(prefix: str, collection, field: str) -> str:
+    n = await collection.count_documents({}) + 1
+    while await collection.find_one({field: f"{prefix}-{n:05d}"}):
+        n += 1
+    return f"{prefix}-{n:05d}"
+
+
+async def user_from_token(token: str):
+    try:
+        payload = jwt.decode(token, os.environ["JWT_SECRET"], algorithms=[JWT_ALGORITHM])
+        user = await db.users.find_one({"_id": ObjectId(payload["sub"])})
+        if user:
+            user["_id"] = str(user["_id"])
+        return user
+    except Exception:
+        return None
+
+
+# ---------- PDF helpers ----------
+def _logo_flowable(company: dict):
+    logo = (company or {}).get("logo") or ""
+    try:
+        if logo.startswith("data:"):
+            import base64
+            b = base64.b64decode(logo.split(",", 1)[1])
+            return RLImage(BytesIO(b), width=40 * mm, height=15 * mm, kind="proportional")
+        if logo.startswith("http"):
+            r = _requests.get(logo, timeout=10)
+            if r.status_code == 200:
+                return RLImage(BytesIO(r.content), width=40 * mm, height=15 * mm, kind="proportional")
+    except Exception:
+        return None
+    return None
+
+
+def _money(v):
+    try:
+        return "Rp " + f"{int(round(float(v or 0))):,}".replace(",", ".")
+    except Exception:
+        return "Rp 0"
+
+
+def build_document_pdf(kind: str, data: dict, company: dict, itineraries=None) -> bytes:
+    buf = BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4, topMargin=18 * mm, bottomMargin=18 * mm, leftMargin=18 * mm, rightMargin=18 * mm)
+    styles = getSampleStyleSheet()
+    h = ParagraphStyle("h", parent=styles["Heading1"], textColor=colors.HexColor("#1d4ed8"), fontSize=18)
+    small = ParagraphStyle("s", parent=styles["Normal"], fontSize=9, textColor=colors.HexColor("#475569"))
+    el = []
+    logo = _logo_flowable(company)
+    header_left = []
+    if logo:
+        header_left.append(logo)
+    header_left.append(Paragraph(f"<b>{company.get('company_name','Safar Travel')}</b>", styles["Normal"]))
+    header_left.append(Paragraph(company.get("address", ""), small))
+    header_left.append(Paragraph(f"{company.get('phone','')} · {company.get('email','')}", small))
+    right = [Paragraph(f"<b>{kind}</b>", h),
+             Paragraph(f"No: {data.get('number','')}", small),
+             Paragraph(f"Tanggal: {(data.get('created_at') or '')[:10]}", small)]
+    el.append(Table([[header_left, right]], colWidths=[95 * mm, 75 * mm], style=TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP")])))
+    el.append(Spacer(1, 8 * mm))
+    el.append(Table([[Paragraph(f"<b>Customer</b><br/>{data.get('customer_name','')}", small),
+                      Paragraph(f"<b>Sales PIC</b><br/>{data.get('sales_pic_name','')}", small),
+                      Paragraph(f"<b>Package</b><br/>{data.get('package_name','')} (v{data.get('package_version',1)})", small)]],
+                     colWidths=[56 * mm, 56 * mm, 58 * mm]))
+    el.append(Spacer(1, 6 * mm))
+    rows = [["Deskripsi", "Qty", "Harga", "Jumlah"]]
+    rows.append([f"{data.get('package_name','')} — {data.get('room_type','') or 'Standard'}", str(data.get("pax", 1)), _money(data.get("per_pax_price")), _money(data.get("gross"))])
+    for a in (data.get("addons") or []):
+        rows.append([f"Add-on: {a.get('name','')}", "1", _money(a.get("amount")), _money(a.get("amount"))])
+    t = Table(rows, colWidths=[92 * mm, 18 * mm, 30 * mm, 30 * mm])
+    t.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1d4ed8")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("FONTSIZE", (0, 0), (-1, -1), 9),
+        ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#cbd5e1")),
+        ("ALIGN", (1, 0), (-1, -1), "RIGHT"),
+    ]))
+    el.append(t)
+    el.append(Spacer(1, 4 * mm))
+    summ = [["Subtotal", _money(data.get("subtotal"))],
+            [f"Discount ({data.get('discount_percent',0)}%)", "- " + _money(data.get("discount_amount"))],
+            [f"Pajak ({data.get('tax_percent',0)}%)", _money(data.get("tax_amount"))],
+            ["TOTAL", _money(data.get("total"))]]
+    ts = Table(summ, colWidths=[140 * mm, 30 * mm])
+    ts.setStyle(TableStyle([("ALIGN", (0, 0), (-1, -1), "RIGHT"), ("FONTSIZE", (0, 0), (-1, -1), 10),
+                            ("LINEABOVE", (0, -1), (-1, -1), 0.6, colors.HexColor("#1d4ed8")),
+                            ("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold")]))
+    el.append(ts)
+    if itineraries:
+        el.append(Spacer(1, 6 * mm))
+        el.append(Paragraph("<b>Itinerary</b>", styles["Normal"]))
+        for i, it in enumerate(itineraries):
+            el.append(Paragraph(f"Day {it.get('day', i + 1)}: {it.get('location','')} — {it.get('activity','')}", small))
+    if data.get("terms"):
+        el.append(Spacer(1, 6 * mm))
+        el.append(Paragraph("<b>Terms & Conditions</b>", styles["Normal"]))
+        el.append(Paragraph(str(data.get("terms")), small))
+    if kind == "INVOICE" and data.get("due_date"):
+        el.append(Spacer(1, 4 * mm))
+        el.append(Paragraph(f"<b>Jatuh Tempo:</b> {data.get('due_date')} · <b>Status:</b> {data.get('status','')}", small))
+    doc.build(el)
+    return buf.getvalue()
+
+
+# ---------- Quotations ----------
+class QuotationCreate(BaseModel):
+    customer_id: str
+    package_id: str
+    departure_id: Optional[str] = None
+    lead_id: Optional[str] = None
+    pax: int = 1
+    room_type: Optional[str] = ""
+    addons: Optional[List[dict]] = []
+    discount_percent: Optional[float] = 0
+    notes: Optional[str] = ""
+    terms: Optional[str] = ""
+    sales_pic_id: Optional[str] = None
+
+
+async def _compute_quotation_amounts(pkg, pax, addons, discount_percent, settings):
+    per_pax = compute_pax_price(pkg, pax, None)
+    gross = per_pax * pax
+    addon_total = sum(float(a.get("amount") or 0) for a in (addons or []))
+    subtotal = gross + addon_total
+    pct = float(discount_percent or 0)
+    discount_amount = round(subtotal * pct / 100)
+    tax_pct, tax_unit = resolve_category_tax(pkg, settings)
+    tax_amount = round(tax_unit * pax)
+    total = subtotal - discount_amount + tax_amount
+    return {"per_pax_price": per_pax, "base_price": float(pkg.get("selling_price") or 0), "gross": gross,
+            "addon_total": addon_total, "subtotal": subtotal, "discount_percent": pct,
+            "discount_amount": discount_amount, "tax_percent": tax_pct, "tax_amount": tax_amount, "total": total}
+
+
+@api_router.get("/quotations")
+async def list_quotations(status: Optional[str] = None, user: dict = Depends(require_permission("quotation.view"))):
+    query = owner_filter(user)
+    if status and status != "all":
+        query = {**query, "status": status}
+    docs = await db.quotations.find(query).sort("created_at", -1).to_list(1000)
+    return [serialize(d) for d in docs]
+
+
+@api_router.post("/quotations")
+async def create_quotation(body: QuotationCreate, request: Request, user: dict = Depends(require_permission("quotation.manage"))):
+    pkg = await db.packages.find_one({"_id": ObjectId(body.package_id)})
+    if not pkg:
+        raise HTTPException(status_code=404, detail="Package not found")
+    cust = await db.customers.find_one({"_id": ObjectId(body.customer_id)})
+    if not cust:
+        raise HTTPException(status_code=404, detail="Customer not found")
+    settings = await get_settings_dict()
+    amt = await _compute_quotation_amounts(pkg, body.pax, body.addons, body.discount_percent, settings)
+    dstatus, dlevel = resolve_discount_status(amt["discount_percent"], settings)
+    pic_id, pic_name, branch = await resolve_pic(user, body.sales_pic_id)
+    number = await next_number((settings.get("numbering") or {}).get("quotation_prefix", "QT"), db.quotations, "quotation_number")
+    doc = {"quotation_number": number, "customer_id": body.customer_id, "customer_name": cust["full_name"],
+           "package_id": body.package_id, "package_name": pkg["package_name"], "package_version": pkg.get("version", 1),
+           "departure_id": body.departure_id, "lead_id": body.lead_id, "pax": body.pax, "room_type": body.room_type,
+           "addons": body.addons or [], **amt, "discount_status": dstatus, "discount_level": dlevel,
+           "status": "DRAFT", "notes": body.notes, "terms": body.terms or pkg.get("terms", ""),
+           "sales_pic_id": pic_id, "sales_pic_name": pic_name, "branch": branch,
+           "converted_booking_id": None, "created_at": now_iso(), "created_by": user["name"]}
+    res = await db.quotations.insert_one(doc)
+    new = serialize(await db.quotations.find_one({"_id": res.inserted_id}))
+    await log_audit(user, "quotation", "create_quotation", request, record_id=new["_id"], new={"number": number})
+    return new
+
+
+@api_router.get("/quotations/{qid}")
+async def get_quotation(qid: str, user: dict = Depends(require_permission("quotation.view"))):
+    q = await db.quotations.find_one({"_id": ObjectId(qid)})
+    if not q:
+        raise HTTPException(status_code=404, detail="Quotation not found")
+    if not can_access_record(user, q):
+        raise HTTPException(status_code=403, detail="403 Forbidden")
+    return serialize(q)
+
+
+@api_router.put("/quotations/{qid}")
+async def update_quotation(qid: str, body: QuotationCreate, request: Request, user: dict = Depends(require_permission("quotation.manage"))):
+    q = await db.quotations.find_one({"_id": ObjectId(qid)})
+    if not q:
+        raise HTTPException(status_code=404, detail="Quotation not found")
+    if not can_access_record(user, q):
+        raise HTTPException(status_code=403, detail="403 Forbidden")
+    if q.get("status") in ("ACCEPTED",) or q.get("converted_booking_id"):
+        raise HTTPException(status_code=400, detail="Quotation already accepted/converted")
+    pkg = await db.packages.find_one({"_id": ObjectId(body.package_id)})
+    if not pkg:
+        raise HTTPException(status_code=404, detail="Package not found")
+    settings = await get_settings_dict()
+    amt = await _compute_quotation_amounts(pkg, body.pax, body.addons, body.discount_percent, settings)
+    dstatus, dlevel = resolve_discount_status(amt["discount_percent"], settings)
+    updates = {"package_id": body.package_id, "package_name": pkg["package_name"], "departure_id": body.departure_id,
+               "pax": body.pax, "room_type": body.room_type, "addons": body.addons or [], **amt,
+               "discount_status": dstatus, "discount_level": dlevel, "notes": body.notes, "terms": body.terms}
+    await db.quotations.update_one({"_id": ObjectId(qid)}, {"$set": updates})
+    await log_audit(user, "quotation", "update_quotation", request, record_id=qid)
+    return serialize(await db.quotations.find_one({"_id": ObjectId(qid)}))
+
+
+@api_router.patch("/quotations/{qid}/status")
+async def set_quotation_status(qid: str, body: dict, request: Request, user: dict = Depends(require_permission("quotation.manage"))):
+    q = await db.quotations.find_one({"_id": ObjectId(qid)})
+    if not q:
+        raise HTTPException(status_code=404, detail="Quotation not found")
+    if not can_access_record(user, q):
+        raise HTTPException(status_code=403, detail="403 Forbidden")
+    new_status = body.get("status")
+    if new_status not in ("DRAFT", "SENT", "ACCEPTED", "REJECTED"):
+        raise HTTPException(status_code=400, detail="Invalid status")
+    if new_status == "ACCEPTED" and q.get("discount_status") != "APPROVED":
+        raise HTTPException(status_code=400, detail="Discount belum di-approve")
+    await db.quotations.update_one({"_id": ObjectId(qid)}, {"$set": {"status": new_status}})
+    await log_audit(user, "quotation", "status", request, record_id=qid, new={"status": new_status})
+    return serialize(await db.quotations.find_one({"_id": ObjectId(qid)}))
+
+
+@api_router.patch("/quotations/{qid}/discount-approval")
+async def approve_discount(qid: str, body: dict, request: Request, user: dict = Depends(require_permission("quotation.approve"))):
+    q = await db.quotations.find_one({"_id": ObjectId(qid)})
+    if not q:
+        raise HTTPException(status_code=404, detail="Quotation not found")
+    action = body.get("action")
+    if action not in ("approve", "reject"):
+        raise HTTPException(status_code=400, detail="Invalid action")
+    status = "APPROVED" if action == "approve" else "REJECTED"
+    await db.quotations.update_one({"_id": ObjectId(qid)}, {"$set": {"discount_status": status, "discount_approved_by": user["name"]}})
+    await log_audit(user, "quotation", "discount_approval", request, record_id=qid, new={"discount_status": status})
+    return serialize(await db.quotations.find_one({"_id": ObjectId(qid)}))
+
+
+@api_router.get("/quotations/{qid}/pdf")
+async def quotation_pdf(qid: str, authorization: str = Header(None), auth: str = Query(None)):
+    token = authorization[7:] if (authorization or "").startswith("Bearer ") else auth
+    user = await user_from_token(token) if token else None
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    q = await db.quotations.find_one({"_id": ObjectId(qid)})
+    if not q:
+        raise HTTPException(status_code=404, detail="Quotation not found")
+    company = await db.company_settings.find_one({"key": "company"}) or {}
+    itins = await db.package_itineraries.find({"package_id": q.get("package_id")}).sort("day", 1).to_list(200)
+    data = {**q, "number": q.get("quotation_number")}
+    pdf = build_document_pdf("QUOTATION", data, company, itins)
+    return Response(content=pdf, media_type="application/pdf",
+                    headers={"Content-Disposition": f"inline; filename={q.get('quotation_number')}.pdf"})
+
+
+# ---------- Bookings ----------
+@api_router.post("/quotations/{qid}/convert")
+async def convert_to_booking(qid: str, body: dict, request: Request, user: dict = Depends(require_permission("booking.manage"))):
+    q = await db.quotations.find_one({"_id": ObjectId(qid)})
+    if not q:
+        raise HTTPException(status_code=404, detail="Quotation not found")
+    if not can_access_record(user, q):
+        raise HTTPException(status_code=403, detail="403 Forbidden")
+    if q.get("status") != "ACCEPTED":
+        raise HTTPException(status_code=400, detail="Quotation must be ACCEPTED first")
+    if q.get("discount_status") != "APPROVED":
+        raise HTTPException(status_code=400, detail="Discount belum di-approve")
+    if q.get("converted_booking_id"):
+        return serialize(await db.bookings.find_one({"_id": ObjectId(q["converted_booking_id"])}))
+    pkg = await db.packages.find_one({"_id": ObjectId(q["package_id"])})
+    settings = await get_settings_dict()
+    number = await next_number((settings.get("numbering") or {}).get("booking_prefix", "BKG"), db.bookings, "booking_number")
+    source = (body or {}).get("booking_source", "SALES")
+    if source not in BOOKING_SOURCES:
+        source = "SALES"
+    booking = {"booking_number": number, "quotation_id": qid, "customer_id": q["customer_id"], "customer_name": q["customer_name"],
+               "package_id": q["package_id"], "package_name": q["package_name"], "package_version": (pkg or {}).get("version", q.get("package_version", 1)),
+               "departure_id": q.get("departure_id"), "pax": q["pax"], "room_type": q.get("room_type"), "addons": q.get("addons", []),
+               "booking_source": source, "per_pax_price": q["per_pax_price"], "subtotal": q["subtotal"],
+               "discount_percent": q["discount_percent"], "discount_amount": q["discount_amount"],
+               "tax_percent": q.get("tax_percent", 0), "tax_amount": q["tax_amount"], "total": q["total"],
+               "payment_schedule": [], "status": "CONFIRMED", "sales_pic_id": q["sales_pic_id"], "sales_pic_name": q["sales_pic_name"],
+               "branch": q.get("branch", ""), "created_at": now_iso(), "created_by": user["name"]}
+    res = await db.bookings.insert_one(booking)
+    bid = str(res.inserted_id)
+    await db.quotations.update_one({"_id": ObjectId(qid)}, {"$set": {"converted_booking_id": bid, "status": "CONVERTED"}})
+    await log_audit(user, "booking", "convert", request, record_id=bid, new={"number": number})
+    return serialize(await db.bookings.find_one({"_id": res.inserted_id}))
+
+
+@api_router.get("/bookings")
+async def list_bookings(status: Optional[str] = None, user: dict = Depends(require_permission("booking.view"))):
+    query = owner_filter(user)
+    if status and status != "all":
+        query = {**query, "status": status}
+    docs = await db.bookings.find(query).sort("created_at", -1).to_list(1000)
+    return [serialize(d) for d in docs]
+
+
+@api_router.get("/bookings/{bid}")
+async def get_booking(bid: str, user: dict = Depends(require_permission("booking.view"))):
+    b = await db.bookings.find_one({"_id": ObjectId(bid)})
+    if not b:
+        raise HTTPException(status_code=404, detail="Booking not found")
+    if not can_access_record(user, b):
+        raise HTTPException(status_code=403, detail="403 Forbidden")
+    travelers = [serialize(d) for d in await db.travelers.find({"booking_id": bid}).sort("created_at", 1).to_list(200)]
+    tids = [t["_id"] for t in travelers]
+    docs = [serialize(d) for d in await db.documents.find({"traveler_id": {"$in": tids}, "is_deleted": False}).to_list(1000)]
+    invoices = [serialize(d) for d in await db.invoices.find({"booking_id": bid}).sort("created_at", -1).to_list(100)]
+    return {"booking": serialize(b), "travelers": travelers, "documents": docs, "invoices": invoices}
+
+
+@api_router.put("/bookings/{bid}/payment-schedule")
+async def set_payment_schedule(bid: str, body: dict, request: Request, user: dict = Depends(require_permission("booking.manage"))):
+    b = await db.bookings.find_one({"_id": ObjectId(bid)})
+    if not b:
+        raise HTTPException(status_code=404, detail="Booking not found")
+    if not can_access_record(user, b):
+        raise HTTPException(status_code=403, detail="403 Forbidden")
+    schedule = body.get("schedule", [])
+    await db.bookings.update_one({"_id": ObjectId(bid)}, {"$set": {"payment_schedule": schedule}})
+    return serialize(await db.bookings.find_one({"_id": ObjectId(bid)}))
+
+
+# ---------- Travelers ----------
+class TravelerModel(BaseModel):
+    full_name: str
+    passport_name: Optional[str] = ""
+    nik: Optional[str] = ""
+    passport_number: Optional[str] = ""
+    passport_expiry: Optional[str] = ""
+    dob: Optional[str] = ""
+    gender: Optional[str] = ""
+    nationality: Optional[str] = "Indonesia"
+    phone: Optional[str] = ""
+    emergency_contact: Optional[str] = ""
+    room_type: Optional[str] = ""
+    special_request: Optional[str] = ""
+
+
+@api_router.post("/bookings/{bid}/travelers")
+async def add_traveler(bid: str, body: TravelerModel, request: Request, user: dict = Depends(require_permission("traveler.manage"))):
+    b = await db.bookings.find_one({"_id": ObjectId(bid)})
+    if not b:
+        raise HTTPException(status_code=404, detail="Booking not found")
+    if not can_access_record(user, b):
+        raise HTTPException(status_code=403, detail="403 Forbidden")
+    doc = {**body.model_dump(), "booking_id": bid, "created_at": now_iso(), "created_by": user["name"]}
+    res = await db.travelers.insert_one(doc)
+    await log_audit(user, "traveler", "add", request, record_id=str(res.inserted_id))
+    return serialize(await db.travelers.find_one({"_id": res.inserted_id}))
+
+
+@api_router.put("/travelers/{tid}")
+async def update_traveler(tid: str, body: TravelerModel, user: dict = Depends(require_permission("traveler.manage"))):
+    t = await db.travelers.find_one({"_id": ObjectId(tid)})
+    if not t:
+        raise HTTPException(status_code=404, detail="Traveler not found")
+    await db.travelers.update_one({"_id": ObjectId(tid)}, {"$set": body.model_dump()})
+    return serialize(await db.travelers.find_one({"_id": ObjectId(tid)}))
+
+
+@api_router.delete("/travelers/{tid}")
+async def delete_traveler(tid: str, user: dict = Depends(require_permission("traveler.manage"))):
+    await db.travelers.delete_one({"_id": ObjectId(tid)})
+    await db.documents.update_many({"traveler_id": tid}, {"$set": {"is_deleted": True}})
+    return {"ok": True}
+
+
+# ---------- Documents ----------
+@api_router.post("/travelers/{tid}/documents")
+async def upload_document(tid: str, doc_type: str = Form(...), file: UploadFile = File(...), user: dict = Depends(require_permission("document.manage"))):
+    t = await db.travelers.find_one({"_id": ObjectId(tid)})
+    if not t:
+        raise HTTPException(status_code=404, detail="Traveler not found")
+    ext = file.filename.split(".")[-1].lower() if "." in file.filename else "bin"
+    doc_id = str(_uuid.uuid4())
+    path = f"{_APP_NAME}/documents/{tid}/{doc_id}.{ext}"
+    data = await file.read()
+    result = put_object(path, data, file.content_type or "application/octet-stream")
+    rec = {"id": doc_id, "traveler_id": tid, "booking_id": t.get("booking_id"), "doc_type": doc_type,
+           "storage_path": result["path"], "original_filename": file.filename, "content_type": file.content_type,
+           "size": result.get("size", len(data)), "status": "Uploaded", "is_deleted": False,
+           "uploaded_by": user["name"], "created_at": now_iso()}
+    await db.documents.insert_one(rec)
+    return {k: v for k, v in rec.items() if k != "_id"}
+
+
+@api_router.patch("/documents/{doc_id}/status")
+async def set_document_status(doc_id: str, body: dict, user: dict = Depends(require_permission("document.manage"))):
+    status = body.get("status")
+    if status not in DOC_STATUSES:
+        raise HTTPException(status_code=400, detail="Invalid status")
+    await db.documents.update_one({"id": doc_id}, {"$set": {"status": status, "verified_by": user["name"]}})
+    d = await db.documents.find_one({"id": doc_id})
+    return {k: v for k, v in serialize(d).items() if k != "_id"} if d else {}
+
+
+@api_router.get("/documents/{doc_id}/download")
+async def download_document(doc_id: str, authorization: str = Header(None), auth: str = Query(None)):
+    token = authorization[7:] if (authorization or "").startswith("Bearer ") else auth
+    user = await user_from_token(token) if token else None
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    d = await db.documents.find_one({"id": doc_id, "is_deleted": False})
+    if not d:
+        raise HTTPException(status_code=404, detail="Document not found")
+    data, ct = get_object(d["storage_path"])
+    return Response(content=data, media_type=d.get("content_type") or ct)
+
+
+# ---------- Invoices ----------
+async def _recompute_invoice_status(invoice_id: str):
+    inv = await db.invoices.find_one({"_id": ObjectId(invoice_id)})
+    if not inv:
+        return None
+    payments = await db.payments.find({"invoice_id": invoice_id}).to_list(500)
+    paid = sum(float(p.get("amount") or 0) for p in payments)
+    total = float(inv.get("total") or 0)
+    today = today_str()
+    if paid >= total and total > 0:
+        status = "Paid"
+    elif paid > 0:
+        status = "Partially Paid"
+    else:
+        status = "Unpaid"
+    if status in ("Unpaid", "Partially Paid") and inv.get("due_date") and inv["due_date"] < today:
+        status = "Overdue"
+    await db.invoices.update_one({"_id": ObjectId(invoice_id)}, {"$set": {"paid_amount": paid, "outstanding": max(total - paid, 0), "status": status}})
+    return status
+
+
+@api_router.post("/bookings/{bid}/invoice")
+async def create_invoice(bid: str, body: dict, request: Request, user: dict = Depends(require_permission("invoice.manage"))):
+    b = await db.bookings.find_one({"_id": ObjectId(bid)})
+    if not b:
+        raise HTTPException(status_code=404, detail="Booking not found")
+    settings = await get_settings_dict()
+    number = await next_number((settings.get("numbering") or {}).get("invoice_prefix", "INV"), db.invoices, "invoice_number")
+    due_date = (body or {}).get("due_date") or ""
+    amount = float((body or {}).get("amount") if (body or {}).get("amount") is not None else b.get("subtotal", 0))
+    doc = {"invoice_number": number, "booking_id": bid, "booking_number": b.get("booking_number"),
+           "customer_id": b.get("customer_id"), "customer_name": b.get("customer_name"),
+           "package_id": b.get("package_id"), "package_name": b.get("package_name"), "pax": b.get("pax"),
+           "amount": amount, "discount_amount": b.get("discount_amount", 0), "discount_percent": b.get("discount_percent", 0),
+           "tax_percent": b.get("tax_percent", 0), "tax_amount": b.get("tax_amount", 0), "total": b.get("total", amount),
+           "paid_amount": 0, "outstanding": b.get("total", amount), "due_date": due_date, "status": "Unpaid",
+           "sales_pic_id": b.get("sales_pic_id"), "sales_pic_name": b.get("sales_pic_name"), "branch": b.get("branch", ""),
+           "terms": (await db.packages.find_one({"_id": ObjectId(b["package_id"])}) or {}).get("terms", ""),
+           "created_at": now_iso(), "created_by": user["name"]}
+    res = await db.invoices.insert_one(doc)
+    await _recompute_invoice_status(str(res.inserted_id))
+    await log_audit(user, "invoice", "create", request, record_id=str(res.inserted_id), new={"number": number})
+    return serialize(await db.invoices.find_one({"_id": res.inserted_id}))
+
+
+@api_router.get("/invoices")
+async def list_invoices(status: Optional[str] = None, user: dict = Depends(require_permission("invoice.view"))):
+    query = {} if user["role"] != "sales" else {"sales_pic_id": user["_id"]}
+    if status and status != "all":
+        query["status"] = status
+    docs = await db.invoices.find(query).sort("created_at", -1).to_list(2000)
+    for d in docs:
+        await _recompute_invoice_status(str(d["_id"]))
+    docs = await db.invoices.find(query).sort("created_at", -1).to_list(2000)
+    return [serialize(d) for d in docs]
+
+
+@api_router.get("/invoices/{iid}")
+async def get_invoice(iid: str, user: dict = Depends(require_permission("invoice.view"))):
+    await _recompute_invoice_status(iid)
+    inv = await db.invoices.find_one({"_id": ObjectId(iid)})
+    if not inv:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    payments = [serialize(p) for p in await db.payments.find({"invoice_id": iid}).sort("created_at", -1).to_list(500)]
+    return {"invoice": serialize(inv), "payments": payments}
+
+
+@api_router.get("/invoices/{iid}/pdf")
+async def invoice_pdf(iid: str, authorization: str = Header(None), auth: str = Query(None)):
+    token = authorization[7:] if (authorization or "").startswith("Bearer ") else auth
+    user = await user_from_token(token) if token else None
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    inv = await db.invoices.find_one({"_id": ObjectId(iid)})
+    if not inv:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    company = await db.company_settings.find_one({"key": "company"}) or {}
+    data = {**inv, "number": inv.get("invoice_number"), "subtotal": inv.get("amount"),
+            "per_pax_price": round(float(inv.get("amount") or 0) / max(int(inv.get("pax") or 1), 1)), "gross": inv.get("amount"), "addons": []}
+    pdf = build_document_pdf("INVOICE", data, company)
+    return Response(content=pdf, media_type="application/pdf",
+                    headers={"Content-Disposition": f"inline; filename={inv.get('invoice_number')}.pdf"})
+
+
+# ---------- Payments ----------
+class PaymentCreate(BaseModel):
+    payment_date: str
+    amount: float
+    payment_method: Optional[str] = ""
+    bank: Optional[str] = ""
+    reference_number: Optional[str] = ""
+    notes: Optional[str] = ""
+    attachment_url: Optional[str] = ""
+
+
+@api_router.post("/invoices/{iid}/payments")
+async def record_payment(iid: str, body: PaymentCreate, request: Request, user: dict = Depends(require_permission("payment.manage"))):
+    inv = await db.invoices.find_one({"_id": ObjectId(iid)})
+    if not inv:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    doc = {**body.model_dump(), "invoice_id": iid, "invoice_number": inv.get("invoice_number"),
+           "booking_id": inv.get("booking_id"), "recorded_by": user["name"], "created_at": now_iso()}
+    res = await db.payments.insert_one(doc)
+    status = await _recompute_invoice_status(iid)
+    await log_audit(user, "payment", "record", request, record_id=str(res.inserted_id), new={"amount": body.amount, "invoice_status": status})
+    return serialize(await db.payments.find_one({"_id": res.inserted_id}))
+
+
+# ---------- Receivable & Reminders ----------
+def _aging_bucket(due_date: str, today: str):
+    if not due_date:
+        return "Current"
+    from datetime import date
+    try:
+        dd = date.fromisoformat(due_date[:10])
+        td = date.fromisoformat(today)
+    except Exception:
+        return "Current"
+    days = (td - dd).days
+    if days <= 0:
+        return "Current"
+    if days <= 30:
+        return "1-30"
+    if days <= 60:
+        return "31-60"
+    if days <= 90:
+        return "61-90"
+    return "90+"
+
+
+@api_router.get("/receivables")
+async def receivables(user: dict = Depends(require_permission("receivable.view"))):
+    query = {} if user["role"] != "sales" else {"sales_pic_id": user["_id"]}
+    invs = await db.invoices.find(query).to_list(3000)
+    today = today_str()
+    rows = []
+    aging = {"Current": 0, "1-30": 0, "31-60": 0, "61-90": 0, "90+": 0}
+    total_invoice = total_paid = 0.0
+    for inv in invs:
+        await _recompute_invoice_status(str(inv["_id"]))
+        inv = await db.invoices.find_one({"_id": inv["_id"]})
+        outstanding = float(inv.get("outstanding") or 0)
+        total_invoice += float(inv.get("total") or 0)
+        total_paid += float(inv.get("paid_amount") or 0)
+        if outstanding > 0:
+            bucket = _aging_bucket(inv.get("due_date"), today)
+            aging[bucket] += outstanding
+            rows.append({"invoice_number": inv.get("invoice_number"), "customer_name": inv.get("customer_name"),
+                         "total": inv.get("total"), "paid_amount": inv.get("paid_amount"), "outstanding": outstanding,
+                         "due_date": inv.get("due_date"), "status": inv.get("status"), "aging": bucket,
+                         "invoice_id": str(inv["_id"])})
+    return {"rows": rows, "aging": aging, "total_invoice": total_invoice, "total_payment": total_paid,
+            "total_outstanding": max(total_invoice - total_paid, 0)}
+
+
+@api_router.get("/payment-reminders")
+async def payment_reminders(user: dict = Depends(require_permission("receivable.view"))):
+    query = {} if user["role"] != "sales" else {"sales_pic_id": user["_id"]}
+    invs = await db.invoices.find(query).to_list(3000)
+    from datetime import date
+    td = date.fromisoformat(today_str())
+    out = []
+    for inv in invs:
+        await _recompute_invoice_status(str(inv["_id"]))
+        inv = await db.invoices.find_one({"_id": inv["_id"]})
+        if inv.get("status") in ("Paid",) or not inv.get("due_date"):
+            continue
+        try:
+            dd = date.fromisoformat(inv["due_date"][:10])
+        except Exception:
+            continue
+        days_to = (dd - td).days
+        stage = None
+        for h in (30, 14, 7, 3):
+            if days_to == h:
+                stage = f"H-{h}"
+        if days_to == 0:
+            stage = "DUE"
+        if days_to < 0:
+            stage = "OVERDUE"
+        if stage:
+            out.append({"invoice_id": str(inv["_id"]), "invoice_number": inv.get("invoice_number"),
+                        "customer_name": inv.get("customer_name"), "due_date": inv.get("due_date"),
+                        "outstanding": inv.get("outstanding"), "stage": stage, "days_to_due": days_to})
+    return {"reminders": out, "generated_at": now_iso()}
+
+
+@api_router.get("/booking-config")
+async def booking_config(user: dict = Depends(get_current_user)):
+    settings = await get_settings_dict()
+    return {"booking_sources": settings.get("booking_sources", BOOKING_SOURCES),
+            "document_types": DOCUMENT_TYPES, "doc_statuses": DOC_STATUSES,
+            "discount_approval": settings.get("discount_approval", {"sales_max_percent": 5, "approval_max_percent": 10})}
+
+
 app.include_router(api_router)
 
 app.add_middleware(
@@ -1551,6 +2251,8 @@ async def seed():
     for role, perms in DEFAULT_ROLE_PERMISSIONS.items():
         if not await db.role_permissions.find_one({"role": role}):
             await db.role_permissions.insert_one({"role": role, "permissions": perms})
+        elif role != "super_admin":
+            await db.role_permissions.update_one({"role": role}, {"$addToSet": {"permissions": {"$each": perms}}})
 
     seed_users = [
         {"email": os.environ["SUPER_ADMIN_EMAIL"], "password": os.environ["SUPER_ADMIN_PASSWORD"],
@@ -1656,6 +2358,19 @@ async def seed():
         {"key": "system", "settings.category_tax": {"$exists": False}},
         {"$set": {"settings.category_tax": {"umroh_percent": 0, "tour_percent": 1.1, "umroh_plus_percent": 1.1}}})
     await db.packages.update_many({"sub_category": {"$exists": False}}, {"$set": {"sub_category": "OPEN_TRIP"}})
+    await db.system_settings.update_one(
+        {"key": "system", "settings.discount_approval": {"$exists": False}},
+        {"$set": {"settings.discount_approval": {"sales_max_percent": 5, "approval_max_percent": 10}}})
+    await db.system_settings.update_one(
+        {"key": "system"},
+        {"$set": {"settings.booking_sources": ["SALES", "AUTO SALES", "ADMIN", "AGENT", "PARTNER", "WEBSITE", "OTHER"],
+                  "settings.numbering.booking_prefix": "BKG"}})
+    await db.quotations.create_index("sales_pic_id")
+    await db.bookings.create_index("sales_pic_id")
+    await db.invoices.create_index("booking_id")
+    await db.payments.create_index("invoice_id")
+    await db.travelers.create_index("booking_id")
+    await db.documents.create_index("traveler_id")
     if await db.packages.count_documents({}) == 0:
         umrah = {
             "package_code": "UMR-0001", "package_name": "Umrah Reguler 9 Hari", "product_type": "UMRAH",
@@ -1715,6 +2430,11 @@ async def seed():
 @app.on_event("startup")
 async def on_startup():
     await seed()
+    try:
+        init_storage()
+        logger.info("Object storage initialized")
+    except Exception as e:
+        logger.error(f"Storage init failed: {e}")
     logger.info("Safar CRM startup: indexes + seed complete")
 
 

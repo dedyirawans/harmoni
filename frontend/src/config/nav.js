@@ -1,7 +1,7 @@
 import {
   LayoutDashboard, Users2, Briefcase, Package, CalendarCheck, Calculator,
   Receipt, Percent, FileBarChart, Plug, UserCog, Settings, ScrollText,
-  Plane, PlaneTakeoff, Bell, Wallet, TrendingUp, ListChecks,
+  Plane, PlaneTakeoff, Bell, Wallet, TrendingUp, ListChecks, FileText,
 } from "lucide-react";
 
 // Route -> permission required (mirrors backend). null = any authenticated user.
@@ -9,6 +9,7 @@ export const ROUTE_PERMS = {
   "/dashboard": null,
   "/crm": "crm.view",
   "/sales": "sales.view",
+  "/quotations": "quotation.view",
   "/products": ["product.view", "hpp.view"],
   "/booking": "booking.view",
   "/accounting": "accounting.view",
@@ -32,6 +33,7 @@ export const MENUS = {
     { label: "Dashboard", path: "/dashboard", icon: LayoutDashboard },
     { label: "CRM", path: "/crm", icon: Users2 },
     { label: "Sales Management", path: "/sales", icon: Briefcase },
+    { label: "Quotations", path: "/quotations", icon: FileText },
     { label: "Follow Ups", path: "/follow-ups", icon: ListChecks },
     { label: "Product Management", path: "/products", icon: Package },
     { label: "Booking", path: "/booking", icon: CalendarCheck },
@@ -49,6 +51,8 @@ export const MENUS = {
     { label: "My CRM", path: "/crm", icon: Users2 },
     { label: "My Sales", path: "/sales", icon: Briefcase },
     { label: "Follow Ups", path: "/follow-ups", icon: ListChecks },
+    { label: "Quotations", path: "/quotations", icon: FileText },
+    { label: "Bookings", path: "/booking", icon: CalendarCheck },
     { label: "Packages", path: "/packages", icon: Plane },
     { label: "Departures", path: "/departures", icon: PlaneTakeoff },
     { label: "My Commission", path: "/commission", icon: Wallet },
@@ -56,6 +60,8 @@ export const MENUS = {
   ],
   accounting: [
     { label: "Accounting Dashboard", path: "/dashboard", icon: LayoutDashboard },
+    { label: "Bookings", path: "/booking", icon: CalendarCheck },
+    { label: "Invoices & AR", path: "/accounting", icon: Calculator },
     { label: "Transactions", path: "/transactions", icon: Receipt },
     { label: "Costing / HPP", path: "/hpp", icon: TrendingUp },
     { label: "Packages", path: "/products", icon: Package },

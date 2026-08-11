@@ -1,0 +1,139 @@
+import { useEffect, useState } from "react";
+import api, { API, formatApiErrorDetail } from "@/lib/api";
+import { useAuth } from "@/context/AuthContext";
+import { fmtIDR, fmtDate } from "@/config/crm";
+import { QUOT_STATUS_COLORS, DISCOUNT_STATUS_COLORS, P4_ROOM_TYPES } from "@/config/phase4";
+import { Card, CardContent } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Badge } from "@/components/ui/badge";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogTrigger } from "@/components/ui/dialog";
+import { Plus, Loader2, FileText, Check, X, ArrowRightCircle, Trash2 } from "lucide-react";
+import { toast } from "sonner";
+
+export default function Quotations() {
+  const { hasPerm } = useAuth();
+  const canManage = hasPerm("quotation.manage");
+  const canApprove = hasPerm("quotation.approve");
+  const canBook = hasPerm("booking.manage");
+  const [rows, setRows] = useState(null);
+  const [customers, setCustomers] = useState([]);
+  const [packages, setPackages] = useState([]);
+  const [open, setOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const empty = { customer_id: "", package_id: "", pax: 1, room_type: "QUAD", discount_percent: 0, addons: [] };
+  const [form, setForm] = useState(empty);
+
+  const load = () => {
+    setRows(null);
+    api.get("/quotations").then((r) => setRows(r.data)).catch(() => setRows([]));
+  };
+  useEffect(() => {
+    load();
+    api.get("/customers").then((r) => setCustomers(r.data)).catch(() => {});
+    api.get("/packages", { params: { status: "ACTIVE" } }).then((r) => setPackages(r.data)).catch(() => {});
+  }, []);
+
+  const set = (k) => (v) => setForm((f) => ({ ...f, [k]: v }));
+  const openPdf = (id) => window.open(`${API}/quotations/${id}/pdf?auth=${localStorage.getItem("token")}`, "_blank");
+
+  const save = async () => {
+    if (!form.customer_id || !form.package_id) return toast.error("Pilih customer & package");
+    setSaving(true);
+    try {
+      await api.post("/quotations", {
+        ...form, pax: Number(form.pax), discount_percent: Number(form.discount_percent),
+        addons: (form.addons || []).filter((a) => a.name).map((a) => ({ name: a.name, amount: Number(a.amount || 0) })),
+      });
+      toast.success("Quotation dibuat"); setOpen(false); setForm(empty); load();
+    } catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); }
+    finally { setSaving(false); }
+  };
+
+  const act = async (fn, ok) => { try { await fn(); toast.success(ok); load(); } catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); } };
+
+  const addAddon = () => set("addons")([...(form.addons || []), { name: "", amount: 0 }]);
+  const updAddon = (i, k, v) => set("addons")(form.addons.map((a, idx) => (idx === i ? { ...a, [k]: v } : a)));
+
+  return (
+    <div className="space-y-6" data-testid="quotations-page">
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <h1 className="font-display text-3xl font-bold text-slate-900">Quotations</h1>
+          <p className="text-slate-500 mt-1">Buat penawaran, kelola approval diskon, dan konversi ke booking.</p>
+        </div>
+        {canManage && (
+          <Dialog open={open} onOpenChange={setOpen}>
+            <DialogTrigger asChild><Button className="bg-blue-600 hover:bg-blue-700" data-testid="add-quotation-button"><Plus className="h-4 w-4 mr-2" aria-hidden="true" />New Quotation</Button></DialogTrigger>
+            <DialogContent className="bg-white max-w-xl max-h-[90vh] overflow-y-auto" data-testid="quotation-dialog">
+              <DialogHeader><DialogTitle className="font-display">New Quotation</DialogTitle><DialogDescription>Harga dasar otomatis dari Package Master.</DialogDescription></DialogHeader>
+              <div className="grid grid-cols-2 gap-4 py-2">
+                <Field label="Customer" full><Select value={form.customer_id} onValueChange={set("customer_id")}><SelectTrigger data-testid="quot-customer-select"><SelectValue placeholder="Pilih customer" /></SelectTrigger><SelectContent className="bg-white">{customers.map((c) => <SelectItem key={c._id} value={c._id}>{c.full_name}</SelectItem>)}</SelectContent></Select></Field>
+                <Field label="Package" full><Select value={form.package_id} onValueChange={set("package_id")}><SelectTrigger data-testid="quot-package-select"><SelectValue placeholder="Pilih package" /></SelectTrigger><SelectContent className="bg-white">{packages.map((p) => <SelectItem key={p._id} value={p._id}>{p.package_name} — {fmtIDR(p.selling_price)}</SelectItem>)}</SelectContent></Select></Field>
+                <Field label="Pax"><Input type="number" value={form.pax} onChange={(e) => set("pax")(e.target.value)} data-testid="quot-pax-input" /></Field>
+                <Field label="Room Type"><Select value={form.room_type} onValueChange={set("room_type")}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent className="bg-white">{P4_ROOM_TYPES.map((r) => <SelectItem key={r} value={r}>{r}</SelectItem>)}</SelectContent></Select></Field>
+                <Field label="Discount (%)"><Input type="number" value={form.discount_percent} onChange={(e) => set("discount_percent")(e.target.value)} data-testid="quot-discount-input" /></Field>
+                <div className="col-span-2 space-y-2">
+                  <div className="flex items-center justify-between"><Label>Add-ons</Label><Button type="button" size="sm" variant="outline" onClick={addAddon} data-testid="add-addon-button"><Plus className="h-3 w-3 mr-1" />Add-on</Button></div>
+                  {(form.addons || []).map((a, i) => (
+                    <div key={i} className="grid grid-cols-12 gap-2">
+                      <Input className="col-span-7" placeholder="Nama add-on" value={a.name} onChange={(e) => updAddon(i, "name", e.target.value)} data-testid={`addon-name-${i}`} />
+                      <Input className="col-span-4" type="number" placeholder="Harga" value={a.amount} onChange={(e) => updAddon(i, "amount", e.target.value)} data-testid={`addon-amount-${i}`} />
+                      <Button type="button" size="icon" variant="ghost" className="col-span-1 text-red-600" onClick={() => set("addons")(form.addons.filter((_, idx) => idx !== i))}><Trash2 className="h-4 w-4" /></Button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <DialogFooter><Button onClick={save} disabled={saving} className="bg-blue-600 hover:bg-blue-700" data-testid="quotation-save-button">{saving ? "Saving..." : "Create quotation"}</Button></DialogFooter>
+            </DialogContent>
+          </Dialog>
+        )}
+      </div>
+
+      {rows === null ? <div className="p-12 flex justify-center"><Loader2 className="h-6 w-6 animate-spin text-blue-600" /></div>
+        : rows.length === 0 ? <Card className="border-slate-200"><CardContent className="p-12 text-center text-slate-500">Belum ada quotation.</CardContent></Card>
+        : (
+          <div className="space-y-3" data-testid="quotations-list">
+            {rows.map((q) => (
+              <Card key={q._id} className="border-slate-200 shadow-sm" data-testid={`quotation-row-${q._id}`}>
+                <CardContent className="p-4 flex items-center justify-between flex-wrap gap-3">
+                  <div className="min-w-[220px]">
+                    <p className="font-mono text-[11px] text-slate-400">{q.quotation_number}</p>
+                    <p className="font-semibold text-slate-900">{q.customer_name}</p>
+                    <p className="text-sm text-slate-500">{q.package_name} · {q.pax} pax</p>
+                  </div>
+                  <div className="text-right">
+                    <p className="font-display text-lg font-bold text-slate-900">{fmtIDR(q.total)}</p>
+                    <p className="text-xs text-slate-400">Diskon {q.discount_percent}% · {fmtDate(q.created_at)}</p>
+                  </div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <Badge variant="outline" className={QUOT_STATUS_COLORS[q.status]}>{q.status}</Badge>
+                    <Badge variant="outline" className={DISCOUNT_STATUS_COLORS[q.discount_status]} data-testid={`quot-discount-status-${q._id}`}>Disc: {q.discount_status}</Badge>
+                    <Button size="sm" variant="outline" onClick={() => openPdf(q._id)} data-testid={`quot-pdf-${q._id}`}><FileText className="h-4 w-4 mr-1" />PDF</Button>
+                    {canApprove && q.discount_status === "PENDING" && (
+                      <>
+                        <Button size="sm" className="bg-emerald-600 hover:bg-emerald-700" onClick={() => act(() => api.patch(`/quotations/${q._id}/discount-approval`, { action: "approve" }), "Diskon disetujui")} data-testid={`quot-approve-${q._id}`}><Check className="h-4 w-4 mr-1" />Approve</Button>
+                        <Button size="sm" variant="outline" className="text-red-600" onClick={() => act(() => api.patch(`/quotations/${q._id}/discount-approval`, { action: "reject" }), "Diskon ditolak")} data-testid={`quot-reject-${q._id}`}><X className="h-4 w-4 mr-1" />Reject</Button>
+                      </>
+                    )}
+                    {canManage && ["DRAFT", "SENT"].includes(q.status) && (
+                      <Button size="sm" variant="outline" onClick={() => act(() => api.patch(`/quotations/${q._id}/status`, { status: "ACCEPTED" }), "Quotation accepted")} data-testid={`quot-accept-${q._id}`}>Accept</Button>
+                    )}
+                    {canBook && q.status === "ACCEPTED" && !q.converted_booking_id && (
+                      <Button size="sm" className="bg-blue-600 hover:bg-blue-700" onClick={() => act(() => api.post(`/quotations/${q._id}/convert`, { booking_source: "SALES" }), "Dikonversi ke booking")} data-testid={`quot-convert-${q._id}`}><ArrowRightCircle className="h-4 w-4 mr-1" />Convert</Button>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        )}
+    </div>
+  );
+}
+
+function Field({ label, children, full }) {
+  return <div className={`space-y-2 ${full ? "col-span-2" : "col-span-2 sm:col-span-1"}`}><Label>{label}</Label>{children}</div>;
+}

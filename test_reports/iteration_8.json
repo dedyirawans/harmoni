@@ -1,0 +1,56 @@
+{
+  "summary": "Phase 4 CRM Tour+Travel/Umrah end-to-end frontend testing across Sales, Super Admin, and Accounting roles. All 22 targeted checks passed. Full acceptance chain verified: Customer -> Quotation (auto-approve 3% / PENDING 8%) -> PDF -> Accept -> Convert -> Booking -> Traveler add -> Document upload/verify -> Generate Invoice (Accounting) -> Partial+Full Payment -> Paid status. RBAC visibility for all three roles is correct.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_results": {
+    "sales": {
+      "new_quotation_button": true,
+      "quotation_3pct_auto_approved": true,
+      "quotation_8pct_pending": true,
+      "pdf_returns_200_application_pdf": true,
+      "pdf_bytes": 2486,
+      "no_approve_button_on_pending": true,
+      "accept_shows_convert_button": true,
+      "convert_to_booking_sets_status_CONVERTED": true,
+      "accept_pending_disc_blocked_with_toast": "Discount belum di-approve"
+    },
+    "super_admin": {
+      "approve_reject_buttons_visible_on_pending": true,
+      "approve_changes_discount_status_to_APPROVED": true,
+      "add_traveler_from_booking_detail": true,
+      "doc_upload_KTP_status_Uploaded": true,
+      "doc_status_select_to_Verified_works": true
+    },
+    "accounting": {
+      "no_new_quotation_button_on_/quotations": true,
+      "accounting_page_loads": true,
+      "tabs_invoices_receivables_reminders_present": true,
+      "receivables_aging_buckets_Current_1-30_31-60_61-90_90+": true,
+      "generate_invoice_from_booking_detail": true,
+      "record_payment_partial_->_Partially_Paid": true,
+      "record_payment_full_->_Paid": true,
+      "/crm_forbidden_for_accounting": true
+    }
+  },
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "BookingDetail.jsx: TravelerCard `del` handler calls DELETE /travelers/{id} without a confirmation prompt and silently swallows without a success toast — recommend a confirm() and toast.success for consistency with rest of app.",
+    "Quotations.jsx: openPdf uses localStorage token via ?auth= query. Fine, but PDF endpoint should ensure it never logs the token; also consider blob-download to avoid token appearing in browser history/referrer.",
+    "Payment attachment file is intentionally not implemented (only attachment_url string). Should be documented in UI hint so accounting knows to paste a URL if required.",
+    "BookingDetail.jsx `createInvoice` posts due_date:'' (empty string) — backend should treat empty as null; verify with pydantic validator to avoid future 422s.",
+    "Accounting.jsx receivables 'Overdue (90+)' KPI duplicates the 90+ bucket shown below — minor visual redundancy."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "n/a (already curl-verified this session)", "frontend": "100% (22/22 checks)"},
+  "test_credentials": "dedyirawan18@gmail.com/Admin@123, sales@safarcrm.com/Sales@123, accounting@safarcrm.com/Account@123",
+  "seed_data_creation": "Created 2 quotations for Budi Santoso (QT-00003 at 3% auto-approved, QT-00004 at 8% pending then admin-approved). QT-00003 converted to booking. Added TEST Traveler Auto with KTP doc (Verified) to first booking.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Preview URL: https://crm-access-control-3.preview.emergentagent.com. Phase 4 fully verified. Login uses input[placeholder='you@company.com'] + input[type=password] + button 'Sign in'. Key testids: add-quotation-button, quot-customer-select, quot-package-select, quot-pax-input, quot-discount-input, quotation-save-button, quotation-row-{id}, quot-discount-status-{id}, quot-pdf-{id}, quot-approve-{id}, quot-reject-{id}, quot-accept-{id}, quot-convert-{id}; booking-detail-page, tab-travelers, tab-payments, add-traveler-button, traveler-full_name, save-traveler-button, doc-upload-{tid}-{TYPE}, doc-status-{tid}-{TYPE}, doc-{tid}-{TYPE}; create-invoice-button, invoice-row-{id}, invoice-status-{id}, record-payment-{id}, save-payment-button, pay-amount; accounting-page, tab-invoices, tab-receivables, tab-reminders, receivables-panel. PDFs must be fetched with ?auth=<token> query param (verified 200 application/pdf).",
+  "rca of the issue": "n/a — no issues found"
+}
