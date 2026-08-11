@@ -30,6 +30,11 @@ export const subLabel = (type, sub) => {
 };
 
 export const PACKAGE_STATUSES = ["DRAFT", "ACTIVE", "INACTIVE", "ARCHIVED"];
+export const SUB_FILTER = [
+  { value: "PRIVATE", label: "Private" },
+  { value: "OPEN_TRIP", label: "Open Trip" },
+  { value: "SEAT_IN_COACH", label: "Seat in Coach" },
+];
 export const ROOM_TYPES = ["QUAD", "TRIPLE", "DOUBLE", "SUITE"];
 
 export const PKG_STATUS_COLORS = {

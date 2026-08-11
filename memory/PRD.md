@@ -43,6 +43,12 @@ Super Admin can edit sales/accounting permissions via Settings > Roles & Permiss
 ## Next tasks
 - Phase 4: Quotations, Bookings & travelers (versioned pricing), Invoices/Payments.
 
+## Phase 3.2 — Product Filters + Dashboard Charts (2026-06) — DONE
+- Product Management: Category filter (package-type-filter) + Sub-Category filter (package-sub-filter); backend list_packages accepts sub_category param.
+- Package category & sub-category editable after creation (edit-type-select + Sub Kategori in edit dialog).
+- Dashboard: data + charts only (removed quick-action nav buttons + placeholder). New GET /api/dashboard/charts (leads_by_stage, leads_by_source, monthly_leads, packages_by_type; ownership-scoped for Sales). Super Admin stat cards now real (Users/Customers/Leads/Packages). Charts via recharts.
+- Tests: frontend 100% (iteration_7.json); backend curl-verified.
+
 ## Phase 3.1 — Product Categorization & Advanced Pricing/Tax (2026-06) — DONE
 - **Categories**: UMROH / TOUR / UMROH_PLUS with human labels; **Sub-categories**: PRIVATE / OPEN_TRIP / SEAT_IN_COACH.
 - **PRIVATE tiered pricing**: array of {min_pax, max_pax, price}; /packages/{id}/price returns per-pax by pax bracket.

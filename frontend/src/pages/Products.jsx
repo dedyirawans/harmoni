@@ -3,7 +3,7 @@ import { useNavigate, useLocation } from "react-router-dom";
 import api, { formatApiErrorDetail } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { fmtIDR } from "@/config/crm";
-import { PRODUCT_TYPES, PACKAGE_STATUSES, ROOM_TYPES, PKG_STATUS_COLORS, UMRAH_FIELDS, subLabel } from "@/config/product";
+import { PRODUCT_TYPES, PACKAGE_STATUSES, ROOM_TYPES, PKG_STATUS_COLORS, UMRAH_FIELDS, subLabel, SUB_FILTER } from "@/config/product";
 import { ProductAdvancedFields } from "@/components/ProductAdvancedFields";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -34,6 +34,7 @@ export default function Products() {
   const [rows, setRows] = useState(null);
   const [q, setQ] = useState("");
   const [type, setType] = useState("all");
+  const [sub, setSub] = useState("all");
   const [status, setStatus] = useState("all");
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState(EMPTY);
@@ -41,10 +42,10 @@ export default function Products() {
 
   const load = () => {
     setRows(null);
-    api.get("/packages", { params: { q: q || undefined, product_type: type, status } })
+    api.get("/packages", { params: { q: q || undefined, product_type: type, sub_category: sub, status } })
       .then((r) => setRows(r.data)).catch(() => setRows([]));
   };
-  useEffect(() => { load(); /* eslint-disable-next-line */ }, [type, status]);
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, [type, sub, status]);
 
   const set = (k) => (v) => setForm((f) => ({ ...f, [k]: v }));
   const setU = (k) => (v) => setForm((f) => ({ ...f, umrah: { ...f.umrah, [k]: v } }));
@@ -118,7 +119,8 @@ export default function Products() {
           <Search className="h-4 w-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" aria-hidden="true" />
           <Input className="pl-9" placeholder="Search package, destination..." value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.key === "Enter" && load()} data-testid="package-search-input" />
         </div>
-        <Select value={type} onValueChange={setType}><SelectTrigger className="w-40" data-testid="package-type-filter"><SelectValue /></SelectTrigger><SelectContent className="bg-white"><SelectItem value="all">All types</SelectItem>{PRODUCT_TYPES.map((t) => <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>)}</SelectContent></Select>
+        <Select value={type} onValueChange={setType}><SelectTrigger className="w-40" data-testid="package-type-filter"><SelectValue placeholder="Kategori" /></SelectTrigger><SelectContent className="bg-white"><SelectItem value="all">Semua Kategori</SelectItem>{PRODUCT_TYPES.map((t) => <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>)}</SelectContent></Select>
+        <Select value={sub} onValueChange={setSub}><SelectTrigger className="w-40" data-testid="package-sub-filter"><SelectValue placeholder="Sub Kategori" /></SelectTrigger><SelectContent className="bg-white"><SelectItem value="all">Semua Sub Kategori</SelectItem>{SUB_FILTER.map((s) => <SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>)}</SelectContent></Select>
         {canManage && <Select value={status} onValueChange={setStatus}><SelectTrigger className="w-40" data-testid="package-status-filter"><SelectValue /></SelectTrigger><SelectContent className="bg-white"><SelectItem value="all">All status</SelectItem>{PACKAGE_STATUSES.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent></Select>}
         <Button variant="outline" onClick={load}>Search</Button>
       </div>

@@ -1,0 +1,52 @@
+{
+  "summary": "Frontend-only regression for CRM Tour+Travel/Umrah. Verified Product Management filters (Category + Sub-Category), package edit dialog testids, Dashboard charts-only layout, and sales user regression. All 4 requested feature areas pass.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_results": {
+    "super_admin_dashboard": {
+      "dashboard-charts": "present",
+      "chart-leads-stage": "OK",
+      "chart-monthly-leads": "OK",
+      "chart-packages-type": "OK",
+      "chart-leads-source": "OK",
+      "quick-actions_removed": true,
+      "more_insights_placeholder_removed": true
+    },
+    "products_filters": {
+      "package-type-filter": "present with Semua Kategori/Umroh/Paket Tour/Umroh Plus",
+      "package-sub-filter": "present with Semua Sub Kategori/Private/Open Trip/Seat in Coach",
+      "counts": {"all": 17, "umroh": 6, "umroh_private": 4},
+      "filter_works": true
+    },
+    "package_edit_dialog": {
+      "edit-package-button": "present",
+      "edit-type-select": "present",
+      "package-subcategory-select": "present",
+      "save-package-edit": "present",
+      "dialog_renders_kategori_&_sub_kategori_and_min_kuota_pax_for_open_trip": true
+    },
+    "sales_regression": {
+      "login": "OK",
+      "sales-dashboard_10_kpi_cards": "present",
+      "dashboard-charts_for_sales": "present (scoped)",
+      "packages_HPP_hidden": true,
+      "packages_GM_badge_hidden": true
+    }
+  },
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Products.jsx passes sub_category param even when 'all' is selected (value 'all' sent to backend). Backend appears to treat non-recognized values as no-filter (works), but cleaner to omit param when 'all' — mirror the existing pattern used for other filters."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "n/a (skipped per request)", "frontend": "100%"},
+  "test_credentials": "dedyirawan18@gmail.com/Admin@123 (Super Admin); sales@safarcrm.com/Sales@123 (Sales)",
+  "seed_data_creation": "none",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Preview URL: https://crm-access-control-3.preview.emergentagent.com. Login uses input[placeholder='you@company.com'] (text, not email). Product filters (package-type-filter + package-sub-filter) and edit dialog testids (edit-package-button, edit-type-select, package-subcategory-select, save-package-edit) all verified. Dashboard has data-testid=dashboard-charts with 4 chart cards and no quick-actions."
+}

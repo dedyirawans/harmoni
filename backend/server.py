@@ -544,13 +544,14 @@ async def dashboard_stats(user: dict = Depends(get_current_user)):
     role = user["role"]
     if role == "super_admin":
         total_users = await db.users.count_documents({})
-        active_users = await db.users.count_documents({"status": "active"})
-        audit_count = await db.audit_logs.count_documents({})
+        total_customers = await db.customers.count_documents({})
+        total_leads = await db.leads.count_documents({})
+        total_packages = await db.packages.count_documents({})
         return {"role": role, "cards": [
             {"label": "Total Users", "value": total_users, "hint": "across all roles"},
-            {"label": "Active Users", "value": active_users, "hint": "currently enabled"},
-            {"label": "Audit Events", "value": audit_count, "hint": "logged actions"},
-            {"label": "Active Bookings", "value": 128, "hint": "this month"},
+            {"label": "Total Customers", "value": total_customers, "hint": "registered"},
+            {"label": "Total Leads", "value": total_leads, "hint": "in pipeline"},
+            {"label": "Total Packages", "value": total_packages, "hint": "products"},
         ]}
     if role == "sales":
         return {"role": role, "cards": [
@@ -565,6 +566,49 @@ async def dashboard_stats(user: dict = Depends(get_current_user)):
         {"label": "Commission Payable", "value": "Rp 96.7M", "hint": "to sales team"},
         {"label": "Gross Margin", "value": "17.8%", "hint": "avg across packages"},
     ]}
+
+
+@api_router.get("/dashboard/charts")
+async def dashboard_charts(user: dict = Depends(get_current_user)):
+    role = user["role"]
+    of = owner_filter(user) if role == "sales" else {}
+    leads = await db.leads.find(of).to_list(5000)
+    by_stage = {s: 0 for s in LEAD_STAGES + [LEAD_LOST]}
+    by_source = {}
+    monthly = {}
+    for l in leads:
+        st = l.get("status") or "NEW"
+        by_stage[st] = by_stage.get(st, 0) + 1
+        src = l.get("source") or "Other"
+        by_source[src] = by_source.get(src, 0) + 1
+        key = (l.get("created_at") or "")[:7]
+        if key:
+            monthly[key] = monthly.get(key, 0) + 1
+    leads_by_stage = [{"name": s, "value": by_stage.get(s, 0)} for s in LEAD_STAGES + [LEAD_LOST]]
+    leads_by_source = [{"name": k, "value": v} for k, v in sorted(by_source.items(), key=lambda x: -x[1])][:6]
+
+    now = datetime.now(timezone.utc)
+    y, m = now.year, now.month
+    keys = []
+    for i in range(5, -1, -1):
+        mm, yy = m - i, y
+        while mm <= 0:
+            mm += 12
+            yy -= 1
+        keys.append(f"{yy:04d}-{mm:02d}")
+    mlabel = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Ags", "Sep", "Okt", "Nov", "Des"]
+    monthly_leads = [{"name": mlabel[int(k[5:7]) - 1], "value": monthly.get(k, 0)} for k in keys]
+
+    pkgs = await db.packages.find({}).to_list(5000)
+    pt = {}
+    for p in pkgs:
+        t = norm_type(p.get("product_type") or "TOUR")
+        pt[t] = pt.get(t, 0) + 1
+    tlabel = {"UMROH": "Umroh", "TOUR": "Paket Tour", "UMROH_PLUS": "Umroh Plus"}
+    packages_by_type = [{"name": tlabel.get(k, k), "value": v} for k, v in pt.items()]
+
+    return {"leads_by_stage": leads_by_stage, "leads_by_source": leads_by_source,
+            "monthly_leads": monthly_leads, "packages_by_type": packages_by_type}
 
 
 @api_router.get("/notifications")
@@ -1209,7 +1253,7 @@ def compute_departure(dep: dict) -> dict:
 
 
 @api_router.get("/packages")
-async def list_packages(product_type: Optional[str] = None, status: Optional[str] = None, q: Optional[str] = None,
+async def list_packages(product_type: Optional[str] = None, sub_category: Optional[str] = None, status: Optional[str] = None, q: Optional[str] = None,
                         user: dict = Depends(require_any_permission("product.view", "packages.view", "hpp.view"))):
     up = await perms_of(user)
     can_hpp = "hpp.view" in up
@@ -1217,6 +1261,8 @@ async def list_packages(product_type: Optional[str] = None, status: Optional[str
     query = {}
     if product_type and product_type != "all":
         query["product_type"] = product_type
+    if sub_category and sub_category != "all":
+        query["sub_category"] = sub_category
     if q:
         query["$or"] = [{"package_name": {"$regex": q, "$options": "i"}},
                         {"destination": {"$regex": q, "$options": "i"}},
