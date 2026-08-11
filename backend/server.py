@@ -59,6 +59,12 @@ DEFAULT_ROLE_PERMISSIONS = {
     ],
 }
 
+DEFAULT_LOGIN_PAGE = {
+    "heading": "Run your Umrah & Travel business with clarity.",
+    "subheading": "Leads, bookings, costing and commissions — unified with strict role-based access control.",
+    "background_image": "https://images.unsplash.com/photo-1720549973451-018d3623b55a?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2NzV8MHwxfHNlYXJjaHwxfHxtZWNjYSUyMHVtcmFoJTIwYXJjaGl0ZWN0dXJlfGVufDB8fHx8MTc4NjQxMjMyOHww&ixlib=rb-4.1.0&q=85",
+}
+
 # ----------------------------------------------------------------------------
 # Mongo model helpers
 # ----------------------------------------------------------------------------
@@ -569,6 +575,18 @@ async def notifications(user: dict = Depends(require_permission("notifications.v
     ]
 
 
+@api_router.get("/public/login-config")
+async def public_login_config():
+    doc = await db.system_settings.find_one({"key": "system"})
+    lp = (doc.get("settings", {}) if doc else {}).get("login_page", {})
+    return {
+        "heading": lp.get("heading") or DEFAULT_LOGIN_PAGE["heading"],
+        "subheading": lp.get("subheading") or DEFAULT_LOGIN_PAGE["subheading"],
+        "background_image": lp.get("background_image") or DEFAULT_LOGIN_PAGE["background_image"],
+    }
+
+
+
 @api_router.get("/")
 async def root():
     return {"message": "Safar Travel CRM API"}
@@ -638,6 +656,7 @@ async def seed():
             "commission": {"default_percent": 2.5},
             "n8n": {"webhook_url": "", "enabled": False},
             "notification": {"email_enabled": True, "whatsapp_enabled": False},
+            "login_page": DEFAULT_LOGIN_PAGE,
         }})
 
 

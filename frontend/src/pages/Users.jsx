@@ -96,7 +96,7 @@ export default function Users() {
         </div>
         <Dialog open={open} onOpenChange={setOpen}>
           <DialogTrigger asChild>
-            <Button className="bg-amber-600 hover:bg-amber-700" onClick={openCreate} data-testid="add-user-button">
+            <Button className="bg-blue-600 hover:bg-blue-700" onClick={openCreate} data-testid="add-user-button">
               <UserPlus className="h-4 w-4 mr-2" aria-hidden="true" /> Add User
             </Button>
           </DialogTrigger>
@@ -166,7 +166,7 @@ export default function Users() {
               </div>
             </div>
             <DialogFooter>
-              <Button onClick={save} disabled={saving} className="bg-amber-600 hover:bg-amber-700" data-testid="user-save-button">
+              <Button onClick={save} disabled={saving} className="bg-blue-600 hover:bg-blue-700" data-testid="user-save-button">
                 {saving ? "Saving..." : editing ? "Save changes" : "Create user"}
               </Button>
             </DialogFooter>

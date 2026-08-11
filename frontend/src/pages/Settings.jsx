@@ -9,6 +9,7 @@ import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Textarea } from "@/components/ui/textarea";
 import { ROLE_LABELS } from "@/config/nav";
 import { toast } from "sonner";
 import { Loader2 } from "lucide-react";
@@ -62,6 +63,7 @@ export default function Settings() {
         <TabsList data-testid="settings-tabs">
           <TabsTrigger value="company" data-testid="tab-company">Company</TabsTrigger>
           <TabsTrigger value="global" data-testid="tab-global">Global</TabsTrigger>
+          <TabsTrigger value="login" data-testid="tab-login">Login Page</TabsTrigger>
           {isAdmin && <TabsTrigger value="roles" data-testid="tab-roles">Roles & Permissions</TabsTrigger>}
         </TabsList>
 
@@ -80,7 +82,7 @@ export default function Settings() {
               ))}
               {canManage && (
                 <div className="sm:col-span-2">
-                  <Button onClick={saveCompany} disabled={savingC} className="bg-amber-600 hover:bg-amber-700" data-testid="save-company-button">
+                  <Button onClick={saveCompany} disabled={savingC} className="bg-blue-600 hover:bg-blue-700" data-testid="save-company-button">
                     {savingC ? "Saving..." : "Save company settings"}
                   </Button>
                 </div>
@@ -148,13 +150,63 @@ export default function Settings() {
 
             {canManage && (
               <div className="lg:col-span-2">
-                <Button onClick={saveSystem} disabled={savingS} className="bg-amber-600 hover:bg-amber-700" data-testid="save-global-button">
+                <Button onClick={saveSystem} disabled={savingS} className="bg-blue-600 hover:bg-blue-700" data-testid="save-global-button">
                   {savingS ? "Saving..." : "Save global settings"}
                 </Button>
               </div>
             )}
           </div>
         </TabsContent>
+
+        <TabsContent value="login">
+          <Card className="border-slate-200 shadow-sm">
+            <CardHeader><CardTitle className="font-display">Login Page Appearance</CardTitle></CardHeader>
+            <CardContent className="space-y-4">
+              <div className="space-y-2">
+                <Label>Heading</Label>
+                <Input value={system.login_page?.heading || ""} disabled={!canManage}
+                  onChange={(e) => setSystem({ ...system, login_page: { ...system.login_page, heading: e.target.value } })}
+                  data-testid="login-heading-input" />
+              </div>
+              <div className="space-y-2">
+                <Label>Subheading</Label>
+                <Textarea value={system.login_page?.subheading || ""} disabled={!canManage}
+                  onChange={(e) => setSystem({ ...system, login_page: { ...system.login_page, subheading: e.target.value } })}
+                  data-testid="login-subheading-input" />
+              </div>
+              <div className="space-y-2">
+                <Label>Background Image URL</Label>
+                <Input value={system.login_page?.background_image || ""} disabled={!canManage}
+                  onChange={(e) => setSystem({ ...system, login_page: { ...system.login_page, background_image: e.target.value } })}
+                  placeholder="https://... or upload below" data-testid="login-bg-url-input" />
+              </div>
+              {canManage && (
+                <div className="space-y-2">
+                  <Label>Or upload an image</Label>
+                  <Input type="file" accept="image/*" data-testid="login-bg-upload"
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      if (!f) return;
+                      const reader = new FileReader();
+                      reader.onload = () => setSystem({ ...system, login_page: { ...system.login_page, background_image: reader.result } });
+                      reader.readAsDataURL(f);
+                    }} />
+                </div>
+              )}
+              {system.login_page?.background_image && (
+                <div className="rounded-md overflow-hidden border border-slate-200 max-w-sm">
+                  <img src={system.login_page.background_image} alt="Login background preview" className="w-full h-40 object-cover" />
+                </div>
+              )}
+              {canManage && (
+                <Button onClick={saveSystem} disabled={savingS} className="bg-blue-600 hover:bg-blue-700" data-testid="save-login-page-button">
+                  {savingS ? "Saving..." : "Save login page"}
+                </Button>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
 
         {isAdmin && (
           <TabsContent value="roles"><RolePermissions /></TabsContent>
@@ -196,7 +248,7 @@ function RolePermissions() {
         <Card key={role} className="border-slate-200 shadow-sm">
           <CardHeader className="flex flex-row items-center justify-between">
             <CardTitle className="font-display text-lg">{ROLE_LABELS[role]}</CardTitle>
-            <Button size="sm" onClick={() => save(role)} disabled={saving === role} className="bg-amber-600 hover:bg-amber-700" data-testid={`save-perms-${role}`}>
+            <Button size="sm" onClick={() => save(role)} disabled={saving === role} className="bg-blue-600 hover:bg-blue-700" data-testid={`save-perms-${role}`}>
               {saving === role ? "Saving..." : "Save"}
             </Button>
           </CardHeader>

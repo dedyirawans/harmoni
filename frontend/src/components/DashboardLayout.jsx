@@ -98,7 +98,7 @@ function ChangePasswordDialog({ open, onOpenChange }) {
           </div>
         </div>
         <DialogFooter>
-          <Button onClick={submit} disabled={loading} className="bg-amber-600 hover:bg-amber-700" data-testid="cp-submit-button">
+          <Button onClick={submit} disabled={loading} className="bg-blue-600 hover:bg-blue-700" data-testid="cp-submit-button">
             {loading ? "Saving..." : "Update password"}
           </Button>
         </DialogFooter>

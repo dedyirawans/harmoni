@@ -13,7 +13,7 @@ export default function Forbidden() {
         <p className="text-slate-500 mt-2 leading-relaxed">
           You don't have permission to access this page. This restriction is enforced by the backend, not just hidden in the menu.
         </p>
-        <Button asChild className="mt-6 bg-amber-600 hover:bg-amber-700" data-testid="forbidden-back-button">
+        <Button asChild className="mt-6 bg-blue-600 hover:bg-blue-700" data-testid="forbidden-back-button">
           <Link to="/dashboard">Back to dashboard</Link>
         </Button>
       </div>

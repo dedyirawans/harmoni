@@ -39,7 +39,7 @@ export default function ResetPassword() {
             <CheckCircle2 className="h-12 w-12 text-emerald-600 mx-auto" aria-hidden="true" />
             <h2 className="font-display text-2xl font-bold text-slate-900 mt-4">Password updated</h2>
             <p className="text-sm text-slate-500 mt-1">You can now sign in with your new password.</p>
-            <Button className="mt-6 bg-amber-600 hover:bg-amber-700" data-testid="go-to-login"
+            <Button className="mt-6 bg-blue-600 hover:bg-blue-700" data-testid="go-to-login"
               onClick={() => navigate("/login")}>Back to sign in</Button>
           </div>
         ) : (
@@ -63,11 +63,11 @@ export default function ResetPassword() {
                   onChange={(e) => setConfirm(e.target.value)} />
               </div>
               <Button type="submit" disabled={loading || !token} data-testid="reset-submit-button"
-                className="w-full bg-amber-600 hover:bg-amber-700 text-white">
+                className="w-full bg-blue-600 hover:bg-blue-700 text-white">
                 {loading ? "Updating..." : "Reset password"}
               </Button>
             </form>
-            <Link to="/login" className="mt-6 inline-block text-sm text-amber-700 hover:underline">← Back to sign in</Link>
+            <Link to="/login" className="mt-6 inline-block text-sm text-blue-700 hover:underline">← Back to sign in</Link>
           </>
         )}
       </div>

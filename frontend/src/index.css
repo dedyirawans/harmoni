@@ -22,7 +22,7 @@ h1, h2, h3, h4, h5, .font-display {
         --card-foreground: 222 47% 11%;
         --popover: 0 0% 100%;
         --popover-foreground: 222 47% 11%;
-        --primary: 32 94% 44%;
+        --primary: 221 83% 53%;
         --primary-foreground: 0 0% 100%;
         --secondary: 222 47% 11%;
         --secondary-foreground: 0 0% 100%;
@@ -34,7 +34,7 @@ h1, h2, h3, h4, h5, .font-display {
         --destructive-foreground: 0 0% 100%;
         --border: 214 32% 91%;
         --input: 214 32% 91%;
-        --ring: 32 94% 44%;
+        --ring: 221 83% 53%;
         --radius: 0.5rem;
         --chart-1: 32 94% 44%;
         --chart-2: 222 47% 11%;

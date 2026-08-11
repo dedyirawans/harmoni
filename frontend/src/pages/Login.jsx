@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
 import api, { formatApiErrorDetail } from "@/lib/api";
@@ -19,6 +19,25 @@ export default function Login() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [forgotOpen, setForgotOpen] = useState(false);
+  const [cfg, setCfg] = useState({
+    heading: "Run your Umrah & Travel business with clarity.",
+    subheading: "Leads, bookings, costing and commissions — unified with strict role-based access control.",
+    background_image: MECCA_IMG,
+  });
+
+  useEffect(() => {
+    api
+      .get("/public/login-config")
+      .then((r) => {
+        const d = r.data || {};
+        setCfg((c) => ({
+          heading: d.heading || c.heading,
+          subheading: d.subheading || c.subheading,
+          background_image: d.background_image || c.background_image,
+        }));
+      })
+      .catch(() => {});
+  }, []);
 
   const submit = async (e) => {
     e.preventDefault();
@@ -40,7 +59,7 @@ export default function Login() {
     <div className="min-h-screen grid grid-cols-1 md:grid-cols-2 bg-slate-50">
       {/* Left visual */}
       <div className="relative hidden md:block">
-        <img src={MECCA_IMG} alt="Mecca architecture" className="absolute inset-0 h-full w-full object-cover" />
+        <img src={cfg.background_image} alt="Login background" className="absolute inset-0 h-full w-full object-cover" />
         <div className="absolute inset-0 bg-slate-950/60" />
         <div className="relative z-10 flex flex-col justify-between h-full p-10 text-white">
           <div className="flex items-center gap-2">
@@ -50,10 +69,8 @@ export default function Login() {
             <span className="font-display text-xl font-bold">Safar Travel CRM</span>
           </div>
           <div className="max-w-md">
-            <h1 className="font-display text-4xl font-bold leading-tight">Run your Umrah & Travel business with clarity.</h1>
-            <p className="mt-4 text-slate-200 leading-relaxed">
-              Leads, bookings, costing and commissions — unified with strict role-based access control.
-            </p>
+            <h1 className="font-display text-4xl font-bold leading-tight">{cfg.heading}</h1>
+            <p className="mt-4 text-slate-200 leading-relaxed">{cfg.subheading}</p>
           </div>
           <p className="text-xs text-slate-300">© 2026 Safar Travel Indonesia</p>
         </div>
@@ -88,11 +105,11 @@ export default function Login() {
               </p>
             )}
             <Button type="submit" disabled={loading} data-testid="login-submit-button"
-              className="w-full bg-amber-600 hover:bg-amber-700 text-white">
+              className="w-full bg-blue-600 hover:bg-blue-700 text-white">
               {loading ? "Signing in..." : "Sign in"}
             </Button>
             <button type="button" onClick={() => setForgotOpen(true)} data-testid="forgot-password-link"
-              className="text-sm text-amber-700 hover:text-amber-800 hover:underline block mx-auto">
+              className="text-sm text-blue-700 hover:text-blue-800 hover:underline block mx-auto">
               Forgot your password?
             </button>
           </form>
@@ -149,12 +166,12 @@ function ForgotInline({ onBack }) {
                 onChange={(e) => setEmail(e.target.value)} placeholder="you@company.com" />
             </div>
             <Button type="submit" disabled={loading} data-testid="forgot-submit-button"
-              className="w-full bg-amber-600 hover:bg-amber-700 text-white">
+              className="w-full bg-blue-600 hover:bg-blue-700 text-white">
               {loading ? "Sending..." : "Send reset link"}
             </Button>
           </form>
         )}
-        <button onClick={onBack} className="mt-6 text-sm text-amber-700 hover:underline" data-testid="back-to-login">
+        <button onClick={onBack} className="mt-6 text-sm text-blue-700 hover:underline" data-testid="back-to-login">
           ← Back to sign in
         </button>
       </div>
