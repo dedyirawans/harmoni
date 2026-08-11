@@ -1,5 +1,9 @@
 # Safar Travel CRM — Product Requirements (Living Doc)
 
+## Feature: Discount type + Super-Admin-only approval (2026-06)
+- Quotation discount kini bisa PERCENT (%) atau AMOUNT (Rp nominal); backend hitung discount_amount + ekuivalen % untuk threshold approval.
+- Approval super-admin-only: PATCH /quotations/{id}/status ACCEPTED butuh perm quotation.approve (403 utk Sales); discount-approval juga quotation.approve. Sales hanya buat/edit quotation. UI: tombol Accept & Approve/Reject hanya untuk Super Admin. Verified iteration_11.json (frontend 100%).
+
 ## Feature: Edit Quotation (2026-06)
 - Quotation dapat diedit selama status DRAFT/SENT dan belum converted; backend PUT /quotations/{id} recompute amounts & tolak (400) jika ACCEPTED/converted. Tombol Pencil di /quotations, dialog "Edit Quotation". Verified iteration_10.json (frontend 100%).
 

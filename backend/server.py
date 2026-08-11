@@ -1734,25 +1734,34 @@ class QuotationCreate(BaseModel):
     pax: int = 1
     room_type: Optional[str] = ""
     addons: Optional[List[dict]] = []
+    discount_type: Optional[str] = "PERCENT"
+    discount_value: Optional[float] = 0
     discount_percent: Optional[float] = 0
     notes: Optional[str] = ""
     terms: Optional[str] = ""
     sales_pic_id: Optional[str] = None
 
 
-async def _compute_quotation_amounts(pkg, pax, addons, discount_percent, settings):
+async def _compute_quotation_amounts(pkg, pax, addons, discount_type, discount_value, settings):
     per_pax = compute_pax_price(pkg, pax, None)
     gross = per_pax * pax
     addon_total = sum(float(a.get("amount") or 0) for a in (addons or []))
     subtotal = gross + addon_total
-    pct = float(discount_percent or 0)
-    discount_amount = round(subtotal * pct / 100)
+    dtype = (discount_type or "PERCENT").upper()
+    dval = float(discount_value or 0)
+    if dtype == "AMOUNT":
+        discount_amount = round(min(dval, subtotal))
+        pct = round(discount_amount / subtotal * 100, 2) if subtotal else 0.0
+    else:
+        pct = dval
+        discount_amount = round(subtotal * pct / 100)
     tax_pct, tax_unit = resolve_category_tax(pkg, settings)
     tax_amount = round(tax_unit * pax)
     total = subtotal - discount_amount + tax_amount
     return {"per_pax_price": per_pax, "base_price": float(pkg.get("selling_price") or 0), "gross": gross,
-            "addon_total": addon_total, "subtotal": subtotal, "discount_percent": pct,
-            "discount_amount": discount_amount, "tax_percent": tax_pct, "tax_amount": tax_amount, "total": total}
+            "addon_total": addon_total, "subtotal": subtotal, "discount_type": dtype, "discount_value": dval,
+            "discount_percent": pct, "discount_amount": discount_amount, "tax_percent": tax_pct,
+            "tax_amount": tax_amount, "total": total}
 
 
 @api_router.get("/quotations")
@@ -1773,7 +1782,7 @@ async def create_quotation(body: QuotationCreate, request: Request, user: dict =
     if not cust:
         raise HTTPException(status_code=404, detail="Customer not found")
     settings = await get_settings_dict()
-    amt = await _compute_quotation_amounts(pkg, body.pax, body.addons, body.discount_percent, settings)
+    amt = await _compute_quotation_amounts(pkg, body.pax, body.addons, body.discount_type, body.discount_value, settings)
     dstatus, dlevel = resolve_discount_status(amt["discount_percent"], settings)
     pic_id, pic_name, branch = await resolve_pic(user, body.sales_pic_id)
     number = await next_number((settings.get("numbering") or {}).get("quotation_prefix", "QT"), db.quotations, "quotation_number")
@@ -1813,7 +1822,7 @@ async def update_quotation(qid: str, body: QuotationCreate, request: Request, us
     if not pkg:
         raise HTTPException(status_code=404, detail="Package not found")
     settings = await get_settings_dict()
-    amt = await _compute_quotation_amounts(pkg, body.pax, body.addons, body.discount_percent, settings)
+    amt = await _compute_quotation_amounts(pkg, body.pax, body.addons, body.discount_type, body.discount_value, settings)
     dstatus, dlevel = resolve_discount_status(amt["discount_percent"], settings)
     updates = {"package_id": body.package_id, "package_name": pkg["package_name"], "departure_id": body.departure_id,
                "pax": body.pax, "room_type": body.room_type, "addons": body.addons or [], **amt,
@@ -1833,8 +1842,12 @@ async def set_quotation_status(qid: str, body: dict, request: Request, user: dic
     new_status = body.get("status")
     if new_status not in ("DRAFT", "SENT", "ACCEPTED", "REJECTED"):
         raise HTTPException(status_code=400, detail="Invalid status")
-    if new_status == "ACCEPTED" and q.get("discount_status") != "APPROVED":
-        raise HTTPException(status_code=400, detail="Discount belum di-approve")
+    if new_status == "ACCEPTED":
+        up = await perms_of(user)
+        if "quotation.approve" not in up:
+            raise HTTPException(status_code=403, detail="Hanya Super Admin yang dapat approve quotation")
+        if q.get("discount_status") != "APPROVED":
+            raise HTTPException(status_code=400, detail="Discount belum di-approve")
     await db.quotations.update_one({"_id": ObjectId(qid)}, {"$set": {"status": new_status}})
     await log_audit(user, "quotation", "status", request, record_id=qid, new={"status": new_status})
     return serialize(await db.quotations.find_one({"_id": ObjectId(qid)}))

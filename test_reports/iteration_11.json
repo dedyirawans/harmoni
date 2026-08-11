@@ -1,0 +1,23 @@
+{
+  "summary": "Frontend-only regression on Quotations (Tour&Travel+Umrah CRM). Verified: (1) New/Edit Quotation dialog shows 'Tipe Diskon' (data-testid quot-discount-type) with Persen/Nominal options and label switches (% vs Rp) on quot-discount-input; (2) Saved AMOUNT quotation with Rp 5.000.000 and PERCENT with 4% — table shows 'diskon Rp 5.000.000' and 'diskon 4%' respectively; (3) RBAC: as Sales (sales@safarcrm.com), no quot-accept/quot-approve/quot-reject buttons rendered on any row, only quot-edit (4 rows) and PDF/convert where applicable; (4) RBAC: as Super Admin (dedyirawan18@gmail.com), quot-accept buttons appear for DRAFT/APPROVED rows (4 rows) and clicking Accept produced toast 'Quotation accepted' and status flipped to ACCEPTED; (5) Convert works — clicking quot-convert on an ACCEPTED row produced toast 'Dikonversi ke booking'; (6) Edit dialog for Super Admin allows changing discount_type to Nominal (Rp) with value 1.500.000, Update persists (toast 'Quotation diperbarui', row shows updated 'diskon Rp 1.500.000'). Approve/Reject buttons did not appear because all created discounts (4% and 5M≈5%) auto-approved under sales_max_percent=5% — expected per review notes.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": ["/app/test_reports/admin_quotations.png"],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Quotations.jsx is around 150+ lines and contains dialog + table + row actions inline; consider extracting QuotationDialog and QuotationRowActions for maintainability, but no bug.",
+    "Discount cell text uses q.discount_percent for percent display; ensure backend always returns discount_percent when type=AMOUNT for edit re-open (observed working)."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "N/A (skipped)", "frontend": "100%"},
+  "test_credentials": "Sales sales@safarcrm.com/Sales@123; Super Admin dedyirawan18@gmail.com/Admin@123 (both worked)",
+  "seed_data_creation": "Created 2 new quotations via Sales: 1 AMOUNT Rp 5.000.000 and 1 PERCENT 4% (both against Budi Santoso / SIC Test).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Discount type / RBAC / Accept / Convert / Edit flows fully verified via UI. To test PENDING approve/reject buttons, use a discount > sales_max_percent (e.g., 10% or Rp large enough to exceed 5%) so it doesn't auto-approve; then approve/reject buttons will appear for Super Admin.",
+  "rca of the issue": "N/A — no issues found."
+}

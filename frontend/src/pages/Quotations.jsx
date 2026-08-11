@@ -29,7 +29,7 @@ export default function Quotations() {
   const [open, setOpen] = useState(false);
   const [editId, setEditId] = useState(null);
   const [saving, setSaving] = useState(false);
-  const empty = { customer_id: "", package_id: "", pax: 1, room_type: "QUAD", discount_percent: 0, addons: [], departure_id: null, notes: "", terms: "" };
+  const empty = { customer_id: "", package_id: "", pax: 1, room_type: "QUAD", discount_type: "PERCENT", discount_value: 0, addons: [], departure_id: null, notes: "", terms: "" };
   const [form, setForm] = useState(empty);
 
   const load = () => {
@@ -49,8 +49,8 @@ export default function Quotations() {
   const openEdit = (q) => {
     setEditId(q._id);
     setForm({ customer_id: q.customer_id, package_id: q.package_id, pax: q.pax, room_type: q.room_type || "QUAD",
-      discount_percent: q.discount_percent, addons: q.addons || [], departure_id: q.departure_id || null,
-      notes: q.notes || "", terms: q.terms || "" });
+      discount_type: q.discount_type || "PERCENT", discount_value: q.discount_value != null ? q.discount_value : (q.discount_percent || 0),
+      addons: q.addons || [], departure_id: q.departure_id || null, notes: q.notes || "", terms: q.terms || "" });
     setOpen(true);
   };
   const onDialogChange = (v) => { setOpen(v); if (!v) { setEditId(null); setForm(empty); } };
@@ -59,7 +59,7 @@ export default function Quotations() {
     if (!form.customer_id || !form.package_id) return toast.error("Pilih customer & package");
     setSaving(true);
     const body = {
-      ...form, pax: Number(form.pax), discount_percent: Number(form.discount_percent),
+      ...form, pax: Number(form.pax), discount_value: Number(form.discount_value),
       addons: (form.addons || []).filter((a) => a.name).map((a) => ({ name: a.name, amount: Number(a.amount || 0) })),
     };
     try {
@@ -92,7 +92,8 @@ export default function Quotations() {
                 <Field label="Package" full><Select value={form.package_id} onValueChange={set("package_id")}><SelectTrigger data-testid="quot-package-select"><SelectValue placeholder="Pilih package" /></SelectTrigger><SelectContent className="bg-white">{packages.map((p) => <SelectItem key={p._id} value={p._id}>{p.package_name} — {fmtIDR(p.selling_price)}</SelectItem>)}</SelectContent></Select></Field>
                 <Field label="Pax"><Input type="number" value={form.pax} onChange={(e) => set("pax")(e.target.value)} data-testid="quot-pax-input" /></Field>
                 <Field label="Room Type"><Select value={form.room_type} onValueChange={set("room_type")}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent className="bg-white">{P4_ROOM_TYPES.map((r) => <SelectItem key={r} value={r}>{r}</SelectItem>)}</SelectContent></Select></Field>
-                <Field label="Discount (%)"><Input type="number" value={form.discount_percent} onChange={(e) => set("discount_percent")(e.target.value)} data-testid="quot-discount-input" /></Field>
+                <Field label="Tipe Diskon"><Select value={form.discount_type} onValueChange={set("discount_type")}><SelectTrigger data-testid="quot-discount-type"><SelectValue /></SelectTrigger><SelectContent className="bg-white"><SelectItem value="PERCENT">Persen (%)</SelectItem><SelectItem value="AMOUNT">Nominal (Rp)</SelectItem></SelectContent></Select></Field>
+                <Field label={form.discount_type === "AMOUNT" ? "Nilai Diskon (Rp)" : "Nilai Diskon (%)"}><Input type="number" value={form.discount_value} onChange={(e) => set("discount_value")(e.target.value)} data-testid="quot-discount-input" /></Field>
                 <div className="col-span-2 space-y-2">
                   <div className="flex items-center justify-between"><Label>Add-ons</Label><Button type="button" size="sm" variant="outline" onClick={addAddon} data-testid="add-addon-button"><Plus className="h-3 w-3 mr-1" />Add-on</Button></div>
                   {(form.addons || []).map((a, i) => (
@@ -127,7 +128,7 @@ export default function Quotations() {
                     <TableCell className={`${CELL} font-mono text-xs`}>{q.quotation_number}</TableCell>
                     <TableCell className={`${CELL} font-medium text-slate-900`}>{q.customer_name}</TableCell>
                     <TableCell className={`${CELL} text-slate-500`}>{q.package_name}<span className="block text-xs text-slate-400">{q.pax} pax</span></TableCell>
-                    <TableCell className={`${CELL} text-right font-semibold`}>{fmtIDR(q.total)}<span className="block text-xs text-slate-400 font-normal">diskon {q.discount_percent}%</span></TableCell>
+                    <TableCell className={`${CELL} text-right font-semibold`}>{fmtIDR(q.total)}<span className="block text-xs text-slate-400 font-normal">diskon {q.discount_type === "AMOUNT" ? fmtIDR(q.discount_amount) : `${q.discount_percent}%`}</span></TableCell>
                     <TableCell className={CELL}><Badge variant="outline" className={QUOT_STATUS_COLORS[q.status]}>{q.status}</Badge></TableCell>
                     <TableCell className={CELL}><Badge variant="outline" className={DISCOUNT_STATUS_COLORS[q.discount_status]} data-testid={`quot-discount-status-${q._id}`}>{q.discount_status}</Badge></TableCell>
                     <TableCell className={`${CELL} text-right`}>
@@ -142,7 +143,7 @@ export default function Quotations() {
                             <Button size="sm" variant="outline" className="text-red-600" onClick={() => act(() => api.patch(`/quotations/${q._id}/discount-approval`, { action: "reject" }), "Diskon ditolak")} data-testid={`quot-reject-${q._id}`}><X className="h-4 w-4" /></Button>
                           </>
                         )}
-                        {canManage && ["DRAFT", "SENT"].includes(q.status) && (
+                        {canApprove && ["DRAFT", "SENT"].includes(q.status) && q.discount_status === "APPROVED" && (
                           <Button size="sm" variant="outline" onClick={() => act(() => api.patch(`/quotations/${q._id}/status`, { status: "ACCEPTED" }), "Quotation accepted")} data-testid={`quot-accept-${q._id}`}>Accept</Button>
                         )}
                         {canBook && q.status === "ACCEPTED" && !q.converted_booking_id && (
