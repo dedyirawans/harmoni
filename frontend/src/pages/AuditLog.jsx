@@ -45,7 +45,7 @@ export default function AuditLog() {
 
       <Card className="border-slate-200 shadow-sm overflow-hidden">
         {logs === null ? (
-          <div className="p-12 flex justify-center"><Loader2 className="h-6 w-6 animate-spin text-amber-600" /></div>
+          <div className="p-12 flex justify-center"><Loader2 className="h-6 w-6 animate-spin text-blue-600" /></div>
         ) : logs.length === 0 ? (
           <div className="p-12 text-center text-slate-500">
             <ScrollText className="h-8 w-8 mx-auto text-slate-300" aria-hidden="true" />

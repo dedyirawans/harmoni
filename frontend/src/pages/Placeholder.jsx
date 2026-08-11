@@ -53,8 +53,8 @@ export default function Placeholder() {
       ) : (
         <Card className="border-slate-200 shadow-sm border-dashed">
           <CardContent className="p-12 text-center">
-            <div className="h-14 w-14 rounded-full bg-amber-50 border border-amber-200 flex items-center justify-center mx-auto">
-              <Construction className="h-7 w-7 text-amber-600" aria-hidden="true" />
+            <div className="h-14 w-14 rounded-full bg-blue-50 border border-blue-200 flex items-center justify-center mx-auto">
+              <Construction className="h-7 w-7 text-blue-600" aria-hidden="true" />
             </div>
             <h3 className="font-display text-lg font-semibold text-slate-900 mt-5">Planned for a later phase</h3>
             <p className="text-slate-500 mt-2 max-w-md mx-auto">

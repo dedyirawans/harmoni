@@ -6,7 +6,7 @@ import Forbidden from "@/pages/Forbidden";
 function Splash() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-slate-50" data-testid="auth-loading">
-      <Loader2 className="h-8 w-8 animate-spin text-amber-600" aria-hidden="true" />
+      <Loader2 className="h-8 w-8 animate-spin text-blue-600" aria-hidden="true" />
     </div>
   );
 }

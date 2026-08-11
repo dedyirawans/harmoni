@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
+import { useBranding } from "@/context/BrandingContext";
 import { MENUS, ROLE_LABELS } from "@/config/nav";
 import api, { formatApiErrorDetail } from "@/lib/api";
 import { Plane, Menu, LogOut, KeyRound, ChevronDown } from "lucide-react";
@@ -44,13 +45,18 @@ function NavList({ onNavigate }) {
 
 function SidebarInner({ onNavigate }) {
   const { user } = useAuth();
+  const { company_name, logo } = useBranding();
   return (
     <div className="flex flex-col h-full bg-slate-900">
       <div className="flex items-center gap-2 px-5 h-16 border-b border-white/10 shrink-0">
-        <div className="h-8 w-8 rounded-md bg-amber-600 flex items-center justify-center">
-          <Plane className="h-4.5 w-4.5 text-white" aria-hidden="true" />
-        </div>
-        <span className="font-display text-lg font-bold text-white">Safar CRM</span>
+        {logo ? (
+          <img src={logo} alt="" className="h-8 w-8 rounded-md object-cover bg-white" />
+        ) : (
+          <div className="h-8 w-8 rounded-md bg-blue-600 flex items-center justify-center">
+            <Plane className="h-4.5 w-4.5 text-white" aria-hidden="true" />
+          </div>
+        )}
+        <span className="font-display text-lg font-bold text-white truncate">{company_name}</span>
       </div>
       <NavList onNavigate={onNavigate} />
       <div className="px-5 py-4 border-t border-white/10 shrink-0">

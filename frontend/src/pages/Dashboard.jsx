@@ -22,7 +22,7 @@ export default function Dashboard() {
           <h1 className="font-display text-3xl font-bold text-slate-900">
             {user.role === "sales" ? "My Dashboard" : user.role === "accounting" ? "Accounting Dashboard" : "Dashboard"}
           </h1>
-          <Badge variant="outline" className="border-amber-200 bg-amber-50 text-amber-700">{ROLE_LABELS[user.role]}</Badge>
+          <Badge variant="outline" className="border-blue-200 bg-blue-50 text-blue-700">{ROLE_LABELS[user.role]}</Badge>
         </div>
         <p className="text-slate-500 mt-1">Welcome back, {user.name}. Here's your snapshot for today.</p>
       </div>

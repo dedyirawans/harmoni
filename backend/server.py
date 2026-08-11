@@ -586,6 +586,15 @@ async def public_login_config():
     }
 
 
+@api_router.get("/public/branding")
+async def public_branding():
+    doc = await db.company_settings.find_one({"key": "company"})
+    return {
+        "company_name": (doc.get("company_name") if doc else None) or "Safar Travel CRM",
+        "logo": (doc.get("logo") if doc else None) or "",
+    }
+
+
 
 @api_router.get("/")
 async def root():

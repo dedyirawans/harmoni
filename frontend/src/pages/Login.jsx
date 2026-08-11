@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
+import { useBranding } from "@/context/BrandingContext";
 import api, { formatApiErrorDetail } from "@/lib/api";
 import { Building2, Plane } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -13,6 +14,7 @@ const MECCA_IMG =
 
 export default function Login() {
   const { login } = useAuth();
+  const { company_name: companyName, logo } = useBranding();
   const navigate = useNavigate();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -63,16 +65,20 @@ export default function Login() {
         <div className="absolute inset-0 bg-slate-950/60" />
         <div className="relative z-10 flex flex-col justify-between h-full p-10 text-white">
           <div className="flex items-center gap-2">
-            <div className="h-9 w-9 rounded-md bg-amber-600 flex items-center justify-center">
-              <Plane className="h-5 w-5" aria-hidden="true" />
-            </div>
-            <span className="font-display text-xl font-bold">Safar Travel CRM</span>
+            {logo ? (
+              <img src={logo} alt="" className="h-9 w-9 rounded-md object-cover bg-white" />
+            ) : (
+              <div className="h-9 w-9 rounded-md bg-blue-600 flex items-center justify-center">
+                <Plane className="h-5 w-5" aria-hidden="true" />
+              </div>
+            )}
+            <span className="font-display text-xl font-bold">{companyName}</span>
           </div>
           <div className="max-w-md">
             <h1 className="font-display text-4xl font-bold leading-tight">{cfg.heading}</h1>
             <p className="mt-4 text-slate-200 leading-relaxed">{cfg.subheading}</p>
           </div>
-          <p className="text-xs text-slate-300">© 2026 Safar Travel Indonesia</p>
+          <p className="text-xs text-slate-300">© 2026 {companyName}</p>
         </div>
       </div>
 
@@ -80,10 +86,14 @@ export default function Login() {
       <div className="flex items-center justify-center p-6 sm:p-12">
         <div className="w-full max-w-sm">
           <div className="md:hidden flex items-center gap-2 mb-8">
-            <div className="h-9 w-9 rounded-md bg-amber-600 flex items-center justify-center">
-              <Plane className="h-5 w-5 text-white" aria-hidden="true" />
-            </div>
-            <span className="font-display text-xl font-bold text-slate-900">Safar Travel CRM</span>
+            {logo ? (
+              <img src={logo} alt="" className="h-9 w-9 rounded-md object-cover border border-slate-200" />
+            ) : (
+              <div className="h-9 w-9 rounded-md bg-blue-600 flex items-center justify-center">
+                <Plane className="h-5 w-5 text-white" aria-hidden="true" />
+              </div>
+            )}
+            <span className="font-display text-xl font-bold text-slate-900">{companyName}</span>
           </div>
           <h2 className="font-display text-2xl font-bold text-slate-900">Sign in</h2>
           <p className="text-sm text-slate-500 mt-1">Use your work email or username to continue.</p>

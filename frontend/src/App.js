@@ -1,6 +1,7 @@
 import "@/App.css";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider } from "@/context/AuthContext";
+import { BrandingProvider } from "@/context/BrandingContext";
 import { ProtectedRoute, RequirePermission } from "@/components/guards";
 import DashboardLayout from "@/components/DashboardLayout";
 import { ROUTE_PERMS } from "@/config/nav";
@@ -28,6 +29,7 @@ function App() {
   return (
     <div className="App">
       <BrowserRouter>
+        <BrandingProvider>
         <AuthProvider>
           <Routes>
             <Route path="/login" element={<Login />} />
@@ -64,6 +66,7 @@ function App() {
             <Route path="*" element={<Navigate to="/dashboard" replace />} />
           </Routes>
         </AuthProvider>
+        </BrandingProvider>
       </BrowserRouter>
       <Toaster position="top-right" richColors />
     </div>

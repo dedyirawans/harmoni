@@ -83,7 +83,7 @@ export default function Users() {
   };
 
   const roleBadge = (role) => {
-    const map = { super_admin: "bg-slate-900 text-white", sales: "bg-amber-50 text-amber-700 border-amber-200", accounting: "bg-blue-50 text-blue-700 border-blue-200" };
+    const map = { super_admin: "bg-slate-900 text-white", sales: "bg-blue-50 text-blue-700 border-blue-200", accounting: "bg-slate-100 text-slate-700 border-slate-200" };
     return <Badge variant="outline" className={map[role]}>{role.replace("_", " ")}</Badge>;
   };
 
@@ -176,7 +176,7 @@ export default function Users() {
 
       <Card className="border-slate-200 shadow-sm overflow-hidden">
         {users === null ? (
-          <div className="p-12 flex justify-center"><Loader2 className="h-6 w-6 animate-spin text-amber-600" /></div>
+          <div className="p-12 flex justify-center"><Loader2 className="h-6 w-6 animate-spin text-blue-600" /></div>
         ) : users.length === 0 ? (
           <div className="p-12 text-center text-slate-500">
             <Users2 className="h-8 w-8 mx-auto text-slate-300" aria-hidden="true" />

@@ -42,7 +42,7 @@ export default function HPP() {
 
       <Card className="border-slate-200 shadow-sm overflow-hidden">
         {data === null ? (
-          <div className="p-12 flex justify-center"><Loader2 className="h-6 w-6 animate-spin text-amber-600" /></div>
+          <div className="p-12 flex justify-center"><Loader2 className="h-6 w-6 animate-spin text-blue-600" /></div>
         ) : (
           <Table data-testid="hpp-table">
             <TableHeader>
@@ -62,7 +62,7 @@ export default function HPP() {
                   <TableCell className="text-right text-slate-600">{fmt(p.selling_price)}</TableCell>
                   <TableCell className="text-right font-medium text-emerald-700">{fmt(p.gross_profit)}</TableCell>
                   <TableCell className="text-right">
-                    <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-200">{p.gross_margin}%</Badge>
+                    <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200">{p.gross_margin}%</Badge>
                   </TableCell>
                 </TableRow>
               ))}

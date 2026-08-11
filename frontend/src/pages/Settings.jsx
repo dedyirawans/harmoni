@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useAuth } from "@/context/AuthContext";
+import { useBranding } from "@/context/BrandingContext";
 import api, { formatApiErrorDetail } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -22,6 +23,7 @@ const COMPANY_FIELDS = [
 
 export default function Settings() {
   const { user } = useAuth();
+  const { refreshBranding } = useBranding();
   const isAdmin = user.role === "super_admin";
   const canManage = (user.permissions || []).includes("settings.manage");
 
@@ -37,7 +39,7 @@ export default function Settings() {
 
   const saveCompany = async () => {
     setSavingC(true);
-    try { await api.put("/company-settings", company); toast.success("Company settings saved"); }
+    try { await api.put("/company-settings", company); toast.success("Company settings saved"); refreshBranding(); }
     catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); }
     finally { setSavingC(false); }
   };
@@ -50,7 +52,7 @@ export default function Settings() {
   };
 
   if (company === null || system === null)
-    return <div className="p-12 flex justify-center"><Loader2 className="h-6 w-6 animate-spin text-amber-600" /></div>;
+    return <div className="p-12 flex justify-center"><Loader2 className="h-6 w-6 animate-spin text-blue-600" /></div>;
 
   return (
     <div className="space-y-6" data-testid="settings-page">
@@ -80,6 +82,32 @@ export default function Settings() {
                     data-testid={`company-${k}-input`} />
                 </div>
               ))}
+              <div className="space-y-2 sm:col-span-2">
+                <Label>Company Logo</Label>
+                <p className="text-xs text-slate-400">Shown in the sidebar and login screen. The Company Name is also used as the browser tab title.</p>
+                <div className="flex items-center gap-4 pt-1">
+                  {company.logo ? (
+                    <img src={company.logo} alt="Logo" className="h-14 w-14 rounded-md object-cover border border-slate-200" />
+                  ) : (
+                    <div className="h-14 w-14 rounded-md bg-blue-600 flex items-center justify-center text-white text-[10px] font-semibold">LOGO</div>
+                  )}
+                  <div className="flex-1 space-y-2">
+                    <Input value={company.logo || ""} disabled={!canManage}
+                      onChange={(e) => setCompany({ ...company, logo: e.target.value })}
+                      placeholder="Logo image URL, or upload below" data-testid="company-logo-input" />
+                    {canManage && (
+                      <Input type="file" accept="image/*" data-testid="company-logo-upload"
+                        onChange={(e) => {
+                          const f = e.target.files?.[0];
+                          if (!f) return;
+                          const reader = new FileReader();
+                          reader.onload = () => setCompany({ ...company, logo: reader.result });
+                          reader.readAsDataURL(f);
+                        }} />
+                    )}
+                  </div>
+                </div>
+              </div>
               {canManage && (
                 <div className="sm:col-span-2">
                   <Button onClick={saveCompany} disabled={savingC} className="bg-blue-600 hover:bg-blue-700" data-testid="save-company-button">
@@ -240,7 +268,7 @@ function RolePermissions() {
     finally { setSaving(""); }
   };
 
-  if (rp === null) return <div className="p-12 flex justify-center"><Loader2 className="h-6 w-6 animate-spin text-amber-600" /></div>;
+  if (rp === null) return <div className="p-12 flex justify-center"><Loader2 className="h-6 w-6 animate-spin text-blue-600" /></div>;
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-4" data-testid="role-permissions">
