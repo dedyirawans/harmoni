@@ -185,17 +185,25 @@ function RefundDetail({ id, has, onClose, onChanged }) {
   const [rec, setRec] = useState("");
   const [reason, setReason] = useState("");
   const [pay, setPay] = useState({ payment_date: "", amount: "", bank: "", account: "", transaction_reference: "", notes: "" });
+  const [ded, setDed] = useState({ type: "", method: "FIXED", source: "Manual Adjustment", qty: 1, unit_amount: "", non_refundable: false });
+  const [adj, setAdj] = useState({ refund_adjustment: "", reason: "" });
+  const [dtypes, setDtypes] = useState([]);
   const load = () => api.get(`/refund-requests/${id}`).then((r) => { setD(r.data); setBank(r.data.bank || bank); setRec(r.data.recommendation || ""); }).catch(() => {});
-  useEffect(() => { load(); }, [id]);
+  useEffect(() => { load(); api.get("/deduction-types").then((r) => setDtypes(r.data || [])).catch(() => {}); }, [id]);
   if (!d) return null;
 
   const canReview = has("refund.review") && d.status === "CALCULATED";
   const canApprove = has("refund.approve") && d.status === "ACCOUNTING_REVIEWED";
+  const canAdjust = has("refund.approve") && ["CALCULATED", "ACCOUNTING_REVIEWED"].includes(d.status);
   const canProcess = has("refund.process") && ["APPROVED", "PARTIALLY_REFUNDED", "PROCESSING"].includes(d.status);
 
   const doReview = async () => { try { await api.patch(`/refund-requests/${id}/review`, { bank, recommendation: rec }); toast.success("Refund disubmit ke Super Admin"); load(); onChanged(); } catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); } };
   const doApprove = async (action) => { if ((action === "REJECT" || action === "REQUEST_REVISION") && !reason) return toast.error("Isi alasan dulu"); try { await api.patch(`/refund-requests/${id}/approve`, { action, reason, proposed_refund: d.proposed_refund }); toast.success(`Refund ${action}`); load(); onChanged(); } catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); } };
   const doProcess = async () => { try { await api.post(`/refund-requests/${id}/process`, pay); toast.success("Pembayaran refund tercatat"); load(); onChanged(); } catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); } };
+  const editable = ["CALCULATED", "ACCOUNTING_REVIEWED"].includes(d.status);
+  const addDeduction = async () => { if (!ded.type) return toast.error("Pilih type"); try { const r = await api.post(`/refund-requests/${id}/deductions`, ded); if (r.data.warning) toast.warning(r.data.warning); toast.success("Deduction ditambah"); setDed({ type: "", method: "FIXED", source: "Manual Adjustment", qty: 1, unit_amount: "", non_refundable: false }); load(); onChanged(); } catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); } };
+  const removeDeduction = async (itemId) => { try { await api.delete(`/refund-requests/${id}/deductions/${itemId}`); load(); onChanged(); } catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); } };
+  const doAdjust = async () => { if (!adj.reason) return toast.error("Reason wajib"); try { await api.patch(`/refund-requests/${id}/adjustment`, adj); toast.success("Adjustment tersimpan"); load(); onChanged(); } catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); } };
 
   return (
     <Dialog open onOpenChange={onClose}>
@@ -211,6 +219,48 @@ function RefundDetail({ id, has, onClose, onChanged }) {
           </div>
           {d.recommendation && <p className="text-slate-500"><b>Rekomendasi:</b> {d.recommendation}</p>}
           {d.approval?.action === "REJECT" && <p className="text-red-600"><b>Ditolak:</b> {d.approval.reason}</p>}
+
+          <div className="rounded-lg border border-slate-200 p-3 space-y-2">
+            <p className="font-semibold text-slate-700">Deduction Breakdown</p>
+            <table className="w-full text-xs" data-testid="rf-deduction-table">
+              <thead><tr className="text-left text-slate-400"><th className="py-1">Type</th><th>Method</th><th>Qty</th><th>Source</th><th className="text-right">Amount</th><th></th></tr></thead>
+              <tbody>
+                {(d.deductions || []).length === 0 ? <tr><td colSpan={6} className="py-2 text-slate-400">Belum ada deduction.</td></tr> :
+                  d.deductions.map((x) => (
+                    <tr key={x.id} className="border-t border-slate-100">
+                      <td className="py-1">{x.type}{x.non_refundable && <span className="ml-1 text-[10px] text-red-500">NR</span>}</td>
+                      <td>{x.method}</td><td>{x.qty}</td><td>{x.source}</td>
+                      <td className="text-right font-medium">{rp(x.amount)}</td>
+                      <td className="text-right">{editable && canReview && <button onClick={() => removeDeduction(x.id)} data-testid={`rf-del-ded-${x.id}`} className="text-red-500"><XCircle className="h-3.5 w-3.5" /></button>}</td>
+                    </tr>
+                  ))}
+              </tbody>
+              <tfoot><tr className="border-t border-slate-200 font-semibold"><td colSpan={4} className="py-1">Total Deduction</td><td className="text-right">{rp(d.total_deduction)}</td><td></td></tr>
+                {!!d.refund_adjustment && <tr><td colSpan={4} className="text-slate-500">Refund Adjustment</td><td className="text-right text-slate-500">{rp(d.refund_adjustment)}</td><td></td></tr>}
+                <tr className="text-emerald-700 font-bold"><td colSpan={4} className="py-1">Final / Proposed Refund</td><td className="text-right">{rp(d.proposed_refund)}</td><td></td></tr>
+              </tfoot>
+            </table>
+            {editable && canReview && (
+              <div className="grid grid-cols-12 gap-2 items-end pt-2 border-t border-slate-100">
+                <div className="col-span-3"><Label className="text-[10px]">Type</Label><Input list="ded-types" value={ded.type} onChange={(e) => setDed({ ...ded, type: e.target.value })} data-testid="rf-ded-type" /><datalist id="ded-types">{dtypes.map((t) => <option key={t.id} value={t.name} />)}</datalist></div>
+                <div className="col-span-2"><Label className="text-[10px]">Method</Label>
+                  <select className="w-full h-9 border rounded px-1 text-xs" value={ded.method} onChange={(e) => setDed({ ...ded, method: e.target.value })} data-testid="rf-ded-method">
+                    {["FIXED", "PERCENTAGE", "PER_PAX", "PER_TRAVELER", "FULL_NON_REFUNDABLE"].map((m) => <option key={m}>{m}</option>)}
+                  </select></div>
+                <div className="col-span-2"><Label className="text-[10px]">Qty</Label><Input type="number" value={ded.qty} onChange={(e) => setDed({ ...ded, qty: e.target.value })} data-testid="rf-ded-qty" /></div>
+                <div className="col-span-3"><Label className="text-[10px]">Unit / %</Label><Input type="number" value={ded.unit_amount} onChange={(e) => setDed({ ...ded, unit_amount: e.target.value })} data-testid="rf-ded-unit" /></div>
+                <div className="col-span-2"><Button size="sm" className="w-full" onClick={addDeduction} data-testid="rf-add-ded">+ Add</Button></div>
+              </div>
+            )}
+          </div>
+
+          {canAdjust && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 grid grid-cols-12 gap-2 items-end">
+              <div className="col-span-4"><Label className="text-xs">Refund Adjustment (+/-)</Label><Input type="number" value={adj.refund_adjustment} onChange={(e) => setAdj({ ...adj, refund_adjustment: e.target.value })} data-testid="rf-adj-amount" /></div>
+              <div className="col-span-6"><Label className="text-xs">Adjustment Reason</Label><Input value={adj.reason} onChange={(e) => setAdj({ ...adj, reason: e.target.value })} data-testid="rf-adj-reason" /></div>
+              <div className="col-span-2"><Button size="sm" className="w-full" onClick={doAdjust} data-testid="rf-adj-save">Apply</Button></div>
+            </div>
+          )}
 
           <div className="rounded-lg border border-slate-200 p-3 space-y-2 bg-slate-50">
             <p className="font-semibold text-slate-700">Bank Tujuan Refund</p>

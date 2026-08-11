@@ -1615,7 +1615,9 @@ async def get_settings_dict():
 N8N_EVENTS = ["lead.created", "lead.updated", "quotation.created", "quotation.sent", "quotation.accepted",
               "booking.created", "booking.updated", "booking.cancelled", "invoice.created",
               "payment.created", "payment.recorded", "payment.confirmed", "payment.overdue",
-              "payment.reminder", "departure.updated"]
+              "payment.reminder", "departure.updated",
+              "refund.calculated", "refund.submitted", "refund.approved", "refund.rejected",
+              "refund.processing", "refund.partially_paid", "refund.completed"]
 
 DEFAULT_WA_TEMPLATES = {
     "payment.reminder": "Assalamu'alaikum {customer_name} 🙏\n\nPengingat pembayaran untuk invoice *{invoice_number}*.\nSisa tagihan: *Rp {outstanding}*\nJatuh tempo: *{due_date}* ({stage}).\n\nMohon segera menyelesaikan pembayaran. Terima kasih.\n\n_{company_name}_",
@@ -3526,6 +3528,67 @@ async def _booking_financials(bid):
     return total_paid, total_billed
 
 
+# ---- Phase 4B: Refund deduction engine ----
+def _ded_amount(method, unit, qty, total_paid):
+    unit = float(unit or 0)
+    qty = float(qty or 1)
+    if method == "PERCENTAGE":
+        return round(float(total_paid or 0) * unit / 100)
+    if method in ("PER_PAX", "PER_TRAVELER"):
+        return round(unit * qty)
+    return round(unit)  # FIXED / FULL_NON_REFUNDABLE
+
+
+def _ded_item(dtype, description, method, source, qty, unit_amount, amount, non_refundable, traveler_id, by, attachment_url="", notes=""):
+    return {"id": str(_uuid.uuid4())[:8], "type": dtype, "description": description, "method": method,
+            "source": source, "qty": qty, "unit_amount": float(unit_amount or 0), "amount": round(float(amount or 0)),
+            "non_refundable": bool(non_refundable), "traveler_id": traveler_id, "attachment_url": attachment_url,
+            "notes": notes, "added_by": by, "added_at": now_iso()}
+
+
+def _recalc_refund(d):
+    tp = float(d.get("total_paid") or 0)
+    total_ded = sum(float(x.get("amount") or 0) for x in d.get("deductions", []))
+    adj = float(d.get("refund_adjustment") or 0)
+    warning = "Deduction exceeds total paid amount." if total_ded > tp else None
+    final = max(0.0, tp - total_ded + adj)
+    return round(total_ded, 2), round(final, 2), warning
+
+
+def _refund_version(d, reason, by, new_amount):
+    return {"version": len(d.get("versions", [])) + 1, "changed_by": by, "date": now_iso(),
+            "reason": reason, "previous_amount": round(float(d.get("proposed_refund") or 0)), "new_amount": round(float(new_amount or 0))}
+
+
+async def _suggested_deductions(package_id, departure_id, cancelled_pax, total_paid):
+    pol = None
+    if departure_id:
+        pol = await db.refund_policies.find_one({"scope": "departure", "ref_id": departure_id})
+    if not pol and package_id:
+        pol = await db.refund_policies.find_one({"scope": "package", "ref_id": package_id})
+    out = []
+    for it in (pol or {}).get("items", []):
+        method = it.get("method", "PER_PAX")
+        qty = cancelled_pax if method in ("PER_PAX", "PER_TRAVELER") else 1
+        amt = _ded_amount(method, it.get("unit_amount"), qty, total_paid)
+        out.append(_ded_item(it.get("type", "Deduction"), it.get("description", "Policy default"), method,
+                             it.get("source", "Package"), qty, it.get("unit_amount"), amt, it.get("non_refundable", True), None, "POLICY"))
+    return out
+
+
+async def _apply_commission_impact(cx, user):
+    """If cancelled travelers are in a finalized commission period, record a negative pax adjustment (do not delete closing)."""
+    for tid in cx.get("cancelled_traveler_ids", []) or []:
+        item = await db.commission_items.find_one({"booking_id": cx["booking_id"], "traveler_id": tid})
+        if not item:
+            continue
+        closing = await db.commission_closings.find_one({"period": item["period"]})
+        if closing and closing.get("status") in ("APPROVED", "CLOSED", "PAID"):
+            await db.commission_adjustments.insert_one({"period": item["period"], "sales_pic_id": item.get("sales_pic_id"),
+                "booking_id": cx["booking_id"], "traveler_id": tid, "pax_delta": -1,
+                "reason": f"Cancellation {cx['cancellation_number']}", "created_by": user["name"], "created_at": now_iso()})
+
+
 async def _can_view_cancellation(user, doc):
     if user["role"] in ("super_admin", "accounting"):
         return True
@@ -3665,23 +3728,45 @@ async def approve_cancellation(cid: str, body: dict, request: Request, user: dic
                      "cancellation_fee": fee, "non_refundable_cost": nonref, "other_deduction": other, "estimated_refund": estimated},
         "timeline": tl}})
     await log_audit(user, "cancellation", "approve", request, record_id=cid, old={"status": old, "booking_status": b.get("status") if b else None}, new={"status": "APPROVED", "booking_status": new_booking_status, "estimated_refund": estimated})
-    # Auto-create refund request (CALCULATED)
+    # Auto-create refund request (CALCULATED) with itemized deductions + version
     rnum = await next_number("RFD", db.refund_requests, "refund_number")
+    tp = float(d.get("total_paid") or 0)
+    init_deductions = []
+    if fee:
+        init_deductions.append(_ded_item("Cancellation Fee", "Cancellation fee", "FIXED", "Manual Adjustment", 1, fee, fee, True, None, "SYSTEM"))
+    if nonref:
+        init_deductions.append(_ded_item("Non-Refundable Cost", "Non-refundable cost", "FIXED", "Booking", 1, nonref, nonref, True, None, "SYSTEM"))
+    if other:
+        init_deductions.append(_ded_item("Other Deduction", "Other deduction", "FIXED", "Manual Adjustment", 1, other, other, False, None, "SYSTEM"))
+    init_deductions += await _suggested_deductions(d.get("package_id"), d.get("departure_id"), int(d.get("cancelled_pax") or 0), tp)
+    total_ded = sum(float(x["amount"]) for x in init_deductions)
+    final = max(0.0, tp - total_ded)
+    orig_tax = float((b or {}).get("tax_amount") or 0)
+    ratio = (int(d.get("cancelled_pax") or 0) / int(d.get("total_pax") or 1)) if d.get("total_pax") else 1
+    cancelled_tax = round(orig_tax * ratio)
     refund = {"refund_number": rnum, "cancellation_id": cid, "cancellation_number": d["cancellation_number"],
-              "booking_id": d["booking_id"], "booking_number": d["booking_number"],
-              "customer_id": d.get("customer_id"), "customer_name": d.get("customer_name"),
+              "booking_id": d["booking_id"], "booking_number": d["booking_number"], "package_id": d.get("package_id"),
+              "departure_id": d.get("departure_id"), "customer_id": d.get("customer_id"), "customer_name": d.get("customer_name"),
               "package_name": d.get("package_name"), "sales_pic_id": d.get("sales_pic_id"), "sales_name": d.get("sales_name"),
               "original_booking_value": d.get("total_booking_value"), "discount": 0,
-              "net_booking_value": d.get("total_booking_value"), "total_paid": d.get("total_paid"),
+              "net_booking_value": d.get("total_booking_value"), "total_paid": tp,
+              "cancelled_pax": d.get("cancelled_pax"), "total_pax": d.get("total_pax"),
+              "deductions": init_deductions, "total_deduction": round(total_ded, 2),
+              "refund_adjustment": 0.0, "adjustment_reason": "",
               "cancellation_fee": fee, "non_refundable_cost": nonref, "other_deduction": other,
-              "proposed_refund": estimated, "recommendation": review.get("recommendation", ""),
+              "original_tax": orig_tax, "cancelled_tax": cancelled_tax, "tax_adjustment": -cancelled_tax, "final_tax": orig_tax - cancelled_tax,
+              "proposed_refund": round(final, 2), "approved_refund": 0.0, "recommendation": review.get("recommendation", ""),
               "bank": {"bank_name": "", "account_number": "", "account_holder": ""},
               "supporting_documents": [], "payments": [], "refunded_amount": 0.0,
               "approval": None, "status": "CALCULATED", "created_by": "SYSTEM", "created_at": now_iso(),
-              "timeline": [_timeline_entry(user, "Refund Calculated", None, "CALCULATED", request, "", estimated)]}
+              "versions": [{"version": 1, "changed_by": "SYSTEM", "date": now_iso(), "reason": "Initial calculation", "previous_amount": 0, "new_amount": round(final, 2)}],
+              "timeline": [_timeline_entry(user, "Refund Calculated", None, "CALCULATED", request, "", final)]}
     await db.refund_requests.insert_one(refund)
-    await _notify("Booking dibatalkan", f"{d['booking_number']} disetujui. Refund {rnum} dibuat (Rp {estimated:,.0f})".replace(",", "."), "/approvals", role="accounting")
+    trigger_n8n("refund.calculated", {"refund_id": rnum, "booking_id": d["booking_id"], "customer_id": d.get("customer_id"),
+        "proposed_refund": round(final, 2), "total_deduction": round(total_ded, 2), "currency": "IDR"})
+    await _notify("Booking dibatalkan", f"{d['booking_number']} disetujui. Refund {rnum} dibuat (Rp {final:,.0f})".replace(",", "."), "/approvals", role="accounting")
     await _notify("Cancellation disetujui", f"{d['cancellation_number']} disetujui Super Admin", "/approvals", user_id=d.get("created_by_id"))
+    await _apply_commission_impact(d, user)
     return serialize(await db.cancellation_requests.find_one({"_id": ObjectId(cid)}))
 
 
@@ -3733,6 +3818,7 @@ async def review_refund(rid: str, body: dict, request: Request, user: dict = Dep
         "recommendation": body.get("recommendation", d.get("recommendation", "")),
         "status": "ACCOUNTING_REVIEWED", "timeline": tl}})
     await log_audit(user, "refund", "review", request, record_id=rid, new={"bank": bank})
+    trigger_n8n("refund.submitted", {"refund_id": d["refund_number"], "booking_id": d["booking_id"], "customer_id": d.get("customer_id"), "proposed_refund": d.get("proposed_refund"), "currency": "IDR"})
     await _notify("Refund menunggu approval", f"{d['refund_number']} siap di-approve Super Admin", "/approvals", role="super_admin")
     return serialize(await db.refund_requests.find_one({"_id": ObjectId(rid)}))
 
@@ -3755,6 +3841,7 @@ async def approve_refund(rid: str, body: dict, request: Request, user: dict = De
         tl = d.get("timeline", []) + [_timeline_entry(user, "Refund Rejected", old, "REJECTED", request, reason)]
         await db.refund_requests.update_one({"_id": ObjectId(rid)}, {"$set": {"status": "REJECTED", "approval": {"action": "REJECT", "by": user["name"], "at": now_iso(), "reason": reason}, "timeline": tl}})
         await log_audit(user, "refund", "reject", request, record_id=rid, new={"reason": reason})
+        trigger_n8n("refund.rejected", {"refund_id": d["refund_number"], "booking_id": d["booking_id"], "customer_id": d.get("customer_id"), "reason": reason})
         await _notify("Refund ditolak", f"{d['refund_number']}: {reason}", "/approvals", role="accounting")
         return serialize(await db.refund_requests.find_one({"_id": ObjectId(rid)}))
     if action == "REQUEST_REVISION":
@@ -3764,10 +3851,16 @@ async def approve_refund(rid: str, body: dict, request: Request, user: dict = De
         await _notify("Revisi refund diminta", f"{d['refund_number']} perlu revisi", "/approvals", role="accounting")
         return serialize(await db.refund_requests.find_one({"_id": ObjectId(rid)}))
     proposed = float(body.get("proposed_refund", d.get("proposed_refund", 0)) or 0)
+    if body.get("proposed_refund") is not None and abs(proposed - float(d.get("proposed_refund") or 0)) > 0.5 and not body.get("adjustment_reason"):
+        raise HTTPException(status_code=400, detail="Adjustment reason wajib jika mengubah nominal refund")
+    versions = d.get("versions", [])
+    if abs(proposed - float(d.get("proposed_refund") or 0)) > 0.5:
+        versions = versions + [_refund_version(d, body.get("adjustment_reason", "Super Admin adjustment"), user["name"], proposed)]
     tl = d.get("timeline", []) + [_timeline_entry(user, "Refund Approved", old, "APPROVED", request, "", proposed)]
-    await db.refund_requests.update_one({"_id": ObjectId(rid)}, {"$set": {"status": "APPROVED", "proposed_refund": proposed,
-        "approval": {"action": "APPROVE", "by": user["name"], "at": now_iso(), "proposed_refund": proposed}, "timeline": tl}})
-    await log_audit(user, "refund", "approve", request, record_id=rid, new={"proposed_refund": proposed})
+    await db.refund_requests.update_one({"_id": ObjectId(rid)}, {"$set": {"status": "APPROVED", "proposed_refund": proposed, "approved_refund": proposed,
+        "approval": {"action": "APPROVE", "by": user["name"], "at": now_iso(), "proposed_refund": proposed, "adjustment_reason": body.get("adjustment_reason", "")}, "versions": versions, "timeline": tl}})
+    await log_audit(user, "refund", "approve", request, record_id=rid, new={"approved_refund": proposed})
+    trigger_n8n("refund.approved", {"refund_id": d["refund_number"], "booking_id": d["booking_id"], "customer_id": d.get("customer_id"), "approved_refund": proposed, "total_deduction": d.get("total_deduction"), "currency": "IDR"})
     await _notify("Refund disetujui", f"{d['refund_number']} disetujui. Accounting dapat memproses pembayaran.", "/approvals", role="accounting")
     await _notify("Refund disetujui", f"{d['refund_number']} disetujui Super Admin", "/approvals", user_id=d.get("sales_pic_id"))
     return serialize(await db.refund_requests.find_one({"_id": ObjectId(rid)}))
@@ -3783,13 +3876,17 @@ async def process_refund(rid: str, body: dict, request: Request, user: dict = De
     amount = float(body.get("amount") or 0)
     if amount <= 0:
         raise HTTPException(status_code=400, detail="Amount tidak valid")
+    approved = float(d.get("approved_refund") or d.get("proposed_refund") or 0)
+    already = float(d.get("refunded_amount") or 0)
+    if already + amount > approved + 0.5:
+        raise HTTPException(status_code=400, detail=f"Pembayaran melebihi approved refund (sisa Rp {approved - already:,.0f}). Ajukan revisi ke Super Admin.".replace(",", "."))
     payment = {"payment_date": body.get("payment_date", today_str()), "amount": amount,
                "bank": body.get("bank", ""), "account": body.get("account", ""),
                "transaction_reference": body.get("transaction_reference", ""),
                "proof_url": body.get("proof_url", ""), "notes": body.get("notes", ""),
                "processed_by": user["name"], "processed_at": now_iso()}
-    refunded = float(d.get("refunded_amount") or 0) + amount
-    new_status = "REFUNDED" if refunded >= float(d.get("proposed_refund") or 0) else "PARTIALLY_REFUNDED"
+    refunded = already + amount
+    new_status = "REFUNDED" if refunded >= approved - 0.5 else "PARTIALLY_REFUNDED"
     tl = d.get("timeline", []) + [_timeline_entry(user, "Payment Processed", d["status"], new_status, request, "", amount)]
     await db.refund_requests.update_one({"_id": ObjectId(rid)}, {"$push": {"payments": payment},
         "$set": {"refunded_amount": refunded, "status": new_status, "timeline": tl}})
@@ -3797,6 +3894,9 @@ async def process_refund(rid: str, body: dict, request: Request, user: dict = De
         "method": body.get("bank", ""), "date": payment["payment_date"], "status": "PAID",
         "refund_request_id": rid, "created_at": now_iso(), "created_by": user["name"]})
     await log_audit(user, "refund", "process", request, record_id=rid, new={"amount": amount, "status": new_status})
+    trigger_n8n("refund.processing" if new_status == "PARTIALLY_REFUNDED" else "refund.completed", {"refund_id": d["refund_number"], "booking_id": d["booking_id"], "customer_id": d.get("customer_id"), "paid": amount, "refunded_total": refunded, "status": new_status, "currency": "IDR"})
+    if new_status == "PARTIALLY_REFUNDED":
+        trigger_n8n("refund.partially_paid", {"refund_id": d["refund_number"], "booking_id": d["booking_id"], "customer_id": d.get("customer_id"), "refunded_total": refunded, "currency": "IDR"})
     await _notify("Refund diproses", f"{d['refund_number']} • Rp {amount:,.0f} ({new_status})".replace(",", "."), "/approvals", role="super_admin")
     await _notify("Refund diproses", f"{d['refund_number']} telah diproses", "/approvals", user_id=d.get("sales_pic_id"))
     return serialize(await db.refund_requests.find_one({"_id": ObjectId(rid)}))
@@ -3811,6 +3911,147 @@ async def reopen_refund(rid: str, request: Request, user: dict = Depends(require
     await db.refund_requests.update_one({"_id": ObjectId(rid)}, {"$set": {"status": "CALCULATED", "timeline": tl}})
     await log_audit(user, "refund", "reopen", request, record_id=rid)
     return serialize(await db.refund_requests.find_one({"_id": ObjectId(rid)}))
+
+
+# ---------- PHASE 4B — Deduction Types, Deductions, Adjustment, Policy, Impact, Reports ----------
+@api_router.get("/deduction-types")
+async def list_deduction_types(user: dict = Depends(require_permission("refund.view"))):
+    return [serialize(d) for d in await db.deduction_types.find().sort("name", 1).to_list(200)]
+
+
+@api_router.post("/deduction-types")
+async def create_deduction_type(body: dict, request: Request, user: dict = Depends(require_role("super_admin"))):
+    name = (body.get("name") or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Name wajib diisi")
+    if await db.deduction_types.find_one({"name": name}):
+        raise HTTPException(status_code=400, detail="Type sudah ada")
+    res = await db.deduction_types.insert_one({"name": name, "system": False, "created_at": now_iso(), "created_by": user["name"]})
+    await log_audit(user, "deduction_type", "create", request, record_id=str(res.inserted_id), new={"name": name})
+    return serialize(await db.deduction_types.find_one({"_id": res.inserted_id}))
+
+
+@api_router.delete("/deduction-types/{tid}")
+async def delete_deduction_type(tid: str, request: Request, user: dict = Depends(require_role("super_admin"))):
+    await db.deduction_types.delete_one({"_id": ObjectId(tid), "system": {"$ne": True}})
+    await log_audit(user, "deduction_type", "delete", request, record_id=tid)
+    return {"ok": True}
+
+
+def _refund_editable(d):
+    return d.get("status") in ("CALCULATED", "ACCOUNTING_REVIEWED")
+
+
+@api_router.post("/refund-requests/{rid}/deductions")
+async def add_refund_deduction(rid: str, body: dict, request: Request, user: dict = Depends(require_permission("refund.review"))):
+    d = await db.refund_requests.find_one({"_id": ObjectId(rid)})
+    if not d:
+        raise HTTPException(status_code=404, detail="Not found")
+    if not _refund_editable(d):
+        raise HTTPException(status_code=400, detail="Refund terkunci untuk perubahan deduction")
+    method = body.get("method", "FIXED")
+    qty = float(body.get("qty") or 1)
+    unit = float(body.get("unit_amount") or 0)
+    amount = _ded_amount(method, unit, qty, d.get("total_paid"))
+    item = _ded_item(body.get("type", "Other"), body.get("description", ""), method, body.get("source", "Manual Adjustment"),
+                     qty, unit, amount, body.get("non_refundable", False), body.get("traveler_id"), user["name"],
+                     body.get("attachment_url", ""), body.get("notes", ""))
+    d["deductions"] = d.get("deductions", []) + [item]
+    total_ded, final, warning = _recalc_refund(d)
+    versions = d.get("versions", []) + [_refund_version(d, f"Add deduction {item['type']}", user["name"], final)]
+    await db.refund_requests.update_one({"_id": ObjectId(rid)}, {"$set": {"deductions": d["deductions"], "total_deduction": total_ded, "proposed_refund": final, "versions": versions}})
+    await log_audit(user, "refund", "add_deduction", request, record_id=rid, new={"type": item["type"], "amount": amount})
+    return {**serialize(await db.refund_requests.find_one({"_id": ObjectId(rid)})), "warning": warning}
+
+
+@api_router.delete("/refund-requests/{rid}/deductions/{item_id}")
+async def remove_refund_deduction(rid: str, item_id: str, request: Request, user: dict = Depends(require_permission("refund.review"))):
+    d = await db.refund_requests.find_one({"_id": ObjectId(rid)})
+    if not d:
+        raise HTTPException(status_code=404, detail="Not found")
+    if not _refund_editable(d):
+        raise HTTPException(status_code=400, detail="Refund terkunci")
+    d["deductions"] = [x for x in d.get("deductions", []) if x.get("id") != item_id]
+    total_ded, final, _w = _recalc_refund(d)
+    versions = d.get("versions", []) + [_refund_version(d, "Remove deduction", user["name"], final)]
+    await db.refund_requests.update_one({"_id": ObjectId(rid)}, {"$set": {"deductions": d["deductions"], "total_deduction": total_ded, "proposed_refund": final, "versions": versions}})
+    await log_audit(user, "refund", "remove_deduction", request, record_id=rid)
+    return serialize(await db.refund_requests.find_one({"_id": ObjectId(rid)}))
+
+
+@api_router.patch("/refund-requests/{rid}/adjustment")
+async def adjust_refund(rid: str, body: dict, request: Request, user: dict = Depends(require_role("super_admin"))):
+    d = await db.refund_requests.find_one({"_id": ObjectId(rid)})
+    if not d:
+        raise HTTPException(status_code=404, detail="Not found")
+    reason = body.get("reason", "")
+    if not reason:
+        raise HTTPException(status_code=400, detail="Adjustment reason wajib diisi")
+    d["refund_adjustment"] = float(body.get("refund_adjustment") or 0)
+    total_ded, final, _w = _recalc_refund(d)
+    versions = d.get("versions", []) + [_refund_version(d, f"Manual adjustment: {reason}", user["name"], final)]
+    await db.refund_requests.update_one({"_id": ObjectId(rid)}, {"$set": {"refund_adjustment": d["refund_adjustment"], "adjustment_reason": reason, "proposed_refund": final, "versions": versions}})
+    await log_audit(user, "refund", "adjustment", request, record_id=rid, new={"refund_adjustment": d["refund_adjustment"], "reason": reason})
+    return serialize(await db.refund_requests.find_one({"_id": ObjectId(rid)}))
+
+
+@api_router.get("/refund-requests/{rid}/impact")
+async def refund_impact(rid: str, user: dict = Depends(require_permission("refund.view"))):
+    d = await db.refund_requests.find_one({"_id": ObjectId(rid)})
+    if not d:
+        raise HTTPException(status_code=404, detail="Not found")
+    if user["role"] == "sales":
+        raise HTTPException(status_code=403, detail="403 Forbidden — Sales tidak dapat melihat profitability/HPP")
+    b = await db.bookings.find_one({"_id": ObjectId(d["booking_id"])}) if ObjectId.is_valid(d["booking_id"]) else None
+    pkg = await db.packages.find_one({"_id": ObjectId(b["package_id"])}) if b and b.get("package_id") and ObjectId.is_valid(b["package_id"]) else None
+    hpp = float((pkg or {}).get("total_cost") or (pkg or {}).get("hpp") or 0) * int((b or {}).get("pax") or 0)
+    original_sales = float((b or {}).get("total") or 0)
+    non_ref = sum(float(x.get("amount") or 0) for x in d.get("deductions", []) if x.get("non_refundable"))
+    return {"original_sales": original_sales, "original_hpp": hpp, "original_gross_profit": original_sales - hpp,
+            "refund": d.get("proposed_refund"), "non_refundable_cost": non_ref, "total_deduction": d.get("total_deduction"),
+            "original_tax": d.get("original_tax"), "cancelled_tax": d.get("cancelled_tax"), "final_tax": d.get("final_tax"),
+            "net_financial_impact": original_sales - hpp - float(d.get("proposed_refund") or 0)}
+
+
+# Refund policy (per package / departure) — Super Admin
+@api_router.get("/refund-policies/{scope}/{ref_id}")
+async def get_refund_policy(scope: str, ref_id: str, user: dict = Depends(require_permission("refund.view"))):
+    p = await db.refund_policies.find_one({"scope": scope, "ref_id": ref_id})
+    return serialize(p) if p else {"scope": scope, "ref_id": ref_id, "items": []}
+
+
+@api_router.put("/refund-policies/{scope}/{ref_id}")
+async def set_refund_policy(scope: str, ref_id: str, body: dict, request: Request, user: dict = Depends(require_role("super_admin"))):
+    await db.refund_policies.update_one({"scope": scope, "ref_id": ref_id}, {"$set": {"items": body.get("items", []), "updated_at": now_iso()}}, upsert=True)
+    await log_audit(user, "refund_policy", "set", request, record_id=f"{scope}:{ref_id}", new={"items": len(body.get("items", []))})
+    return serialize(await db.refund_policies.find_one({"scope": scope, "ref_id": ref_id}))
+
+
+# Reports
+@api_router.get("/refund-reports/summary")
+async def report_refund_summary(user: dict = Depends(require_permission("refund.view"))):
+    q = {"sales_pic_id": user["_id"]} if user["role"] == "sales" else {}
+    rows = await db.refund_requests.find(q).to_list(5000)
+    total_req = sum(float(r.get("proposed_refund") or 0) for r in rows)
+    total_appr = sum(float(r.get("approved_refund") or 0) for r in rows if r.get("status") in ("APPROVED", "PROCESSING", "PARTIALLY_REFUNDED", "REFUNDED"))
+    total_paid = sum(float(r.get("refunded_amount") or 0) for r in rows)
+    total_ded = sum(float(r.get("total_deduction") or 0) for r in rows)
+    total_fee = sum(float(r.get("cancellation_fee") or 0) for r in rows)
+    total_nonref = sum(float(r.get("non_refundable_cost") or 0) for r in rows)
+    return {"count": len(rows), "total_refund_requested": total_req, "total_refund_approved": total_appr,
+            "total_refund_paid": total_paid, "outstanding_refund": total_appr - total_paid,
+            "total_deduction": total_ded, "total_cancellation_fee": total_fee, "total_non_refundable_cost": total_nonref}
+
+
+@api_router.get("/refund-reports/deduction-breakdown")
+async def report_deduction_breakdown(user: dict = Depends(require_permission("refund.view"))):
+    q = {"sales_pic_id": user["_id"]} if user["role"] == "sales" else {}
+    rows = await db.refund_requests.find(q).to_list(5000)
+    agg = {}
+    for r in rows:
+        for x in r.get("deductions", []):
+            agg[x.get("type", "Other")] = agg.get(x.get("type", "Other"), 0) + float(x.get("amount") or 0)
+    return {"breakdown": [{"type": k, "amount": v} for k, v in sorted(agg.items(), key=lambda i: -i[1])]}
 
 
 app.include_router(api_router)
@@ -3978,6 +4219,12 @@ async def seed():
     await db.cancellation_requests.create_index("status")
     await db.refund_requests.create_index("status")
     await db.notifications.create_index([("role", 1), ("created_at", -1)])
+    if await db.deduction_types.count_documents({}) == 0:
+        _defaults = ["Cancellation Fee", "Flight", "Hotel", "Visa", "Transport", "Handling", "Muthawwif",
+                     "Guide", "Insurance", "Meal", "Airport Tax", "Supplier Cost", "Administration Fee", "Bank Fee", "Other"]
+        await db.deduction_types.insert_many([{"name": n, "system": True, "created_at": now_iso()} for n in _defaults])
+    await db.refund_policies.create_index([("scope", 1), ("ref_id", 1)])
+    await db.commission_adjustments.create_index("period")
     if await db.tax_masters.count_documents({}) == 0:
         await db.tax_masters.insert_many([
             {"tax_code": "NONTAX", "tax_name": "Non Taxable", "tax_type": "OTHER", "rate": 0, "tax_base": "SELLING_PRICE",

@@ -1,5 +1,18 @@
 # Safar Travel CRM — Product Requirements (Living Doc)
 
+## Phase 4B — Refund Deduction & Non-Refundable Cost (2026-06) — DONE
+- **Formula**: Final Refund = Total Paid − Total Deduction + Refund Adjustment, di-clamp ke ≥ Rp0. Total Deduction tidak boleh melebihi Total Paid (warning + clamp).
+- **Deduction Type master** (collection deduction_types, 15 default: Cancellation Fee/Flight/Hotel/Visa/Transport/Handling/Muthawwif/Guide/Insurance/Meal/Airport Tax/Supplier Cost/Administration Fee/Bank Fee/Other). SA dapat tambah/hapus (system types tidak bisa dihapus).
+- **Deduction methods**: FIXED, PERCENTAGE (%×total paid), PER_PAX, PER_TRAVELER, FULL_NON_REFUNDABLE. **Source**: Package/Departure/Booking/Traveler/Supplier/Manual Adjustment. Tiap item punya non_refundable flag + attachment_url + notes + added_by.
+- **Refund policy** per Package/Departure (collection refund_policies, SA set) → saat cancellation approve, sistem generate Suggested Deductions (prioritas Departure > Package).
+- **Versioning**: setiap perubahan (add/del deduction, adjustment, approval) menambah versions[] (version, changed_by, date, reason, previous/new amount). History tidak di-overwrite.
+- **Manual adjustment** (SA only, reason wajib) +/−. **Payment cap**: proses pembayaran tidak boleh melebihi approved refund (400); dukung partial → PARTIALLY_REFUNDED → REFUNDED.
+- **Impact**: /refund-requests/{id}/impact (accounting/SA, 403 utk sales) → revenue/HPP/gross profit/refund/non-refundable/net impact + tax (original/cancelled/final, dari booking tax, tidak hardcode). **Commission impact**: cancellation setelah closing final → commission_adjustments (pax_delta −1), tidak hapus closing.
+- **n8n events**: refund.calculated/submitted/approved/rejected/processing/partially_paid/completed.
+- **Reports**: /refund-reports/summary & /refund-reports/deduction-breakdown (accounting/SA; sales own).
+- **RBAC**: Sales request/view only; Accounting add/propose deduction + review + process (tidak bisa adjust/approve); SA deduction master + adjustment + approve + policy + reopen. Semua di-enforce backend.
+- **Tests**: iteration_17.json (frontend 4/4) + test_phase4b_deductions.py (backend 20/20). Phase 1–8 tetap berfungsi.
+
 ## Phase 8 — Cancellation & Refund Approval Workflow (2026-06) — DONE
 - **Prinsip**: SEMUA cancellation/partial cancellation/refund WAJIB approval Super Admin. Tidak ada yang final tanpa Accounting Review → Super Admin Approval.
 - **Cancellation flow**: Sales Request (Booking Detail, pilih full/partial pax + reason/detail/docs) → REQUESTED → Accounting Review (input cancellation_fee/non_refundable/supplier/other_deduction + recommendation, hitung estimated_refund = paid − fee − nonref − other) → ACCOUNTING_REVIEWED → Super Admin APPROVE/REJECT/REQUEST_REVISION. APPROVE → booking CANCELLED (atau PARTIALLY_CANCELLED), seat departure ter-update, traveler dibatalkan, + **auto-create Refund Request (CALCULATED)**. REJECT (reason wajib) → booking tetap aktif. REOPEN super_admin only.
