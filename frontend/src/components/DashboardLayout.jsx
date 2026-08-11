@@ -1,10 +1,10 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
 import { useBranding } from "@/context/BrandingContext";
 import { MENUS, ROLE_LABELS } from "@/config/nav";
 import api, { formatApiErrorDetail } from "@/lib/api";
-import { Plane, Menu, LogOut, KeyRound, ChevronDown } from "lucide-react";
+import { Plane, Menu, LogOut, KeyRound, ChevronDown, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -113,6 +113,57 @@ function ChangePasswordDialog({ open, onOpenChange }) {
   );
 }
 
+function GlobalSearch() {
+  const { hasPerm } = useAuth();
+  const navigate = useNavigate();
+  const [q, setQ] = useState("");
+  const [res, setRes] = useState(null);
+  const [open, setOpen] = useState(false);
+
+  useEffect(() => {
+    if (!q || q.length < 2) { setRes(null); setOpen(false); return; }
+    const t = setTimeout(() => {
+      api.get("/search", { params: { q } }).then((r) => { setRes(r.data); setOpen(true); }).catch(() => {});
+    }, 300);
+    return () => clearTimeout(t);
+  }, [q]);
+
+  if (!hasPerm("crm.view")) return null;
+
+  const go = (path) => { setOpen(false); setQ(""); setRes(null); navigate(path); };
+  const empty = res && res.customers.length === 0 && res.leads.length === 0;
+
+  return (
+    <div className="relative hidden md:block w-72">
+      <Search className="h-4 w-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" aria-hidden="true" />
+      <Input value={q} onChange={(e) => setQ(e.target.value)} onBlur={() => setTimeout(() => setOpen(false), 150)}
+        onFocus={() => res && setOpen(true)} placeholder="Search customers, leads, WhatsApp..."
+        className="pl-9 h-9" data-testid="global-search-input" />
+      {open && res && (
+        <div className="absolute mt-2 w-full bg-white border border-slate-200 rounded-md shadow-xl z-50 max-h-96 overflow-y-auto" data-testid="global-search-results">
+          {empty && <p className="p-3 text-sm text-slate-400">No results.</p>}
+          {res.customers.length > 0 && <p className="px-3 pt-2 pb-1 text-[10px] uppercase font-semibold text-slate-400">Customers</p>}
+          {res.customers.map((c) => (
+            <button key={c._id} onMouseDown={() => go(`/crm/${c._id}`)} data-testid={`search-customer-${c._id}`}
+              className="w-full text-left px-3 py-2 hover:bg-slate-50 text-sm">
+              <span className="font-medium text-slate-900">{c.full_name}</span>
+              <span className="text-slate-400 ml-2">{c.whatsapp || c.email}</span>
+            </button>
+          ))}
+          {res.leads.length > 0 && <p className="px-3 pt-2 pb-1 text-[10px] uppercase font-semibold text-slate-400">Leads</p>}
+          {res.leads.map((l) => (
+            <button key={l._id} onMouseDown={() => go("/sales")} data-testid={`search-lead-${l._id}`}
+              className="w-full text-left px-3 py-2 hover:bg-slate-50 text-sm">
+              <span className="font-medium text-slate-900">{l.interested_package || l.lead_code}</span>
+              <span className="text-slate-400 ml-2">{l.customer_name} · {l.status}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function DashboardLayout({ children }) {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
@@ -152,7 +203,9 @@ export default function DashboardLayout({ children }) {
             </span>
           </div>
 
-          <DropdownMenu>
+          <div className="flex items-center gap-3">
+            <GlobalSearch />
+            <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <button className="flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-slate-100 transition-colors duration-200" data-testid="user-menu-trigger">
                 <div className="h-8 w-8 rounded-full bg-slate-900 text-white text-xs font-semibold flex items-center justify-center">
@@ -176,6 +229,7 @@ export default function DashboardLayout({ children }) {
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
+          </div>
         </header>
 
         <main className="p-4 md:p-8">{children}</main>

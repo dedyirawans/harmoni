@@ -41,5 +41,15 @@ Super Admin can edit sales/accounting permissions via Settings > Roles & Permiss
 - P2: Integration (N8N/WhatsApp), branch-scoped data queries for Sales, dashboard analytics widgets.
 
 ## Next tasks
-- Build CRM module (customers + leads) with Sales data-ownership filtering on backend queries.
-- Build Product/Package management with HPP/costing fields (write side).
+- Phase 3: Product/Package management with HPP write-side, Booking & travelers, Quotations/Invoices.
+
+## Phase 2 — CRM & Sales Management (2026-06) — DONE
+- **Customers**: master (full_name, whatsapp, email, gender, DOB, NIK, passport, address, city, country, type, source, tags, notes) with auto code CUST-#####. Ownership-scoped list/search + type filter.
+- **Customer 360**: profile, KPIs, and unified Timeline (lead activities, follow-ups, communications, notes) + quick actions (note, log message, schedule follow-up).
+- **Leads & Pipeline**: lead master (LEAD-#####) + Kanban across NEW→CONTACTED→QUALIFIED→QUOTATION→NEGOTIATION→BOOKING→PAID→COMPLETED (+LOST); stage moves logged to sales_pipeline + lead_activities.
+- **Follow Ups**: today/overdue/upcoming/completed tabs, activity types, mark complete.
+- **Sales Dashboard**: 10 KPIs + 5 quick actions. **Global Search** (customers/leads) in header.
+- **Communications** log collection prepared for future n8n/WhatsApp.
+- **Strict data ownership** (owner_filter/can_access_record): Sales sees only own data; HPP/cost/margin blocked (403). Super Admin data_scope=all. Accounting blocked from CRM/Sales (403).
+- New collections: customers, leads, lead_activities, customer_notes, communications, follow_ups, sales_pipeline. Seeded demo data for Sales A (rina.sales) + second Sales user (andi.sales) for ownership tests.
+- Tests: backend 50/50 (Phase1 regression + Phase2), frontend 100% acceptance. Files: /app/backend/tests/test_phase2.py.

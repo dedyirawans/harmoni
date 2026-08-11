@@ -601,6 +601,485 @@ async def root():
     return {"message": "Safar Travel CRM API"}
 
 
+# ============================================================================
+# PHASE 2 — CRM & SALES MANAGEMENT
+# ============================================================================
+LEAD_STAGES = ["NEW", "CONTACTED", "QUALIFIED", "QUOTATION", "NEGOTIATION", "BOOKING", "PAID", "COMPLETED"]
+LEAD_LOST = "LOST"
+
+
+def now_iso():
+    return datetime.now(timezone.utc).isoformat()
+
+
+def today_str():
+    return datetime.now(timezone.utc).date().isoformat()
+
+
+def owner_filter(user: dict) -> dict:
+    if user["role"] == "super_admin":
+        return {}
+    scope = user.get("data_scope", "own")
+    if scope == "all":
+        return {}
+    if scope == "branch":
+        return {"branch": user.get("branch")}
+    return {"sales_pic_id": user["_id"]}
+
+
+def can_access_record(user: dict, doc: dict) -> bool:
+    if user["role"] == "super_admin":
+        return True
+    scope = user.get("data_scope", "own")
+    if scope == "all":
+        return True
+    if scope == "branch":
+        return doc.get("branch") == user.get("branch")
+    return doc.get("sales_pic_id") == user["_id"]
+
+
+async def resolve_pic(user: dict, sales_pic_id: Optional[str]):
+    pic_id = sales_pic_id if (user["role"] == "super_admin" and sales_pic_id) else user["_id"]
+    pic = await db.users.find_one({"_id": ObjectId(pic_id)}) if pic_id else None
+    name = pic["name"] if pic else user["name"]
+    branch = (pic.get("branch") if pic else user.get("branch")) or ""
+    return pic_id, name, branch
+
+
+# ---------- Pydantic models ----------
+class CustomerCreate(BaseModel):
+    full_name: str
+    whatsapp: Optional[str] = ""
+    email: Optional[str] = ""
+    gender: Optional[str] = ""
+    date_of_birth: Optional[str] = ""
+    nik: Optional[str] = ""
+    passport_number: Optional[str] = ""
+    passport_expiry: Optional[str] = ""
+    address: Optional[str] = ""
+    city: Optional[str] = ""
+    country: Optional[str] = ""
+    customer_type: Optional[str] = "Prospect"
+    customer_source: Optional[str] = ""
+    sales_pic_id: Optional[str] = None
+    tags: Optional[List[str]] = []
+    notes: Optional[str] = ""
+
+
+class CustomerUpdate(BaseModel):
+    full_name: Optional[str] = None
+    whatsapp: Optional[str] = None
+    email: Optional[str] = None
+    gender: Optional[str] = None
+    date_of_birth: Optional[str] = None
+    nik: Optional[str] = None
+    passport_number: Optional[str] = None
+    passport_expiry: Optional[str] = None
+    address: Optional[str] = None
+    city: Optional[str] = None
+    country: Optional[str] = None
+    customer_type: Optional[str] = None
+    customer_source: Optional[str] = None
+    tags: Optional[List[str]] = None
+    notes: Optional[str] = None
+
+
+class NoteCreate(BaseModel):
+    note: str
+
+
+class LeadCreate(BaseModel):
+    customer_id: Optional[str] = None
+    source: Optional[str] = ""
+    interested_package: Optional[str] = ""
+    destination: Optional[str] = ""
+    pax: Optional[int] = 0
+    budget: Optional[float] = 0
+    departure_date: Optional[str] = ""
+    status: Optional[str] = "NEW"
+    next_follow_up: Optional[str] = ""
+    notes: Optional[str] = ""
+    sales_pic_id: Optional[str] = None
+
+
+class LeadUpdate(BaseModel):
+    customer_id: Optional[str] = None
+    source: Optional[str] = None
+    interested_package: Optional[str] = None
+    destination: Optional[str] = None
+    pax: Optional[int] = None
+    budget: Optional[float] = None
+    departure_date: Optional[str] = None
+    next_follow_up: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class StageUpdate(BaseModel):
+    stage: str
+
+
+class FollowUpCreate(BaseModel):
+    customer_id: Optional[str] = None
+    lead_id: Optional[str] = None
+    activity_type: str = "Call"
+    due_date: str
+    notes: Optional[str] = ""
+
+
+class CommunicationCreate(BaseModel):
+    customer_id: Optional[str] = None
+    lead_id: Optional[str] = None
+    phone: Optional[str] = ""
+    direction: str = "outbound"
+    message: str
+    channel: str = "whatsapp"
+    source: Optional[str] = "manual"
+
+
+async def log_activity(customer_id, lead_id, atype, title, detail, user):
+    await db.lead_activities.insert_one({
+        "customer_id": customer_id, "lead_id": lead_id, "type": atype,
+        "title": title, "detail": detail,
+        "user_id": user["_id"] if user else None,
+        "user_name": user["name"] if user else "system",
+        "timestamp": now_iso(),
+    })
+
+
+# ---------- Customers ----------
+@api_router.get("/customers")
+async def list_customers(q: Optional[str] = None, customer_type: Optional[str] = None,
+                         user: dict = Depends(require_permission("crm.view"))):
+    query = owner_filter(user)
+    if customer_type and customer_type != "all":
+        query["customer_type"] = customer_type
+    if q:
+        query["$or"] = [
+            {"full_name": {"$regex": q, "$options": "i"}},
+            {"whatsapp": {"$regex": q, "$options": "i"}},
+            {"email": {"$regex": q, "$options": "i"}},
+            {"customer_code": {"$regex": q, "$options": "i"}},
+        ]
+    docs = await db.customers.find(query).sort("created_at", -1).to_list(1000)
+    return [serialize(d) for d in docs]
+
+
+@api_router.post("/customers")
+async def create_customer(body: CustomerCreate, request: Request,
+                          user: dict = Depends(require_permission("crm.view"))):
+    pic_id, pic_name, branch = await resolve_pic(user, body.sales_pic_id)
+    count = await db.customers.count_documents({})
+    doc = body.model_dump()
+    doc.pop("sales_pic_id", None)
+    doc.update({
+        "customer_code": f"CUST-{count + 1:05d}",
+        "sales_pic_id": pic_id, "sales_pic_name": pic_name, "branch": branch,
+        "created_at": now_iso(), "created_by": user["name"],
+    })
+    res = await db.customers.insert_one(doc)
+    new = serialize(await db.customers.find_one({"_id": res.inserted_id}))
+    await log_audit(user, "customer", "create_customer", request, record_id=new["_id"], new={"full_name": new["full_name"]})
+    return new
+
+
+@api_router.get("/customers/{cid}")
+async def get_customer(cid: str, user: dict = Depends(require_permission("crm.view"))):
+    doc = await db.customers.find_one({"_id": ObjectId(cid)})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Customer not found")
+    if not can_access_record(user, doc):
+        raise HTTPException(status_code=403, detail="403 Forbidden: not your customer")
+    return serialize(doc)
+
+
+@api_router.put("/customers/{cid}")
+async def update_customer(cid: str, body: CustomerUpdate, request: Request,
+                          user: dict = Depends(require_permission("crm.view"))):
+    doc = await db.customers.find_one({"_id": ObjectId(cid)})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Customer not found")
+    if not can_access_record(user, doc):
+        raise HTTPException(status_code=403, detail="403 Forbidden: not your customer")
+    updates = {k: v for k, v in body.model_dump(exclude_none=True).items()}
+    await db.customers.update_one({"_id": ObjectId(cid)}, {"$set": updates})
+    await log_audit(user, "customer", "update_customer", request, record_id=cid, new=updates)
+    return serialize(await db.customers.find_one({"_id": ObjectId(cid)}))
+
+
+@api_router.delete("/customers/{cid}")
+async def delete_customer(cid: str, request: Request, user: dict = Depends(require_permission("crm.view"))):
+    doc = await db.customers.find_one({"_id": ObjectId(cid)})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Customer not found")
+    if not can_access_record(user, doc):
+        raise HTTPException(status_code=403, detail="403 Forbidden: not your customer")
+    await db.customers.delete_one({"_id": ObjectId(cid)})
+    await log_audit(user, "customer", "delete_customer", request, record_id=cid)
+    return {"message": "Customer deleted"}
+
+
+@api_router.post("/customers/{cid}/notes")
+async def add_note(cid: str, body: NoteCreate, user: dict = Depends(require_permission("crm.view"))):
+    doc = await db.customers.find_one({"_id": ObjectId(cid)})
+    if not doc or not can_access_record(user, doc):
+        raise HTTPException(status_code=403, detail="403 Forbidden")
+    rec = {"customer_id": cid, "note": body.note, "user_name": user["name"], "timestamp": now_iso()}
+    await db.customer_notes.insert_one(dict(rec))
+    return serialize(rec)
+
+
+@api_router.get("/customers/{cid}/360")
+async def customer_360(cid: str, user: dict = Depends(require_permission("crm.view"))):
+    customer = await db.customers.find_one({"_id": ObjectId(cid)})
+    if not customer:
+        raise HTTPException(status_code=404, detail="Customer not found")
+    if not can_access_record(user, customer):
+        raise HTTPException(status_code=403, detail="403 Forbidden: not your customer")
+    leads = [serialize(d) for d in await db.leads.find({"customer_id": cid}).sort("created_at", -1).to_list(500)]
+    follow_ups = [serialize(d) for d in await db.follow_ups.find({"customer_id": cid}).sort("due_date", -1).to_list(500)]
+    comms = [serialize(d) for d in await db.communications.find({"customer_id": cid}).sort("timestamp", -1).to_list(500)]
+    notes = [serialize(d) for d in await db.customer_notes.find({"customer_id": cid}).sort("timestamp", -1).to_list(500)]
+    acts = [serialize(d) for d in await db.lead_activities.find({"customer_id": cid}).sort("timestamp", -1).to_list(500)]
+
+    timeline = []
+    for a in acts:
+        timeline.append({"kind": a.get("type", "activity"), "title": a.get("title", "Activity"),
+                         "detail": a.get("detail", ""), "user_name": a.get("user_name"), "timestamp": a.get("timestamp")})
+    for f in follow_ups:
+        timeline.append({"kind": "follow_up", "title": f"Follow Up — {f.get('activity_type')}",
+                         "detail": f.get("notes", ""), "user_name": f.get("sales_pic_name"), "timestamp": f.get("created_at", f.get("due_date"))})
+    for c in comms:
+        timeline.append({"kind": "communication", "title": f"{c.get('channel', 'msg').title()} ({c.get('direction')})",
+                         "detail": c.get("message", ""), "user_name": c.get("sales_pic_name"), "timestamp": c.get("timestamp")})
+    for n in notes:
+        timeline.append({"kind": "note", "title": "Note", "detail": n.get("note", ""),
+                         "user_name": n.get("user_name"), "timestamp": n.get("timestamp")})
+    timeline.sort(key=lambda x: x.get("timestamp") or "", reverse=True)
+
+    total_value = sum(float(l.get("budget") or 0) for l in leads if l.get("status") != "LOST")
+    return {
+        "customer": serialize(customer), "leads": leads, "follow_ups": follow_ups,
+        "communications": comms, "notes": notes, "timeline": timeline,
+        "totals": {"leads": len(leads), "follow_ups": len(follow_ups),
+                   "communications": len(comms), "total_value": total_value},
+    }
+
+
+# ---------- Leads / Pipeline ----------
+@api_router.get("/leads")
+async def list_leads(status: Optional[str] = None, user: dict = Depends(require_permission("sales.view"))):
+    query = owner_filter(user)
+    if status and status != "all":
+        query["status"] = status
+    docs = await db.leads.find(query).sort("created_at", -1).to_list(2000)
+    return [serialize(d) for d in docs]
+
+
+@api_router.post("/leads")
+async def create_lead(body: LeadCreate, request: Request, user: dict = Depends(require_permission("sales.view"))):
+    pic_id, pic_name, branch = await resolve_pic(user, body.sales_pic_id)
+    customer_name = ""
+    if body.customer_id:
+        c = await db.customers.find_one({"_id": ObjectId(body.customer_id)})
+        customer_name = c.get("full_name") if c else ""
+    count = await db.leads.count_documents({})
+    stage = body.status if body.status in LEAD_STAGES + [LEAD_LOST] else "NEW"
+    doc = body.model_dump()
+    doc.pop("sales_pic_id", None)
+    doc.update({
+        "lead_code": f"LEAD-{count + 1:05d}", "status": stage,
+        "customer_name": customer_name, "sales_pic_id": pic_id, "sales_pic_name": pic_name,
+        "branch": branch, "last_contact": now_iso(), "created_at": now_iso(),
+    })
+    res = await db.leads.insert_one(doc)
+    lead = serialize(await db.leads.find_one({"_id": res.inserted_id}))
+    await log_activity(body.customer_id, lead["_id"], "lead_created", "Lead created",
+                       f"{body.interested_package or 'New lead'} — stage {stage}", user)
+    await log_audit(user, "lead", "create_lead", request, record_id=lead["_id"], new={"stage": stage})
+    return lead
+
+
+@api_router.get("/leads/{lid}")
+async def get_lead(lid: str, user: dict = Depends(require_permission("sales.view"))):
+    doc = await db.leads.find_one({"_id": ObjectId(lid)})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    if not can_access_record(user, doc):
+        raise HTTPException(status_code=403, detail="403 Forbidden: not your lead")
+    return serialize(doc)
+
+
+@api_router.put("/leads/{lid}")
+async def update_lead(lid: str, body: LeadUpdate, request: Request, user: dict = Depends(require_permission("sales.view"))):
+    doc = await db.leads.find_one({"_id": ObjectId(lid)})
+    if not doc or not can_access_record(user, doc):
+        raise HTTPException(status_code=403, detail="403 Forbidden")
+    updates = {k: v for k, v in body.model_dump(exclude_none=True).items()}
+    if body.customer_id:
+        c = await db.customers.find_one({"_id": ObjectId(body.customer_id)})
+        updates["customer_name"] = c.get("full_name") if c else ""
+    await db.leads.update_one({"_id": ObjectId(lid)}, {"$set": updates})
+    await log_audit(user, "lead", "update_lead", request, record_id=lid, new=updates)
+    return serialize(await db.leads.find_one({"_id": ObjectId(lid)}))
+
+
+@api_router.patch("/leads/{lid}/stage")
+async def move_stage(lid: str, body: StageUpdate, request: Request, user: dict = Depends(require_permission("sales.view"))):
+    if body.stage not in LEAD_STAGES + [LEAD_LOST]:
+        raise HTTPException(status_code=400, detail="Invalid pipeline stage")
+    doc = await db.leads.find_one({"_id": ObjectId(lid)})
+    if not doc or not can_access_record(user, doc):
+        raise HTTPException(status_code=403, detail="403 Forbidden")
+    old_stage = doc.get("status")
+    await db.leads.update_one({"_id": ObjectId(lid)}, {"$set": {"status": body.stage, "last_contact": now_iso()}})
+    await db.sales_pipeline.insert_one({
+        "lead_id": lid, "customer_id": doc.get("customer_id"), "from_stage": old_stage, "to_stage": body.stage,
+        "user_name": user["name"], "timestamp": now_iso(),
+    })
+    await log_activity(doc.get("customer_id"), lid, "stage_change", f"Stage: {old_stage} → {body.stage}", "", user)
+    await log_audit(user, "lead", "move_stage", request, record_id=lid, old={"stage": old_stage}, new={"stage": body.stage})
+    return serialize(await db.leads.find_one({"_id": ObjectId(lid)}))
+
+
+@api_router.delete("/leads/{lid}")
+async def delete_lead(lid: str, request: Request, user: dict = Depends(require_permission("sales.view"))):
+    doc = await db.leads.find_one({"_id": ObjectId(lid)})
+    if not doc or not can_access_record(user, doc):
+        raise HTTPException(status_code=403, detail="403 Forbidden")
+    await db.leads.delete_one({"_id": ObjectId(lid)})
+    await log_audit(user, "lead", "delete_lead", request, record_id=lid)
+    return {"message": "Lead deleted"}
+
+
+# ---------- Follow Ups ----------
+@api_router.get("/follow-ups")
+async def list_follow_ups(scope: Optional[str] = "all", user: dict = Depends(require_permission("sales.view"))):
+    docs = await db.follow_ups.find(owner_filter(user)).sort("due_date", 1).to_list(2000)
+    today = today_str()
+    res = []
+    for d in docs:
+        d = serialize(d)
+        status = d.get("status", "pending")
+        due = (d.get("due_date") or "")[:10]
+        if scope == "completed" and status == "completed":
+            res.append(d)
+        elif scope == "today" and status != "completed" and due == today:
+            res.append(d)
+        elif scope == "overdue" and status != "completed" and due and due < today:
+            res.append(d)
+        elif scope == "upcoming" and status != "completed" and due and due > today:
+            res.append(d)
+        elif scope in (None, "all"):
+            res.append(d)
+    return res
+
+
+@api_router.post("/follow-ups")
+async def create_follow_up(body: FollowUpCreate, request: Request, user: dict = Depends(require_permission("sales.view"))):
+    pic_id, pic_name, branch = await resolve_pic(user, None)
+    customer_name = ""
+    if body.customer_id:
+        c = await db.customers.find_one({"_id": ObjectId(body.customer_id)})
+        customer_name = c.get("full_name") if c else ""
+    doc = body.model_dump()
+    doc.update({
+        "status": "pending", "customer_name": customer_name,
+        "sales_pic_id": pic_id, "sales_pic_name": pic_name, "branch": branch,
+        "created_at": now_iso(),
+    })
+    res = await db.follow_ups.insert_one(doc)
+    fu = serialize(await db.follow_ups.find_one({"_id": res.inserted_id}))
+    await log_activity(body.customer_id, body.lead_id, "follow_up_created",
+                       f"Follow up scheduled — {body.activity_type}", body.notes or "", user)
+    return fu
+
+
+@api_router.patch("/follow-ups/{fid}/complete")
+async def complete_follow_up(fid: str, user: dict = Depends(require_permission("sales.view"))):
+    doc = await db.follow_ups.find_one({"_id": ObjectId(fid)})
+    if not doc or not can_access_record(user, doc):
+        raise HTTPException(status_code=403, detail="403 Forbidden")
+    await db.follow_ups.update_one({"_id": ObjectId(fid)}, {"$set": {"status": "completed", "completed_at": now_iso()}})
+    await log_activity(doc.get("customer_id"), doc.get("lead_id"), "follow_up_done",
+                       f"Follow up completed — {doc.get('activity_type')}", doc.get("notes", ""), user)
+    return serialize(await db.follow_ups.find_one({"_id": ObjectId(fid)}))
+
+
+# ---------- Communications ----------
+@api_router.get("/communications")
+async def list_communications(customer_id: Optional[str] = None, user: dict = Depends(require_permission("crm.view"))):
+    query = owner_filter(user)
+    if customer_id:
+        query["customer_id"] = customer_id
+    docs = await db.communications.find(query).sort("timestamp", -1).to_list(1000)
+    return [serialize(d) for d in docs]
+
+
+@api_router.post("/communications")
+async def create_communication(body: CommunicationCreate, user: dict = Depends(require_permission("crm.view"))):
+    pic_id, pic_name, branch = await resolve_pic(user, None)
+    doc = body.model_dump()
+    doc.update({"sales_pic_id": pic_id, "sales_pic_name": pic_name, "branch": branch, "timestamp": now_iso()})
+    res = await db.communications.insert_one(doc)
+    return serialize(await db.communications.find_one({"_id": res.inserted_id}))
+
+
+# ---------- Sales Dashboard ----------
+@api_router.get("/sales/dashboard")
+async def sales_dashboard(user: dict = Depends(require_permission("sales.view"))):
+    of = owner_filter(user)
+
+    def q(extra):
+        return {**of, **extra}
+
+    new_leads = await db.leads.count_documents(q({"status": "NEW"}))
+    quotations = await db.leads.count_documents(q({"status": "QUOTATION"}))
+    bookings = await db.leads.count_documents(q({"status": {"$in": ["BOOKING", "PAID", "COMPLETED"]}}))
+    total_leads = await db.leads.count_documents(of)
+    won = await db.leads.count_documents(q({"status": {"$in": ["PAID", "COMPLETED"]}}))
+    active_leads = await db.leads.find(q({"status": {"$ne": "LOST"}})).to_list(3000)
+    my_pax = sum(int(l.get("pax") or 0) for l in active_leads)
+    estimated = sum(float(l.get("budget") or 0) for l in active_leads)
+    today = today_str()
+    upcoming_departure = sum(1 for l in active_leads if (l.get("departure_date") or "")[:10] >= today and l.get("departure_date"))
+
+    fdocs = await db.follow_ups.find(of).to_list(3000)
+    fu_today = sum(1 for f in fdocs if f.get("status") != "completed" and (f.get("due_date") or "")[:10] == today)
+    fu_overdue = sum(1 for f in fdocs if f.get("status") != "completed" and (f.get("due_date") or "")[:10] and (f.get("due_date") or "")[:10] < today)
+    customers_count = await db.customers.count_documents(of)
+    conversion = round(won / total_leads * 100, 1) if total_leads else 0.0
+
+    return {
+        "new_leads": new_leads, "follow_up_today": fu_today, "overdue_follow_up": fu_overdue,
+        "my_quotations": quotations, "my_bookings": bookings, "my_pax": my_pax,
+        "upcoming_departure": upcoming_departure, "outstanding_customer": customers_count,
+        "estimated_sales": estimated, "conversion_rate": conversion,
+    }
+
+
+# ---------- Global Search ----------
+@api_router.get("/search")
+async def global_search(q: str, user: dict = Depends(require_permission("crm.view"))):
+    of = owner_filter(user)
+    cust_q = {**of, "$or": [
+        {"full_name": {"$regex": q, "$options": "i"}},
+        {"whatsapp": {"$regex": q, "$options": "i"}},
+        {"email": {"$regex": q, "$options": "i"}},
+        {"customer_code": {"$regex": q, "$options": "i"}},
+    ]}
+    customers = [serialize(d) for d in await db.customers.find(cust_q).limit(8).to_list(8)]
+    lead_q = {**of, "$or": [
+        {"lead_code": {"$regex": q, "$options": "i"}},
+        {"customer_name": {"$regex": q, "$options": "i"}},
+        {"interested_package": {"$regex": q, "$options": "i"}},
+        {"destination": {"$regex": q, "$options": "i"}},
+    ]}
+    leads = [serialize(d) for d in await db.leads.find(lead_q).limit(8).to_list(8)]
+    return {"customers": customers, "leads": leads}
+
+
+
+
 app.include_router(api_router)
 
 app.add_middleware(
@@ -619,6 +1098,9 @@ async def seed():
     await db.users.create_index("email", unique=True)
     await db.users.create_index("username", unique=True)
     await db.password_reset_tokens.create_index("expires_at", expireAfterSeconds=0)
+    await db.customers.create_index("sales_pic_id")
+    await db.leads.create_index("sales_pic_id")
+    await db.follow_ups.create_index("sales_pic_id")
 
     for role, perms in DEFAULT_ROLE_PERMISSIONS.items():
         if not await db.role_permissions.find_one({"role": role}):
@@ -631,6 +1113,9 @@ async def seed():
         {"email": os.environ["SALES_EMAIL"], "password": os.environ["SALES_PASSWORD"],
          "name": "Rina Sales", "username": "rina.sales", "role": "sales", "phone": "+62 811 0000 002",
          "branch": "Bandung", "data_scope": "own"},
+        {"email": os.environ["SALES_B_EMAIL"], "password": os.environ["SALES_B_PASSWORD"],
+         "name": "Andi Sales", "username": "andi.sales", "role": "sales", "phone": "+62 811 0000 004",
+         "branch": "Surabaya", "data_scope": "own"},
         {"email": os.environ["ACCOUNTING_EMAIL"], "password": os.environ["ACCOUNTING_PASSWORD"],
          "name": "Budi Accounting", "username": "budi.acc", "role": "accounting", "phone": "+62 811 0000 003",
          "branch": "HQ Jakarta", "data_scope": "all"},
@@ -667,6 +1152,57 @@ async def seed():
             "notification": {"email_enabled": True, "whatsapp_enabled": False},
             "login_page": DEFAULT_LOGIN_PAGE,
         }})
+
+    # Phase 2 demo data (only if empty)
+    if await db.customers.count_documents({}) == 0:
+        sales = await db.users.find_one({"email": os.environ["SALES_EMAIL"]})
+        if sales:
+            sid = str(sales["_id"])
+            sname = sales["name"]
+            sbranch = sales.get("branch", "")
+            demo_customers = [
+                {"full_name": "Ahmad Fauzi", "whatsapp": "+62 812 3456 7890", "email": "ahmad.fauzi@gmail.com",
+                 "gender": "Male", "city": "Bandung", "country": "Indonesia", "customer_type": "Umrah Customer",
+                 "customer_source": "WhatsApp", "tags": ["hot-lead"], "notes": "Interested in Ramadhan Umrah."},
+                {"full_name": "Siti Rahma", "whatsapp": "+62 813 2222 1111", "email": "siti.rahma@gmail.com",
+                 "gender": "Female", "city": "Jakarta", "country": "Indonesia", "customer_type": "VIP",
+                 "customer_source": "Referral", "tags": ["vip"], "notes": "Repeat customer, family of 5."},
+                {"full_name": "Budi Santoso", "whatsapp": "+62 811 9999 0000", "email": "budi.s@gmail.com",
+                 "gender": "Male", "city": "Surabaya", "country": "Indonesia", "customer_type": "Prospect",
+                 "customer_source": "Instagram", "tags": [], "notes": "Asking about Turkey tour."},
+            ]
+            cust_ids = []
+            for i, c in enumerate(demo_customers):
+                c.update({"customer_code": f"CUST-{i + 1:05d}", "sales_pic_id": sid, "sales_pic_name": sname,
+                          "branch": sbranch, "created_at": now_iso(), "created_by": sname})
+                r = await db.customers.insert_one(c)
+                cust_ids.append(str(r.inserted_id))
+            demo_leads = [
+                {"customer_id": cust_ids[0], "customer_name": "Ahmad Fauzi", "source": "WhatsApp",
+                 "interested_package": "Umrah Reguler 9 Hari", "destination": "Makkah & Madinah", "pax": 2,
+                 "budget": 55000000, "departure_date": (datetime.now(timezone.utc) + timedelta(days=45)).date().isoformat(),
+                 "status": "QUALIFIED"},
+                {"customer_id": cust_ids[1], "customer_name": "Siti Rahma", "source": "Referral",
+                 "interested_package": "Umrah Plus Turki 12 Hari", "destination": "Makkah, Madinah, Istanbul", "pax": 5,
+                 "budget": 192500000, "departure_date": (datetime.now(timezone.utc) + timedelta(days=30)).date().isoformat(),
+                 "status": "QUOTATION"},
+                {"customer_id": cust_ids[2], "customer_name": "Budi Santoso", "source": "Instagram",
+                 "interested_package": "Turkey Tour 8 Hari", "destination": "Istanbul, Cappadocia", "pax": 2,
+                 "budget": 40000000, "departure_date": (datetime.now(timezone.utc) + timedelta(days=60)).date().isoformat(),
+                 "status": "NEW"},
+            ]
+            for i, l in enumerate(demo_leads):
+                l.update({"lead_code": f"LEAD-{i + 1:05d}", "sales_pic_id": sid, "sales_pic_name": sname,
+                          "branch": sbranch, "last_contact": now_iso(), "created_at": now_iso(), "next_follow_up": "", "notes": ""})
+                await db.leads.insert_one(l)
+            await db.follow_ups.insert_many([
+                {"customer_id": cust_ids[0], "customer_name": "Ahmad Fauzi", "lead_id": None, "activity_type": "WhatsApp",
+                 "due_date": today_str(), "notes": "Send Umrah brochure", "status": "pending",
+                 "sales_pic_id": sid, "sales_pic_name": sname, "branch": sbranch, "created_at": now_iso()},
+                {"customer_id": cust_ids[1], "customer_name": "Siti Rahma", "lead_id": None, "activity_type": "Call",
+                 "due_date": (datetime.now(timezone.utc) - timedelta(days=2)).date().isoformat(), "notes": "Confirm payment",
+                 "status": "pending", "sales_pic_id": sid, "sales_pic_name": sname, "branch": sbranch, "created_at": now_iso()},
+            ])
 
 
 @app.on_event("startup")

@@ -1,7 +1,7 @@
 import {
   LayoutDashboard, Users2, Briefcase, Package, CalendarCheck, Calculator,
   Receipt, Percent, FileBarChart, Plug, UserCog, Settings, ScrollText,
-  Plane, PlaneTakeoff, Bell, Wallet, TrendingUp,
+  Plane, PlaneTakeoff, Bell, Wallet, TrendingUp, ListChecks,
 } from "lucide-react";
 
 // Route -> permission required (mirrors backend). null = any authenticated user.
@@ -24,6 +24,7 @@ export const ROUTE_PERMS = {
   "/departures": "departures.view",
   "/hpp": "hpp.view",
   "/notifications": "notifications.view",
+  "/follow-ups": "sales.view",
 };
 
 export const MENUS = {
@@ -31,6 +32,7 @@ export const MENUS = {
     { label: "Dashboard", path: "/dashboard", icon: LayoutDashboard },
     { label: "CRM", path: "/crm", icon: Users2 },
     { label: "Sales Management", path: "/sales", icon: Briefcase },
+    { label: "Follow Ups", path: "/follow-ups", icon: ListChecks },
     { label: "Product Management", path: "/products", icon: Package },
     { label: "Booking", path: "/booking", icon: CalendarCheck },
     { label: "Accounting", path: "/accounting", icon: Calculator },
@@ -46,6 +48,7 @@ export const MENUS = {
     { label: "My Dashboard", path: "/dashboard", icon: LayoutDashboard },
     { label: "My CRM", path: "/crm", icon: Users2 },
     { label: "My Sales", path: "/sales", icon: Briefcase },
+    { label: "Follow Ups", path: "/follow-ups", icon: ListChecks },
     { label: "Packages", path: "/packages", icon: Plane },
     { label: "Departures", path: "/departures", icon: PlaneTakeoff },
     { label: "My Commission", path: "/commission", icon: Wallet },

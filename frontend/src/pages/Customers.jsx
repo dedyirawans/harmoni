@@ -1,0 +1,175 @@
+import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import api, { formatApiErrorDetail } from "@/lib/api";
+import { CUSTOMER_TYPES, LEAD_SOURCES, GENDERS, fmtDate } from "@/config/crm";
+import { Card } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Badge } from "@/components/ui/badge";
+import { Textarea } from "@/components/ui/textarea";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogTrigger } from "@/components/ui/dialog";
+import { UserPlus, Search, Loader2, Users2, Phone, Mail } from "lucide-react";
+import { toast } from "sonner";
+
+const EMPTY = {
+  full_name: "", whatsapp: "", email: "", gender: "", date_of_birth: "", nik: "",
+  passport_number: "", passport_expiry: "", address: "", city: "", country: "Indonesia",
+  customer_type: "Prospect", customer_source: "WhatsApp", tags: "", notes: "",
+};
+
+export default function Customers() {
+  const navigate = useNavigate();
+  const [rows, setRows] = useState(null);
+  const [q, setQ] = useState("");
+  const [type, setType] = useState("all");
+  const [open, setOpen] = useState(false);
+  const [form, setForm] = useState(EMPTY);
+  const [saving, setSaving] = useState(false);
+
+  const load = () => {
+    setRows(null);
+    api.get("/customers", { params: { q: q || undefined, customer_type: type } })
+      .then((r) => setRows(r.data)).catch(() => setRows([]));
+  };
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, [type]);
+
+  const set = (k) => (v) => setForm((f) => ({ ...f, [k]: v }));
+
+  const save = async () => {
+    if (!form.full_name.trim()) return toast.error("Full name is required");
+    setSaving(true);
+    try {
+      const payload = { ...form, tags: form.tags ? form.tags.split(",").map((t) => t.trim()).filter(Boolean) : [] };
+      await api.post("/customers", payload);
+      toast.success("Customer created");
+      setOpen(false); setForm(EMPTY); load();
+    } catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); }
+    finally { setSaving(false); }
+  };
+
+  return (
+    <div className="space-y-6" data-testid="customers-page">
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <h1 className="font-display text-3xl font-bold text-slate-900">Customers</h1>
+          <p className="text-slate-500 mt-1">Your customer master — you only see customers assigned to you.</p>
+        </div>
+        <Dialog open={open} onOpenChange={setOpen}>
+          <DialogTrigger asChild>
+            <Button className="bg-blue-600 hover:bg-blue-700" data-testid="add-customer-button">
+              <UserPlus className="h-4 w-4 mr-2" aria-hidden="true" /> Add Customer
+            </Button>
+          </DialogTrigger>
+          <DialogContent className="bg-white max-w-2xl max-h-[90vh] overflow-y-auto" data-testid="customer-dialog">
+            <DialogHeader>
+              <DialogTitle className="font-display">New Customer</DialogTitle>
+              <DialogDescription>Create a customer record assigned to you.</DialogDescription>
+            </DialogHeader>
+            <div className="grid grid-cols-2 gap-4 py-2">
+              <Field label="Full Name *"><Input value={form.full_name} onChange={(e) => set("full_name")(e.target.value)} data-testid="customer-name-input" /></Field>
+              <Field label="WhatsApp"><Input value={form.whatsapp} onChange={(e) => set("whatsapp")(e.target.value)} data-testid="customer-whatsapp-input" /></Field>
+              <Field label="Email"><Input value={form.email} onChange={(e) => set("email")(e.target.value)} data-testid="customer-email-input" /></Field>
+              <Field label="Gender">
+                <Select value={form.gender} onValueChange={set("gender")}>
+                  <SelectTrigger data-testid="customer-gender-select"><SelectValue placeholder="Select" /></SelectTrigger>
+                  <SelectContent className="bg-white">{GENDERS.map((g) => <SelectItem key={g} value={g}>{g}</SelectItem>)}</SelectContent>
+                </Select>
+              </Field>
+              <Field label="Date of Birth"><Input type="date" value={form.date_of_birth} onChange={(e) => set("date_of_birth")(e.target.value)} /></Field>
+              <Field label="NIK"><Input value={form.nik} onChange={(e) => set("nik")(e.target.value)} /></Field>
+              <Field label="Passport Number"><Input value={form.passport_number} onChange={(e) => set("passport_number")(e.target.value)} /></Field>
+              <Field label="Passport Expiry"><Input type="date" value={form.passport_expiry} onChange={(e) => set("passport_expiry")(e.target.value)} /></Field>
+              <Field label="City"><Input value={form.city} onChange={(e) => set("city")(e.target.value)} /></Field>
+              <Field label="Country"><Input value={form.country} onChange={(e) => set("country")(e.target.value)} /></Field>
+              <Field label="Customer Type">
+                <Select value={form.customer_type} onValueChange={set("customer_type")}>
+                  <SelectTrigger data-testid="customer-type-select"><SelectValue /></SelectTrigger>
+                  <SelectContent className="bg-white">{CUSTOMER_TYPES.map((t) => <SelectItem key={t} value={t}>{t}</SelectItem>)}</SelectContent>
+                </Select>
+              </Field>
+              <Field label="Customer Source">
+                <Select value={form.customer_source} onValueChange={set("customer_source")}>
+                  <SelectTrigger data-testid="customer-source-select"><SelectValue /></SelectTrigger>
+                  <SelectContent className="bg-white">{LEAD_SOURCES.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent>
+                </Select>
+              </Field>
+              <Field label="Address" full><Textarea value={form.address} onChange={(e) => set("address")(e.target.value)} /></Field>
+              <Field label="Tags (comma separated)" full><Input value={form.tags} onChange={(e) => set("tags")(e.target.value)} placeholder="vip, hot-lead" /></Field>
+              <Field label="Notes" full><Textarea value={form.notes} onChange={(e) => set("notes")(e.target.value)} /></Field>
+            </div>
+            <DialogFooter>
+              <Button onClick={save} disabled={saving} className="bg-blue-600 hover:bg-blue-700" data-testid="customer-save-button">
+                {saving ? "Saving..." : "Create customer"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      </div>
+
+      <div className="flex items-center gap-3 flex-wrap">
+        <div className="relative flex-1 min-w-[240px]">
+          <Search className="h-4 w-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" aria-hidden="true" />
+          <Input className="pl-9" placeholder="Search name, WhatsApp, email..." value={q}
+            onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.key === "Enter" && load()} data-testid="customer-search-input" />
+        </div>
+        <Select value={type} onValueChange={setType}>
+          <SelectTrigger className="w-52" data-testid="customer-type-filter"><SelectValue /></SelectTrigger>
+          <SelectContent className="bg-white">
+            <SelectItem value="all">All types</SelectItem>
+            {CUSTOMER_TYPES.map((t) => <SelectItem key={t} value={t}>{t}</SelectItem>)}
+          </SelectContent>
+        </Select>
+        <Button variant="outline" onClick={load} data-testid="customer-search-button">Search</Button>
+      </div>
+
+      <Card className="border-slate-200 shadow-sm overflow-hidden">
+        {rows === null ? (
+          <div className="p-12 flex justify-center"><Loader2 className="h-6 w-6 animate-spin text-blue-600" /></div>
+        ) : rows.length === 0 ? (
+          <div className="p-12 text-center text-slate-500">
+            <Users2 className="h-8 w-8 mx-auto text-slate-300" aria-hidden="true" />
+            <p className="mt-2">No customers yet. Add your first customer.</p>
+          </div>
+        ) : (
+          <Table data-testid="customers-table">
+            <TableHeader>
+              <TableRow className="bg-slate-50">
+                <TableHead>Code</TableHead><TableHead>Name</TableHead><TableHead>Contact</TableHead>
+                <TableHead>Type</TableHead><TableHead>City</TableHead><TableHead>Created</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {rows.map((c) => (
+                <TableRow key={c._id} className="hover:bg-slate-50 cursor-pointer" onClick={() => navigate(`/crm/${c._id}`)} data-testid={`customer-row-${c._id}`}>
+                  <TableCell className="font-mono text-xs text-slate-500">{c.customer_code}</TableCell>
+                  <TableCell><div className="font-medium text-slate-900">{c.full_name}</div>
+                    <div className="flex gap-1 mt-1">{(c.tags || []).map((t) => <Badge key={t} variant="outline" className="text-[10px] bg-blue-50 text-blue-700 border-blue-200">{t}</Badge>)}</div>
+                  </TableCell>
+                  <TableCell className="text-slate-600 text-sm">
+                    {c.whatsapp && <div className="flex items-center gap-1"><Phone className="h-3 w-3" aria-hidden="true" />{c.whatsapp}</div>}
+                    {c.email && <div className="flex items-center gap-1 text-slate-400"><Mail className="h-3 w-3" aria-hidden="true" />{c.email}</div>}
+                  </TableCell>
+                  <TableCell><Badge variant="outline" className="bg-slate-100 text-slate-700">{c.customer_type}</Badge></TableCell>
+                  <TableCell className="text-slate-600">{c.city || "—"}</TableCell>
+                  <TableCell className="text-slate-500 text-sm">{fmtDate(c.created_at)}</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+      </Card>
+    </div>
+  );
+}
+
+function Field({ label, children, full }) {
+  return (
+    <div className={`space-y-2 ${full ? "col-span-2" : "col-span-2 sm:col-span-1"}`}>
+      <Label>{label}</Label>
+      {children}
+    </div>
+  );
+}

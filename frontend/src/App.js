@@ -16,6 +16,10 @@ import AuditLog from "@/pages/AuditLog";
 import Settings from "@/pages/Settings";
 import HPP from "@/pages/HPP";
 import Placeholder from "@/pages/Placeholder";
+import Customers from "@/pages/Customers";
+import Customer360 from "@/pages/Customer360";
+import SalesPipeline from "@/pages/SalesPipeline";
+import FollowUps from "@/pages/FollowUps";
 
 const PAGES = {
   "/dashboard": Dashboard,
@@ -23,6 +27,9 @@ const PAGES = {
   "/audit": AuditLog,
   "/settings": Settings,
   "/hpp": HPP,
+  "/crm": Customers,
+  "/sales": SalesPipeline,
+  "/follow-ups": FollowUps,
 };
 
 function App() {
@@ -53,6 +60,19 @@ function App() {
                 />
               );
             })}
+
+            <Route
+              path="/crm/:id"
+              element={
+                <ProtectedRoute>
+                  <DashboardLayout>
+                    <RequirePermission perm="crm.view">
+                      <Customer360 />
+                    </RequirePermission>
+                  </DashboardLayout>
+                </ProtectedRoute>
+              }
+            />
 
             <Route
               path="/forbidden"
