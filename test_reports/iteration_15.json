@@ -1,0 +1,26 @@
+{
+  "summary": "Independent verification of Phase 7 (N8N Integration & AUTO SALES). Backend: re-ran existing test_phase7_n8n_api.py (21/21 PASS) and added new test_phase7_rbac_manual.py (29/29 PASS) covering full RBAC matrix for /api/integrations/n8n/* (GET/PUT config, POST generate, GET api-logs) × {Sales, Accounting, Super Admin}, extra n8n machine-auth reject paths (missing X-API-Key, stale timestamp >5min), all v1 /bookings structured validation error codes (CUSTOMER_NOT_FOUND, PACKAGE_NOT_FOUND, PACKAGE_NOT_ACTIVE, INVALID_PAX, DEPARTURE_NOT_FOUND, PRICE_INVALID, INVALID_TRAVELER), HPP security matrix (Sales /hpp 403, Accounting /hpp 200, HPP fields stripped from Sales /packages), Manual booking flow (Sales quotation -> SA convert -> booking_source=SALES/sales_type=MANUAL/sales_name=Rina Sales/created_by=<user>), and V1 out-of-scope endpoints (/v1/hpp, /v1/users, /v1/audit-logs, /v1/commission-schemes, /v1/tax-rules all 401/404/405). Frontend: verified via Playwright as SA/Sales/Accounting: Integration sidebar item only visible to SA; direct /integration returns 403 Forbidden page for Sales & Accounting; n8n-api-card renders with n8n-base-url, n8n-api-webhook-url, n8n-crm-api-url, n8n-environment, n8n-generate-btn and n8n-api-logs-table; API key shown masked (••••XXXX + CONFIGURED badge); clicking Generate/Rotate reveals new-credentials-box containing api_key, api_secret and webhook_secret once; AUTO SALES purple badge (bg rgb(124,58,237) = violet-600) renders with data-testid=auto-sales-badge-<id> only for AUTO SALES bookings on /booking (not for SALES rows). Manual booking rows (source=SALES) do NOT show the badge — verified side-by-side with AUTO SALES rows.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_phase7_n8n_api.py",
+    "/app/backend/tests/test_phase7_rbac_manual.py",
+    "/app/test_reports/pytest/phase7_rbac_manual.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py is now ~3737 lines. Phase 7 (n8n integration + /api/v1/*) alone adds ~550 lines. Recommend extracting an integrations/n8n router module and a v1 machine-API router to keep the monolith manageable.",
+    "Frontend nav.js has 'Booking' for Super Admin and 'Bookings' for Sales/Accounting — inconsistent label for the same route (/booking). Minor cosmetic.",
+    "The v1 signing helper (`n8n_auth`) uses timestamp skew ±300s and rate limit; consider surfacing the rate limit counter in api-logs for observability (currently only status/latency are captured)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_phase7_rbac_manual.py (new, 29 tests)"
+  ],
+  "success_rate": {"backend": "100% (21/21 existing + 29/29 new)", "frontend": "100% (SA integration page + role RBAC + AUTO SALES badge all verified)"},
+  "test_credentials": "From /app/memory/test_credentials.md — Super Admin dedyirawan18@gmail.com/Admin@123, Sales sales@safarcrm.com/Sales@123, Accounting accounting@safarcrm.com/Account@123.",
+  "seed_data_creation": "Created and deleted: v1 customers with whatsapp +6299[5-9]QATEST, packages QA-N8N-ACTIVE / QA-N8N-DRAFT / QA-MANUAL-PKG / QA-BADGE-PKG(2) / QA-*, bookings with external_booking_id starting QA-, idempotency keys QA-*, matching invoices and travelers. Post-run mongo cleanup confirmed: 4 bookings, 3 customers, 8 packages, 2 idem-keys, 2 invoices removed. n8n credentials were rotated several times during testing — Super Admin should regenerate once before wiring real n8n workflows.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Phase 7 fully verified. To re-run new suite pass -o addopts=\"\" (repo pytest.ini enables xdist which races the module-scoped generate-credentials fixture; module-level xdist_group marker was added but only helps when loadgroup is used, not loadscope). N8N API generate endpoint always rotates the secret — running tests will invalidate any active workflow credentials, so notify the user before rerunning. Manual booking flow test uses SA to call POST /quotations/{id}/convert (booking.manage requires super_admin in current perms).",
+  "rca of the issue": "N/A — no failures. Only quirk: pytest-xdist loadscope splits the module by class across workers so class-scoped fixtures share `n8n_creds` re-issue calls that invalidate the other worker's key. Documented in the test module header; running with -o addopts=\"\" (single process) fully green."
+}

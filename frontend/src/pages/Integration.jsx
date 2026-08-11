@@ -9,7 +9,7 @@ import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
-import { Loader2, Plug, Send, Webhook, MessageCircle, RefreshCw, BellRing } from "lucide-react";
+import { Loader2, Plug, Send, Webhook, MessageCircle, RefreshCw, BellRing, KeyRound, ShieldCheck, Copy } from "lucide-react";
 
 const EVENT_LABELS = {
   "quotation.created": "Quotation dibuat",
@@ -92,7 +92,6 @@ export default function Integration() {
 
   const toggleEvent = (ev, v) => setCfg({ ...cfg, events: { ...cfg.events, [ev]: v } });
   const setTemplate = (k, v) => setCfg({ ...cfg, whatsapp_templates: { ...cfg.whatsapp_templates, [k]: v } });
-
   return (
     <div className="space-y-6" data-testid="integration-page">
       <div className="flex items-center gap-3">
@@ -104,6 +103,8 @@ export default function Integration() {
           <p className="text-slate-500 mt-0.5">Automasi n8n & notifikasi WhatsApp (dikirim melalui n8n).</p>
         </div>
       </div>
+
+      <N8nApiSection canManage={canManage} />
 
       {/* Webhook config */}
       <Card className="border-slate-200 shadow-sm">
@@ -242,5 +243,112 @@ export default function Integration() {
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+/* ---------------- N8N API Credentials + API Logs (Super Admin) ---------------- */
+function N8nApiSection({ canManage }) {
+  const [cfg, setCfg] = useState(null);
+  const [creds, setCreds] = useState(null);
+  const [logs, setLogs] = useState([]);
+  const [saving, setSaving] = useState(false);
+
+  const loadLogs = () => api.get("/integrations/n8n/api-logs").then((r) => setLogs(r.data || [])).catch(() => setLogs([]));
+  useEffect(() => {
+    api.get("/integrations/n8n/api-config").then((r) => setCfg(r.data)).catch(() => setCfg({}));
+    loadLogs();
+  }, []);
+
+  const save = async () => {
+    setSaving(true);
+    try { await api.put("/integrations/n8n/api-config", cfg); toast.success("N8N API config tersimpan"); }
+    catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); } finally { setSaving(false); }
+  };
+  const generate = async () => {
+    if (!window.confirm("Generate ulang kredensial? API Key & Secret lama akan tidak berlaku.")) return;
+    try {
+      const r = await api.post("/integrations/n8n/api-config/generate");
+      setCreds(r.data); toast.success("Kredensial baru dibuat — salin sekarang!");
+      api.get("/integrations/n8n/api-config").then((x) => setCfg(x.data));
+      loadLogs();
+    } catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); }
+  };
+  const copy = (t) => { navigator.clipboard?.writeText(t); toast.success("Disalin"); };
+
+  if (!cfg) return null;
+
+  return (
+    <>
+      <Card className="border-slate-200 shadow-sm" data-testid="n8n-api-card">
+        <CardHeader className="border-b border-slate-100">
+          <CardTitle className="font-display text-lg flex items-center gap-2"><KeyRound className="h-5 w-5 text-indigo-600" /> N8N API Credentials</CardTitle>
+        </CardHeader>
+        <CardContent className="p-5 space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div><Label>N8N Base URL</Label><Input className="mt-1" value={cfg.base_url || ""} disabled={!canManage} onChange={(e) => setCfg({ ...cfg, base_url: e.target.value })} data-testid="n8n-base-url" /></div>
+            <div><Label>Webhook URL</Label><Input className="mt-1" value={cfg.webhook_url || ""} disabled={!canManage} onChange={(e) => setCfg({ ...cfg, webhook_url: e.target.value })} data-testid="n8n-api-webhook-url" /></div>
+            <div><Label>CRM API URL</Label><Input className="mt-1" value={cfg.crm_api_url || ""} disabled={!canManage} onChange={(e) => setCfg({ ...cfg, crm_api_url: e.target.value })} data-testid="n8n-crm-api-url" /></div>
+            <div><Label>Environment</Label><Input className="mt-1" value={cfg.environment || ""} disabled={!canManage} placeholder="production / staging" onChange={(e) => setCfg({ ...cfg, environment: e.target.value })} data-testid="n8n-environment" /></div>
+          </div>
+          <div className="flex flex-wrap items-center gap-3 rounded-lg border border-slate-200 px-4 py-3 bg-slate-50">
+            <ShieldCheck className="h-5 w-5 text-emerald-600" />
+            <span className="text-sm text-slate-600">API Key: <b className="font-mono">{cfg.api_key || "—"}</b></span>
+            <Badge className={cfg.connection_status === "CONFIGURED" ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-slate-100 text-slate-500 border-slate-200"}>{cfg.connection_status || "NOT_CONFIGURED"}</Badge>
+            <span className="text-xs text-slate-400">Secret & Webhook Secret disimpan terenkripsi (Fernet).</span>
+          </div>
+          <div className="flex flex-wrap gap-3">
+            <Button onClick={save} disabled={!canManage || saving} data-testid="n8n-api-save-btn">{saving && <Loader2 className="h-4 w-4 mr-2 animate-spin" />} Simpan</Button>
+            <Button variant="outline" onClick={generate} disabled={!canManage} data-testid="n8n-generate-btn"><RefreshCw className="h-4 w-4 mr-2" /> Generate / Rotate Credentials</Button>
+          </div>
+          {creds && (
+            <div className="rounded-lg border border-amber-300 bg-amber-50 p-4 space-y-2" data-testid="new-credentials-box">
+              <p className="text-sm font-semibold text-amber-800">Simpan sekarang — hanya ditampilkan sekali!</p>
+              {[["API Key", creds.api_key], ["API Secret", creds.api_secret], ["Webhook Secret", creds.webhook_secret]].map(([k, v]) => (
+                <div key={k} className="flex items-center gap-2">
+                  <span className="w-28 text-xs text-slate-500">{k}</span>
+                  <code className="flex-1 text-xs bg-white border border-slate-200 rounded px-2 py-1 break-all">{v}</code>
+                  <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => copy(v)}><Copy className="h-4 w-4" /></Button>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card className="border-slate-200 shadow-sm" data-testid="n8n-api-logs-card">
+        <CardHeader className="border-b border-slate-100 flex flex-row items-center justify-between">
+          <CardTitle className="font-display text-lg">API Request Log</CardTitle>
+          <Button size="sm" variant="ghost" onClick={loadLogs}><RefreshCw className="h-4 w-4 mr-1" /> Refresh</Button>
+        </CardHeader>
+        <CardContent className="p-0">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm" data-testid="n8n-api-logs-table">
+              <thead><tr className="bg-indigo-600 text-white text-left">
+                <th className="px-3 py-2.5">Time</th><th className="px-3 py-2.5 border-l border-indigo-500">Endpoint</th>
+                <th className="px-3 py-2.5 border-l border-indigo-500">Method</th><th className="px-3 py-2.5 border-l border-indigo-500">External ID</th>
+                <th className="px-3 py-2.5 border-l border-indigo-500">Status</th><th className="px-3 py-2.5 border-l border-indigo-500">Code</th>
+                <th className="px-3 py-2.5 border-l border-indigo-500">ms</th><th className="px-3 py-2.5 border-l border-indigo-500">Key</th>
+              </tr></thead>
+              <tbody>
+                {logs.length === 0 ? (
+                  <tr><td colSpan={8} className="px-4 py-8 text-center text-slate-400">Belum ada request API dari n8n.</td></tr>
+                ) : logs.map((l, i) => (
+                  <tr key={l.id || i} className={i % 2 ? "bg-slate-50" : "bg-white"}>
+                    <td className="px-3 py-2.5 text-slate-500 whitespace-nowrap">{(l.timestamp || "").replace("T", " ").slice(0, 19)}</td>
+                    <td className="px-3 py-2.5 font-mono text-xs border-l border-slate-100">{l.endpoint}</td>
+                    <td className="px-3 py-2.5 border-l border-slate-100">{l.method}</td>
+                    <td className="px-3 py-2.5 border-l border-slate-100 font-mono text-xs">{l.external_id || "-"}</td>
+                    <td className="px-3 py-2.5 border-l border-slate-100">{l.status === "success" ? <Badge className="bg-emerald-50 text-emerald-700 border-emerald-200">success</Badge> : <Badge className="bg-red-50 text-red-700 border-red-200">failed</Badge>}</td>
+                    <td className="px-3 py-2.5 border-l border-slate-100">{l.response_code}</td>
+                    <td className="px-3 py-2.5 border-l border-slate-100">{l.processing_time_ms}</td>
+                    <td className="px-3 py-2.5 border-l border-slate-100 font-mono text-xs">{l.api_key_mask}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </CardContent>
+      </Card>
+    </>
   );
 }

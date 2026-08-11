@@ -1538,8 +1538,12 @@ async def package_price(pid: str, pax: int = 1, hotel: Optional[str] = None,
 # ============================================================================
 import uuid as _uuid
 import requests as _requests
-from fastapi import UploadFile, File, Form, Query, Header
-from fastapi.responses import Response
+from fastapi import UploadFile, File, Form, Query, Header, Body
+from fastapi.responses import Response, JSONResponse
+import hmac as _hmac
+import hashlib as _hashlib
+import time as _time
+from cryptography.fernet import Fernet
 from io import BytesIO
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
@@ -1596,8 +1600,10 @@ async def get_settings_dict():
 # ============================================================================
 # PHASE 6 — INTEGRATIONS (n8n webhooks + WhatsApp dispatched via n8n)
 # ============================================================================
-N8N_EVENTS = ["quotation.created", "quotation.sent", "quotation.accepted",
-              "booking.created", "invoice.created", "payment.recorded", "payment.reminder"]
+N8N_EVENTS = ["lead.created", "lead.updated", "quotation.created", "quotation.sent", "quotation.accepted",
+              "booking.created", "booking.updated", "booking.cancelled", "invoice.created",
+              "payment.created", "payment.recorded", "payment.confirmed", "payment.overdue",
+              "payment.reminder", "departure.updated"]
 
 DEFAULT_WA_TEMPLATES = {
     "payment.reminder": "Assalamu'alaikum {customer_name} 🙏\n\nPengingat pembayaran untuk invoice *{invoice_number}*.\nSisa tagihan: *Rp {outstanding}*\nJatuh tempo: *{due_date}* ({stage}).\n\nMohon segera menyelesaikan pembayaran. Terima kasih.\n\n_{company_name}_",
@@ -2027,6 +2033,7 @@ async def convert_to_booking(qid: str, body: dict, request: Request, user: dict 
                "discount_percent": q["discount_percent"], "discount_amount": q["discount_amount"],
                "tax_percent": q.get("tax_percent", 0), "tax_amount": q["tax_amount"], "total": q["total"],
                "payment_schedule": [], "status": "CONFIRMED", "sales_pic_id": q["sales_pic_id"], "sales_pic_name": q["sales_pic_name"],
+               "sales_type": "MANUAL", "sales_user_id": q["sales_pic_id"], "sales_name": q["sales_pic_name"],
                "branch": q.get("branch", ""), "created_at": now_iso(), "created_by": user["name"]}
     res = await db.bookings.insert_one(booking)
     bid = str(res.inserted_id)
@@ -3121,6 +3128,366 @@ async def my_commission(user: dict = Depends(require_permission("commission.view
 
 
 
+# ============================================================================
+# PHASE 7 — N8N INTEGRATION API (machine-to-machine) & AUTO SALES
+# ============================================================================
+_FERNET = Fernet(os.environ["ENCRYPTION_KEY"].encode())
+_N8N_RATE = {}
+N8N_RATE_LIMIT = 120  # requests / 60s per api key
+N8N_TS_WINDOW = 300   # seconds
+
+
+def _enc(s):
+    return _FERNET.encrypt((s or "").encode()).decode()
+
+
+def _dec(s):
+    try:
+        return _FERNET.decrypt((s or "").encode()).decode()
+    except Exception:
+        return ""
+
+
+def _mask(s):
+    return ("••••" + s[-4:]) if s and len(s) >= 4 else ("••••" if s else "")
+
+
+async def _n8n_api_cfg():
+    return await db.n8n_api_config.find_one({"key": "n8n_api"}) or {}
+
+
+async def _api_log(request, endpoint, method, external_id, ok, code, start, error=""):
+    cfg = await _n8n_api_cfg()
+    await db.n8n_api_logs.insert_one({
+        "timestamp": now_iso(), "endpoint": endpoint, "method": method,
+        "request_id": request.headers.get("X-Request-Id") or str(_uuid.uuid4()),
+        "external_id": external_id, "status": "success" if ok else "failed",
+        "response_code": code, "processing_time_ms": round((_time.time() - start) * 1000, 1),
+        "error": (error or "")[:300], "ip": request.client.host if request and request.client else None,
+        "api_key_mask": _mask(cfg.get("api_key", "")),
+    })
+
+
+async def n8n_auth(request: Request):
+    cfg = await _n8n_api_cfg()
+    if not cfg.get("api_key"):
+        raise HTTPException(status_code=401, detail="n8n API not configured")
+    if request.headers.get("X-API-Key", "") != cfg.get("api_key"):
+        raise HTTPException(status_code=401, detail="Invalid API key")
+    ts = request.headers.get("X-Timestamp", "")
+    try:
+        if abs(_time.time() - float(ts)) > N8N_TS_WINDOW:
+            raise HTTPException(status_code=401, detail="Timestamp outside allowed window")
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=401, detail="Invalid timestamp")
+    secret = _dec(cfg.get("api_secret_enc", ""))
+    body = await request.body()
+    expected = _hmac.new(secret.encode(), (ts + "." + body.decode("utf-8")).encode(), _hashlib.sha256).hexdigest()
+    if not _hmac.compare_digest(expected, request.headers.get("X-Signature", "")):
+        raise HTTPException(status_code=401, detail="Invalid signature")
+    now = _time.time()
+    key = cfg.get("api_key")
+    arr = [t for t in _N8N_RATE.get(key, []) if now - t < 60]
+    if len(arr) >= N8N_RATE_LIMIT:
+        raise HTTPException(status_code=429, detail="Rate limit exceeded")
+    arr.append(now)
+    _N8N_RATE[key] = arr
+    return {"n8n": True}
+
+
+def _v1_err(code, msg, http=400):
+    return JSONResponse(status_code=http, content={"success": False, "error_code": code, "message": msg})
+
+
+# ---------- N8N API config (Super Admin only) ----------
+@api_router.get("/integrations/n8n/api-config")
+async def get_n8n_api_config(user: dict = Depends(require_role("super_admin"))):
+    c = await _n8n_api_cfg()
+    return {"base_url": c.get("base_url", ""), "webhook_url": c.get("webhook_url", ""),
+            "crm_api_url": c.get("crm_api_url", ""), "environment": c.get("environment", "production"),
+            "connection_status": c.get("connection_status", "NOT_CONFIGURED"),
+            "api_key": _mask(c.get("api_key", "")), "has_secret": bool(c.get("api_secret_enc")),
+            "has_webhook_secret": bool(c.get("webhook_secret_enc"))}
+
+
+@api_router.put("/integrations/n8n/api-config")
+async def put_n8n_api_config(body: dict, request: Request, user: dict = Depends(require_role("super_admin"))):
+    updates = {k: body.get(k, "") for k in ("base_url", "webhook_url", "crm_api_url", "environment")}
+    updates["updated_at"] = now_iso()
+    await db.n8n_api_config.update_one({"key": "n8n_api"}, {"$set": updates}, upsert=True)
+    await log_audit(user, "integration", "n8n_api_config", request, new={k: updates[k] for k in updates if k != "updated_at"})
+    return await get_n8n_api_config(user)
+
+
+@api_router.post("/integrations/n8n/api-config/generate")
+async def generate_n8n_credentials(request: Request, user: dict = Depends(require_role("super_admin"))):
+    api_key = "n8n_" + secrets.token_hex(16)
+    api_secret = secrets.token_urlsafe(32)
+    webhook_secret = secrets.token_urlsafe(32)
+    await db.n8n_api_config.update_one({"key": "n8n_api"},
+        {"$set": {"api_key": api_key, "api_secret_enc": _enc(api_secret),
+                  "webhook_secret_enc": _enc(webhook_secret), "connection_status": "CONFIGURED",
+                  "updated_at": now_iso()}}, upsert=True)
+    await log_audit(user, "integration", "n8n_generate_credentials", request, new={"api_key": _mask(api_key)})
+    return {"api_key": api_key, "api_secret": api_secret, "webhook_secret": webhook_secret,
+            "note": "Simpan sekarang. Secret hanya ditampilkan sekali."}
+
+
+@api_router.get("/integrations/n8n/api-logs")
+async def get_n8n_api_logs(user: dict = Depends(require_role("super_admin"))):
+    docs = await db.n8n_api_logs.find().sort("timestamp", -1).to_list(200)
+    return [serialize(d) for d in docs]
+
+
+# ---------- N8N MACHINE API /api/v1/* ----------
+@api_router.get("/v1/packages")
+async def v1_packages(request: Request, _n=Depends(n8n_auth)):
+    start = _time.time()
+    docs = await db.packages.find({"status": "ACTIVE"}).to_list(1000)
+    out = [strip_hpp(d, False) for d in docs]
+    await _api_log(request, "/v1/packages", "GET", None, True, 200, start)
+    return {"success": True, "packages": out}
+
+
+@api_router.get("/v1/departures")
+async def v1_departures(request: Request, package_id: Optional[str] = None, _n=Depends(n8n_auth)):
+    start = _time.time()
+    q = {"package_id": package_id} if package_id else {}
+    docs = [compute_departure(serialize(d)) for d in await db.departures.find(q).sort("departure_date", 1).to_list(500)]
+    await _api_log(request, "/v1/departures", "GET", None, True, 200, start)
+    return {"success": True, "departures": docs}
+
+
+@api_router.get("/v1/customers/{cid}")
+async def v1_get_customer(cid: str, request: Request, _n=Depends(n8n_auth)):
+    start = _time.time()
+    c = await db.customers.find_one({"_id": ObjectId(cid)}) if ObjectId.is_valid(cid) else None
+    if not c:
+        await _api_log(request, f"/v1/customers/{cid}", "GET", None, False, 404, start, "not found")
+        return _v1_err("CUSTOMER_NOT_FOUND", "Customer tidak ditemukan", 404)
+    await _api_log(request, f"/v1/customers/{cid}", "GET", None, True, 200, start)
+    return {"success": True, "customer": serialize(c)}
+
+
+@api_router.get("/v1/bookings/{bid}")
+async def v1_get_booking(bid: str, request: Request, _n=Depends(n8n_auth)):
+    start = _time.time()
+    b = await db.bookings.find_one({"_id": ObjectId(bid)}) if ObjectId.is_valid(bid) else None
+    if not b:
+        await _api_log(request, f"/v1/bookings/{bid}", "GET", None, False, 404, start, "not found")
+        return _v1_err("BOOKING_NOT_FOUND", "Booking tidak ditemukan", 404)
+    await _api_log(request, f"/v1/bookings/{bid}", "GET", b.get("external_booking_id"), True, 200, start)
+    return {"success": True, "booking": serialize(b)}
+
+
+@api_router.post("/v1/customers")
+async def v1_create_customer(payload: dict = Body(default={}), request: Request = None, _n=Depends(n8n_auth)):
+    start = _time.time()
+    name = (payload.get("full_name") or "").strip()
+    wa = (payload.get("whatsapp") or payload.get("phone") or "").strip()
+    if not name and not wa:
+        await _api_log(request, "/v1/customers", "POST", None, False, 400, start, "missing name/phone")
+        return _v1_err("INVALID_CUSTOMER", "full_name atau whatsapp wajib diisi")
+    existing = None
+    if wa:
+        existing = await db.customers.find_one({"whatsapp": wa})
+    if not existing and payload.get("email"):
+        existing = await db.customers.find_one({"email": payload.get("email")})
+    if existing:
+        await _api_log(request, "/v1/customers", "POST", None, True, 200, start)
+        return {"success": True, "existing": True, "customer": serialize(existing)}
+    count = await db.customers.count_documents({})
+    doc = {"customer_code": f"CUST-{count + 1:05d}", "full_name": name or wa, "whatsapp": wa,
+           "email": payload.get("email", ""), "city": payload.get("city", ""), "country": payload.get("country", "Indonesia"),
+           "customer_type": payload.get("customer_type", "Prospect"), "customer_source": "N8N",
+           "sales_pic_id": None, "sales_pic_name": "AUTO SALES", "branch": "",
+           "created_at": now_iso(), "created_by": "SYSTEM"}
+    res = await db.customers.insert_one(doc)
+    await _api_log(request, "/v1/customers", "POST", None, True, 201, start)
+    return {"success": True, "existing": False, "customer": serialize(await db.customers.find_one({"_id": res.inserted_id}))}
+
+
+@api_router.post("/v1/leads")
+async def v1_create_lead(payload: dict = Body(default={}), request: Request = None, _n=Depends(n8n_auth)):
+    start = _time.time()
+    cid = payload.get("customer_id")
+    cust = await db.customers.find_one({"_id": ObjectId(cid)}) if cid and ObjectId.is_valid(cid) else None
+    if not cust:
+        await _api_log(request, "/v1/leads", "POST", None, False, 404, start, "customer not found")
+        return _v1_err("CUSTOMER_NOT_FOUND", "Customer tidak ditemukan", 404)
+    count = await db.leads.count_documents({})
+    doc = {"lead_code": f"LEAD-{count + 1:05d}", "customer_id": cid, "customer_name": cust.get("full_name"),
+           "source": "N8N", "interested_package": payload.get("interested_package", ""),
+           "destination": payload.get("destination", ""), "pax": int(payload.get("pax") or 0),
+           "budget": float(payload.get("budget") or 0), "status": "NEW", "sales_pic_id": None,
+           "sales_pic_name": "AUTO SALES", "branch": "", "last_contact": now_iso(), "created_at": now_iso(),
+           "next_follow_up": "", "notes": payload.get("notes", "")}
+    res = await db.leads.insert_one(doc)
+    lead = serialize(await db.leads.find_one({"_id": res.inserted_id}))
+    await log_activity(cid, lead["_id"], "lead_created", "Lead created (n8n)", "AUTO SALES", None)
+    trigger_n8n("lead.created", {"id": lead["_id"], "lead_code": lead["lead_code"], "customer_name": cust.get("full_name")})
+    await _api_log(request, "/v1/leads", "POST", None, True, 201, start)
+    return {"success": True, "lead": lead}
+
+
+@api_router.post("/v1/bookings")
+async def v1_create_booking(payload: dict = Body(default={}), request: Request = None, _n=Depends(n8n_auth)):
+    start = _time.time()
+    ext = payload.get("external_booking_id") or (request.headers.get("X-Idempotency-Key") if request else None)
+    if ext:
+        dup = await db.bookings.find_one({"external_booking_id": ext})
+        if dup:
+            await _api_log(request, "/v1/bookings", "POST", ext, True, 200, start, "idempotent")
+            return {"success": True, "idempotent": True, "booking": serialize(dup)}
+    cid = payload.get("customer_id")
+    cust = await db.customers.find_one({"_id": ObjectId(cid)}) if cid and ObjectId.is_valid(cid) else None
+    if not cust:
+        await _api_log(request, "/v1/bookings", "POST", ext, False, 400, start, "customer not found")
+        return _v1_err("CUSTOMER_NOT_FOUND", "Customer tidak ditemukan")
+    pid = payload.get("package_id")
+    pkg = await db.packages.find_one({"_id": ObjectId(pid)}) if pid and ObjectId.is_valid(pid) else None
+    if not pkg:
+        await _api_log(request, "/v1/bookings", "POST", ext, False, 400, start, "package not found")
+        return _v1_err("PACKAGE_NOT_FOUND", "Package tidak ditemukan")
+    if pkg.get("status") != "ACTIVE":
+        await _api_log(request, "/v1/bookings", "POST", ext, False, 400, start, "package not active")
+        return _v1_err("PACKAGE_NOT_ACTIVE", "Package tidak aktif")
+    pax = int(payload.get("pax") or 0)
+    if pax < 1:
+        await _api_log(request, "/v1/bookings", "POST", ext, False, 400, start, "invalid pax")
+        return _v1_err("INVALID_PAX", "Jumlah pax tidak valid")
+    dep = None
+    did = payload.get("departure_id")
+    if did:
+        dep = await db.departures.find_one({"_id": ObjectId(did)}) if ObjectId.is_valid(did) else None
+        if not dep:
+            await _api_log(request, "/v1/bookings", "POST", ext, False, 400, start, "departure not found")
+            return _v1_err("DEPARTURE_NOT_FOUND", "Departure tidak ditemukan")
+        dep = compute_departure(serialize(dep))
+        if int(dep.get("available_seat") or 0) < pax:
+            await _api_log(request, "/v1/bookings", "POST", ext, False, 400, start, "departure full")
+            return _v1_err("DEPARTURE_FULL", "Departure is fully booked")
+    settings = await get_settings_dict()
+    per_pax = compute_pax_price(pkg, pax)
+    subtotal = per_pax * pax
+    pct, _amt = resolve_category_tax(pkg, settings)
+    tax_amount = round(subtotal * pct / 100)
+    total = subtotal + tax_amount
+    if payload.get("total") is not None and abs(float(payload["total"]) - total) > 1:
+        await _api_log(request, "/v1/bookings", "POST", ext, False, 400, start, "price invalid")
+        return _v1_err("PRICE_INVALID", f"Harga tidak valid. Expected total {total}")
+    travelers = payload.get("travelers") or []
+    for t in travelers:
+        if not (t.get("full_name") or "").strip():
+            await _api_log(request, "/v1/bookings", "POST", ext, False, 400, start, "invalid traveler")
+            return _v1_err("INVALID_TRAVELER", "Data traveler tidak valid (full_name wajib)")
+    number = await next_number((settings.get("numbering") or {}).get("booking_prefix", "BKG"), db.bookings, "booking_number")
+    booking = {"booking_number": number, "quotation_id": None, "customer_id": cid, "customer_name": cust.get("full_name"),
+               "package_id": pid, "package_name": pkg.get("package_name"), "package_version": pkg.get("version", 1),
+               "departure_id": did, "departure_date": (dep or {}).get("departure_date", ""), "pax": pax,
+               "room_type": payload.get("room_type", ""), "addons": [], "booking_source": "AUTO SALES",
+               "sales_type": "AUTO", "sales_user_id": None, "sales_name": "AUTO SALES",
+               "per_pax_price": per_pax, "subtotal": subtotal, "discount_percent": 0, "discount_amount": 0,
+               "tax_percent": pct, "tax_amount": tax_amount, "total": total, "payment_schedule": [],
+               "status": "CONFIRMED", "sales_pic_id": None, "sales_pic_name": "AUTO SALES", "branch": "",
+               "external_booking_id": ext, "workflow_id": payload.get("workflow_id", ""),
+               "created_at": now_iso(), "created_by": "SYSTEM"}
+    res = await db.bookings.insert_one(booking)
+    bid = str(res.inserted_id)
+    for t in travelers:
+        await db.travelers.insert_one({**t, "booking_id": bid, "created_at": now_iso(), "created_by": "SYSTEM"})
+    if did:
+        await db.departures.update_one({"_id": ObjectId(did)}, {"$inc": {"confirmed_pax": pax}})
+    inv_number = await next_number((settings.get("numbering") or {}).get("invoice_prefix", "INV"), db.invoices, "invoice_number")
+    await db.invoices.insert_one({"invoice_number": inv_number, "booking_id": bid, "booking_number": number,
+        "customer_id": cid, "customer_name": cust.get("full_name"), "package_id": pid, "package_name": pkg.get("package_name"),
+        "pax": pax, "amount": subtotal, "discount_amount": 0, "discount_percent": 0, "tax_percent": pct,
+        "tax_amount": tax_amount, "total": total, "paid_amount": 0, "outstanding": total,
+        "due_date": payload.get("due_date", ""), "status": "Unpaid", "sales_pic_id": None,
+        "sales_pic_name": "AUTO SALES", "branch": "", "terms": pkg.get("terms", ""),
+        "created_at": now_iso(), "created_by": "SYSTEM"})
+    if ext:
+        await db.idempotency_keys.update_one({"key": ext}, {"$set": {"booking_id": bid, "created_at": now_iso()}}, upsert=True)
+    trigger_n8n("booking.created", {"id": bid, "booking_number": number, "customer_name": cust.get("full_name"),
+        "customer_phone": cust.get("whatsapp", ""), "total": total, "source": "AUTO SALES"})
+    await _api_log(request, "/v1/bookings", "POST", ext, True, 201, start)
+    return {"success": True, "booking": serialize(await db.bookings.find_one({"_id": res.inserted_id})), "invoice_number": inv_number}
+
+
+@api_router.put("/v1/bookings/{bid}")
+async def v1_update_booking(bid: str, payload: dict = Body(default={}), request: Request = None, _n=Depends(n8n_auth)):
+    start = _time.time()
+    b = await db.bookings.find_one({"_id": ObjectId(bid)}) if ObjectId.is_valid(bid) else None
+    if not b:
+        await _api_log(request, f"/v1/bookings/{bid}", "PUT", None, False, 404, start, "not found")
+        return _v1_err("BOOKING_NOT_FOUND", "Booking tidak ditemukan", 404)
+    updates = {}
+    new_status = payload.get("status")
+    if new_status:
+        if new_status not in ("CONFIRMED", "PENDING", "CANCELLED", "COMPLETED"):
+            return _v1_err("INVALID_STATUS", "Status tidak valid")
+        updates["status"] = new_status
+    for k in ("room_type", "notes"):
+        if k in payload:
+            updates[k] = payload[k]
+    if updates:
+        await db.bookings.update_one({"_id": ObjectId(bid)}, {"$set": updates})
+    if new_status == "CANCELLED":
+        if b.get("departure_id"):
+            await db.departures.update_one({"_id": ObjectId(b["departure_id"])}, {"$inc": {"confirmed_pax": -int(b.get("pax") or 0)}})
+        trigger_n8n("booking.cancelled", {"id": bid, "booking_number": b.get("booking_number")})
+    else:
+        trigger_n8n("booking.updated", {"id": bid, "booking_number": b.get("booking_number"), "status": new_status})
+    await _api_log(request, f"/v1/bookings/{bid}", "PUT", b.get("external_booking_id"), True, 200, start)
+    return {"success": True, "booking": serialize(await db.bookings.find_one({"_id": ObjectId(bid)}))}
+
+
+@api_router.post("/v1/payments")
+async def v1_create_payment(payload: dict = Body(default={}), request: Request = None, _n=Depends(n8n_auth)):
+    start = _time.time()
+    iid = payload.get("invoice_id")
+    inv = None
+    if iid and ObjectId.is_valid(iid):
+        inv = await db.invoices.find_one({"_id": ObjectId(iid)})
+    elif payload.get("booking_id"):
+        inv = await db.invoices.find_one({"booking_id": payload["booking_id"]}, sort=[("created_at", -1)])
+    if not inv:
+        await _api_log(request, "/v1/payments", "POST", None, False, 404, start, "invoice not found")
+        return _v1_err("INVOICE_NOT_FOUND", "Invoice tidak ditemukan", 404)
+    amount = float(payload.get("amount") or 0)
+    if amount <= 0:
+        return _v1_err("INVALID_AMOUNT", "Amount tidak valid")
+    iid = str(inv["_id"])
+    await db.payments.insert_one({"invoice_id": iid, "invoice_number": inv.get("invoice_number"),
+        "booking_id": inv.get("booking_id"), "payment_date": payload.get("payment_date", today_str()),
+        "amount": amount, "payment_method": payload.get("payment_method", "Transfer"),
+        "bank": payload.get("bank", ""), "reference_number": payload.get("reference_number", ""),
+        "notes": payload.get("notes", "n8n"), "attachment_url": "", "recorded_by": "SYSTEM", "created_at": now_iso()})
+    status = await _recompute_invoice_status(iid)
+    trigger_n8n("payment.created", {"invoice_number": inv.get("invoice_number"), "amount": amount, "invoice_status": status})
+    if status == "Paid":
+        trigger_n8n("payment.confirmed", {"invoice_number": inv.get("invoice_number"), "customer_name": inv.get("customer_name")})
+    await _api_log(request, "/v1/payments", "POST", None, True, 201, start)
+    return {"success": True, "invoice_status": status, "invoice_number": inv.get("invoice_number")}
+
+
+@api_router.post("/v1/communications")
+async def v1_create_communication(payload: dict = Body(default={}), request: Request = None, _n=Depends(n8n_auth)):
+    start = _time.time()
+    doc = {"customer_id": payload.get("customer_id"), "lead_id": payload.get("lead_id"),
+           "booking_id": payload.get("booking_id"), "phone": payload.get("phone", ""),
+           "direction": payload.get("direction", "outbound"), "message": payload.get("message", ""),
+           "channel": (payload.get("channel") or "WHATSAPP").upper(), "source": "N8N", "automation": True,
+           "external_message_id": payload.get("external_message_id", ""), "workflow_id": payload.get("workflow_id", ""),
+           "sales_pic_name": "AUTO SALES", "timestamp": now_iso()}
+    res = await db.communications.insert_one(doc)
+    if payload.get("customer_id"):
+        await log_activity(payload.get("customer_id"), payload.get("lead_id"), "communication",
+                           f"WhatsApp ({doc['direction']}) via n8n", doc["message"], None)
+    await _api_log(request, "/v1/communications", "POST", None, True, 201, start)
+    return {"success": True, "communication": serialize(await db.communications.find_one({"_id": res.inserted_id}))}
+
+
 app.include_router(api_router)
 
 app.add_middleware(
@@ -3279,6 +3646,9 @@ async def seed():
     await db.system_settings.update_one(
         {"key": "system", "settings.commission.auto_sales_commission": {"$exists": False}},
         {"$set": {"settings.commission.auto_sales_commission": False}})
+    await db.idempotency_keys.create_index("key", unique=True)
+    await db.bookings.create_index("external_booking_id")
+    await db.n8n_api_logs.create_index("timestamp")
     if await db.tax_masters.count_documents({}) == 0:
         await db.tax_masters.insert_many([
             {"tax_code": "NONTAX", "tax_name": "Non Taxable", "tax_type": "OTHER", "rate": 0, "tax_base": "SELLING_PRICE",

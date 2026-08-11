@@ -1,5 +1,17 @@
 # Safar Travel CRM — Product Requirements (Living Doc)
 
+## Phase 7 — N8N Integration API & AUTO SALES (2026-06) — DONE
+- **N8N API config** (Super Admin only, require_role): base_url, webhook_url, crm_api_url, environment, connection_status, api_key (masked di GET), api_secret & webhook_secret disimpan **terenkripsi Fernet** (ENCRYPTION_KEY di backend/.env). Endpoint: GET/PUT /api/integrations/n8n/api-config, POST .../generate (kredensial ditampilkan sekali), GET .../api-logs. Sales & Accounting → 403.
+- **Machine API `/api/v1/*`** diamankan `n8n_auth`: X-API-Key + X-Signature=HMAC-SHA256(secret, timestamp+"."+body) + X-Timestamp (±300s anti-replay) + X-Idempotency-Key + rate limit 120/60s. Endpoint: POST customers/leads/bookings/payments/communications, PUT bookings/{id}, GET packages/departures/customers/{id}/bookings/{id}. HPP di-strip pada /v1/packages. Tidak ada akses HPP/Tax/Commission/Users/Settings/Audit.
+- **Idempotency**: external_booking_id (+ collection idempotency_keys, unique). Request duplikat → tidak buat booking kedua (return idempotent=true).
+- **AUTO SALES**: booking via n8n → booking_source=AUTO SALES, sales_type=AUTO, sales_user_id=NULL, sales_name="AUTO SALES", created_by="SYSTEM"; auto-buat Invoice; badge ungu AUTO SALES di list Booking. Manual → SALES/MANUAL + user saat ini.
+- **Booking validation** (structured error): CUSTOMER_NOT_FOUND, PACKAGE_NOT_FOUND/NOT_ACTIVE, INVALID_PAX, DEPARTURE_NOT_FOUND/DEPARTURE_FULL, PRICE_INVALID, INVALID_TRAVELER.
+- **Communication log** n8n: source=N8N, automation=true, channel=WHATSAPP, muncul di Customer 360 timeline. **API log** (masked) untuk Super Admin.
+- **Webhook CRM→n8n events** diperluas: lead.created/updated, quotation.*, booking.created/updated/cancelled, invoice.created, payment.created/recorded/confirmed/overdue, payment.reminder, departure.updated.
+- **RBAC final**: VISIBLE ONLY IF PERMITTED + ACCESSIBLE ONLY IF AUTHORIZED, semua divalidasi backend.
+- **Tests**: iteration_15.json — backend 21/21 + 29/29, frontend 100%. Files: test_phase7_n8n_api.py, test_phase7_rbac_manual.py.
+- ⚠️ Generate credentials selalu me-rotate secret; Super Admin generate sekali sebelum wiring workflow n8n asli.
+
 ## Phase 6 — Sales Commission & Monthly Closing (2026-06) — DONE
 - **Rules (user-confirmed)**: tier rate FLAT untuk semua pax berdasar tier total pax sales; tanggal periode ikut Calculation Basis (PAID=tgl lunas, CONFIRMED/BOOKED=tgl booking, COMPLETED=tgl selesai/departure); eligible pax = jumlah traveler booking; sumber = Bookings + Invoices/Payments.
 - **Scheme** (commission_schemes): scheme_name, product_type ALL/UMROH/TOUR/UMROH_PLUS, package_id, effective_from/until, calculation_basis (BOOKED/CONFIRMED/PAID/COMPLETED), tiers [{min_pax,max_pax,rate_per_pax}], auto_sales, status. Edit HANYA Super Admin (require_role); Accounting view-only.

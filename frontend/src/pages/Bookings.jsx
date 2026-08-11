@@ -39,7 +39,12 @@ export default function Bookings() {
                     <p className="font-display text-lg font-bold text-slate-900">{fmtIDR(b.total)}</p>
                     <p className="text-xs text-slate-400">{fmtDate(b.created_at)}</p>
                   </div>
-                  <Badge variant="outline" className={BOOKING_STATUS_COLORS[b.status] || "bg-slate-100"}>{b.status}</Badge>
+                  <div className="flex items-center gap-2">
+                    {b.booking_source === "AUTO SALES" && (
+                      <Badge className="bg-violet-600 text-white border-violet-600" data-testid={`auto-sales-badge-${b._id}`}>AUTO SALES</Badge>
+                    )}
+                    <Badge variant="outline" className={BOOKING_STATUS_COLORS[b.status] || "bg-slate-100"}>{b.status}</Badge>
+                  </div>
                 </CardContent>
               </Card>
             ))}
