@@ -6,6 +6,7 @@ ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
 import logging
+import asyncio
 import secrets
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Annotated, Any
@@ -48,6 +49,7 @@ ALL_PERMISSIONS = [
     "quotation.view", "quotation.manage", "quotation.approve", "booking.manage",
     "traveler.manage", "document.manage", "invoice.view", "invoice.manage",
     "payment.view", "payment.manage", "receivable.view",
+    "hpp.edit", "expense.view", "expense.manage", "refund.manage", "tax.manage", "commission.manage",
 ]
 
 DEFAULT_ROLE_PERMISSIONS = {
@@ -63,6 +65,7 @@ DEFAULT_ROLE_PERMISSIONS = {
         "commission.view", "reports.view", "reports.export", "notifications.view",
         "booking.view", "quotation.view", "invoice.view", "invoice.manage",
         "payment.view", "payment.manage", "receivable.view", "document.manage",
+        "expense.view", "expense.manage", "refund.manage", "tax.manage",
     ],
 }
 
@@ -1590,6 +1593,112 @@ async def get_settings_dict():
     return (doc or {}).get("settings", {})
 
 
+# ============================================================================
+# PHASE 6 — INTEGRATIONS (n8n webhooks + WhatsApp dispatched via n8n)
+# ============================================================================
+N8N_EVENTS = ["quotation.created", "quotation.sent", "quotation.accepted",
+              "booking.created", "invoice.created", "payment.recorded", "payment.reminder"]
+
+DEFAULT_WA_TEMPLATES = {
+    "payment.reminder": "Assalamu'alaikum {customer_name} 🙏\n\nPengingat pembayaran untuk invoice *{invoice_number}*.\nSisa tagihan: *Rp {outstanding}*\nJatuh tempo: *{due_date}* ({stage}).\n\nMohon segera menyelesaikan pembayaran. Terima kasih.\n\n_{company_name}_",
+    "booking.created": "Assalamu'alaikum {customer_name} 🙏\n\nAlhamdulillah booking Anda *{booking_number}* telah dikonfirmasi.\nTotal: *Rp {total}*.\n\nTim kami akan segera menghubungi Anda. Terima kasih.\n\n_{company_name}_",
+    "payment.recorded": "Assalamu'alaikum {customer_name} 🙏\n\nPembayaran *Rp {amount}* untuk invoice *{invoice_number}* telah kami terima. Status: {invoice_status}.\nTerima kasih.\n\n_{company_name}_",
+}
+
+
+def _fmt_rp(v):
+    try:
+        return f"{int(round(float(v or 0))):,}".replace(",", ".")
+    except Exception:
+        return str(v)
+
+
+def _render_template(tmpl, ctx):
+    out = tmpl or ""
+    for k, v in ctx.items():
+        out = out.replace("{" + k + "}", str(v))
+    return out
+
+
+async def _cust_phone(customer_id):
+    if not customer_id:
+        return ""
+    try:
+        c = await db.customers.find_one({"_id": ObjectId(customer_id)})
+    except Exception:
+        c = None
+    return (c or {}).get("whatsapp", "") if c else ""
+
+
+async def _n8n_cfg():
+    s = await get_settings_dict()
+    return s.get("n8n", {}) or {}
+
+
+async def _deliver_n8n(event, data):
+    cfg = await _n8n_cfg()
+    url = cfg.get("webhook_url")
+    log = {"event": event, "data": data, "created_at": now_iso()}
+    if not cfg.get("enabled") or not url:
+        log.update({"ok": False, "skipped": True, "reason": "n8n disabled or webhook URL empty"})
+        await db.n8n_logs.insert_one(log)
+        return serialize(log)
+    events = cfg.get("events") or {}
+    if events.get(event) is False:
+        log.update({"ok": False, "skipped": True, "reason": "event disabled"})
+        await db.n8n_logs.insert_one(log)
+        return serialize(log)
+    payload = {"event": event, "timestamp": now_iso(), "data": data}
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.post(url, json=payload)
+        log.update({"ok": resp.status_code < 400, "status_code": resp.status_code, "response": resp.text[:400]})
+    except Exception as e:
+        log.update({"ok": False, "error": str(e)})
+    await db.n8n_logs.insert_one(log)
+    return serialize(log)
+
+
+def trigger_n8n(event, data):
+    try:
+        asyncio.create_task(_deliver_n8n(event, data))
+    except RuntimeError:
+        pass
+
+
+async def _compute_reminders(user):
+    from datetime import date
+    query = {} if user["role"] != "sales" else {"sales_pic_id": user["_id"]}
+    invs = await db.invoices.find(query).to_list(3000)
+    td = date.fromisoformat(today_str())
+    out = []
+    for inv in invs:
+        await _recompute_invoice_status(str(inv["_id"]))
+        inv = await db.invoices.find_one({"_id": inv["_id"]})
+        if inv.get("status") in ("Paid",) or not inv.get("due_date"):
+            continue
+        try:
+            dd = date.fromisoformat(inv["due_date"][:10])
+        except Exception:
+            continue
+        days_to = (dd - td).days
+        stage = None
+        for h in (30, 14, 7, 3):
+            if days_to == h:
+                stage = f"H-{h}"
+        if days_to == 0:
+            stage = "DUE"
+        if days_to < 0:
+            stage = "OVERDUE"
+        if stage:
+            out.append({"invoice_id": str(inv["_id"]), "invoice_number": inv.get("invoice_number"),
+                        "customer_id": inv.get("customer_id"), "customer_name": inv.get("customer_name"),
+                        "due_date": inv.get("due_date"), "outstanding": inv.get("outstanding"),
+                        "stage": stage, "days_to_due": days_to})
+    return out
+
+
+
 def compute_pax_price(pkg: dict, pax: int, hotel: Optional[str] = None) -> int:
     sub = pkg.get("sub_category")
     base = float(pkg.get("selling_price") or 0)
@@ -1796,6 +1905,9 @@ async def create_quotation(body: QuotationCreate, request: Request, user: dict =
     res = await db.quotations.insert_one(doc)
     new = serialize(await db.quotations.find_one({"_id": res.inserted_id}))
     await log_audit(user, "quotation", "create_quotation", request, record_id=new["_id"], new={"number": number})
+    trigger_n8n("quotation.created", {"id": new["_id"], "quotation_number": number,
+        "customer_name": cust["full_name"], "customer_phone": cust.get("whatsapp", ""),
+        "total": amt.get("total"), "sales_pic": pic_name})
     return new
 
 
@@ -1850,6 +1962,10 @@ async def set_quotation_status(qid: str, body: dict, request: Request, user: dic
             raise HTTPException(status_code=400, detail="Discount belum di-approve")
     await db.quotations.update_one({"_id": ObjectId(qid)}, {"$set": {"status": new_status}})
     await log_audit(user, "quotation", "status", request, record_id=qid, new={"status": new_status})
+    if new_status in ("SENT", "ACCEPTED"):
+        phone = await _cust_phone(q.get("customer_id"))
+        trigger_n8n(f"quotation.{new_status.lower()}", {"id": qid, "quotation_number": q.get("quotation_number"),
+            "customer_name": q.get("customer_name"), "customer_phone": phone, "total": q.get("total")})
     return serialize(await db.quotations.find_one({"_id": ObjectId(qid)}))
 
 
@@ -1916,6 +2032,9 @@ async def convert_to_booking(qid: str, body: dict, request: Request, user: dict 
     bid = str(res.inserted_id)
     await db.quotations.update_one({"_id": ObjectId(qid)}, {"$set": {"converted_booking_id": bid, "status": "CONVERTED"}})
     await log_audit(user, "booking", "convert", request, record_id=bid, new={"number": number})
+    phone = await _cust_phone(q.get("customer_id"))
+    trigger_n8n("booking.created", {"id": bid, "booking_number": number, "customer_name": q["customer_name"],
+        "customer_phone": phone, "total": q.get("total")})
     return serialize(await db.bookings.find_one({"_id": res.inserted_id}))
 
 
@@ -2083,6 +2202,10 @@ async def create_invoice(bid: str, body: dict, request: Request, user: dict = De
     res = await db.invoices.insert_one(doc)
     await _recompute_invoice_status(str(res.inserted_id))
     await log_audit(user, "invoice", "create", request, record_id=str(res.inserted_id), new={"number": number})
+    phone = await _cust_phone(b.get("customer_id"))
+    trigger_n8n("invoice.created", {"id": str(res.inserted_id), "invoice_number": number,
+        "customer_name": b.get("customer_name"), "customer_phone": phone,
+        "total": doc.get("total"), "due_date": due_date})
     return serialize(await db.invoices.find_one({"_id": res.inserted_id}))
 
 
@@ -2198,33 +2321,7 @@ async def receivables(user: dict = Depends(require_permission("receivable.view")
 
 @api_router.get("/payment-reminders")
 async def payment_reminders(user: dict = Depends(require_permission("receivable.view"))):
-    query = {} if user["role"] != "sales" else {"sales_pic_id": user["_id"]}
-    invs = await db.invoices.find(query).to_list(3000)
-    from datetime import date
-    td = date.fromisoformat(today_str())
-    out = []
-    for inv in invs:
-        await _recompute_invoice_status(str(inv["_id"]))
-        inv = await db.invoices.find_one({"_id": inv["_id"]})
-        if inv.get("status") in ("Paid",) or not inv.get("due_date"):
-            continue
-        try:
-            dd = date.fromisoformat(inv["due_date"][:10])
-        except Exception:
-            continue
-        days_to = (dd - td).days
-        stage = None
-        for h in (30, 14, 7, 3):
-            if days_to == h:
-                stage = f"H-{h}"
-        if days_to == 0:
-            stage = "DUE"
-        if days_to < 0:
-            stage = "OVERDUE"
-        if stage:
-            out.append({"invoice_id": str(inv["_id"]), "invoice_number": inv.get("invoice_number"),
-                        "customer_name": inv.get("customer_name"), "due_date": inv.get("due_date"),
-                        "outstanding": inv.get("outstanding"), "stage": stage, "days_to_due": days_to})
+    out = await _compute_reminders(user)
     return {"reminders": out, "generated_at": now_iso()}
 
 
@@ -2234,6 +2331,418 @@ async def booking_config(user: dict = Depends(get_current_user)):
     return {"booking_sources": settings.get("booking_sources", BOOKING_SOURCES),
             "document_types": DOCUMENT_TYPES, "doc_statuses": DOC_STATUSES,
             "discount_approval": settings.get("discount_approval", {"sales_max_percent": 5, "approval_max_percent": 10})}
+
+
+# ============================================================================
+# PHASE 5 — ACCOUNTING, HPP & TAX ENGINE
+# ============================================================================
+import csv as _csv
+from io import StringIO
+from openpyxl import Workbook
+
+EXPENSE_CATEGORIES = ["Flight", "Hotel", "Visa", "Transport", "Guide", "Marketing", "Commission", "Operational", "Refund", "Other"]
+TAX_TYPES = ["PPN", "PPh", "OTHER"]
+TAX_TREATMENTS = ["NON_TAXABLE", "PPN_TERTENTU", "PPN_STANDARD", "CUSTOM_TAX", "UMRAH_MURNI", "UMRAH_PLUS"]
+
+
+def _in_range(dt, frm, to):
+    d = (dt or "")[:10]
+    if frm and d < frm:
+        return False
+    if to and d > to:
+        return False
+    return True
+
+
+# ---------- Tax Master ----------
+class TaxMasterModel(BaseModel):
+    tax_code: str
+    tax_name: str
+    tax_type: str = "PPN"
+    rate: float = 0
+    tax_base: Optional[str] = "SELLING_PRICE"
+    effective_from: str = ""
+    effective_until: Optional[str] = ""
+    treatment: str = "PPN_STANDARD"
+    tax_account: Optional[str] = ""
+    description: Optional[str] = ""
+    active: bool = True
+
+
+@api_router.get("/tax-masters")
+async def list_tax_masters(user: dict = Depends(require_permission("tax.view"))):
+    docs = await db.tax_masters.find({}).sort("effective_from", -1).to_list(500)
+    return [serialize(d) for d in docs]
+
+
+@api_router.post("/tax-masters")
+async def create_tax_master(body: TaxMasterModel, request: Request, user: dict = Depends(require_permission("tax.manage"))):
+    doc = {**body.model_dump(), "created_at": now_iso(), "created_by": user["name"]}
+    res = await db.tax_masters.insert_one(doc)
+    await log_audit(user, "tax", "create_tax_master", request, record_id=str(res.inserted_id), new=body.model_dump())
+    return serialize(await db.tax_masters.find_one({"_id": res.inserted_id}))
+
+
+@api_router.put("/tax-masters/{tid}")
+async def update_tax_master(tid: str, body: TaxMasterModel, request: Request, user: dict = Depends(require_permission("tax.manage"))):
+    old = await db.tax_masters.find_one({"_id": ObjectId(tid)})
+    if not old:
+        raise HTTPException(status_code=404, detail="Tax master not found")
+    await db.tax_masters.update_one({"_id": ObjectId(tid)}, {"$set": body.model_dump()})
+    await log_audit(user, "tax", "update_tax_master", request, record_id=tid, old=serialize(old), new=body.model_dump())
+    return serialize(await db.tax_masters.find_one({"_id": ObjectId(tid)}))
+
+
+@api_router.delete("/tax-masters/{tid}")
+async def delete_tax_master(tid: str, request: Request, user: dict = Depends(require_permission("tax.manage"))):
+    await db.tax_masters.update_one({"_id": ObjectId(tid)}, {"$set": {"active": False}})
+    await log_audit(user, "tax", "deactivate_tax_master", request, record_id=tid)
+    return {"ok": True}
+
+
+@api_router.get("/tax-config")
+async def tax_config(user: dict = Depends(require_permission("tax.view"))):
+    return {"tax_types": TAX_TYPES, "treatments": TAX_TREATMENTS, "tax_bases": ["SELLING_PRICE", "TOUR_PORTION", "DPP", "CUSTOM"]}
+
+
+# ---------- Expense ----------
+class ExpenseModel(BaseModel):
+    category: str
+    amount: float
+    date: str = ""
+    description: Optional[str] = ""
+    vendor: Optional[str] = ""
+    package_id: Optional[str] = None
+    departure_id: Optional[str] = None
+    booking_id: Optional[str] = None
+    notes: Optional[str] = ""
+
+
+@api_router.get("/expenses")
+async def list_expenses(category: Optional[str] = None, user: dict = Depends(require_permission("expense.view"))):
+    q = {} if not category or category == "all" else {"category": category}
+    docs = await db.expenses.find(q).sort("date", -1).to_list(2000)
+    return [serialize(d) for d in docs]
+
+
+@api_router.post("/expenses")
+async def create_expense(body: ExpenseModel, request: Request, user: dict = Depends(require_permission("expense.manage"))):
+    doc = {**body.model_dump(), "date": body.date or today_str(), "created_at": now_iso(), "created_by": user["name"]}
+    res = await db.expenses.insert_one(doc)
+    await log_audit(user, "expense", "create", request, record_id=str(res.inserted_id), new={"category": body.category, "amount": body.amount})
+    return serialize(await db.expenses.find_one({"_id": res.inserted_id}))
+
+
+@api_router.put("/expenses/{eid}")
+async def update_expense(eid: str, body: ExpenseModel, user: dict = Depends(require_permission("expense.manage"))):
+    await db.expenses.update_one({"_id": ObjectId(eid)}, {"$set": body.model_dump()})
+    return serialize(await db.expenses.find_one({"_id": ObjectId(eid)}))
+
+
+@api_router.delete("/expenses/{eid}")
+async def delete_expense(eid: str, user: dict = Depends(require_permission("expense.manage"))):
+    await db.expenses.delete_one({"_id": ObjectId(eid)})
+    return {"ok": True}
+
+
+# ---------- Refund ----------
+class RefundModel(BaseModel):
+    booking_id: Optional[str] = None
+    invoice_id: Optional[str] = None
+    customer_name: Optional[str] = ""
+    amount: float
+    reason: Optional[str] = ""
+    method: Optional[str] = ""
+    date: str = ""
+    status: Optional[str] = "PENDING"
+
+
+@api_router.get("/refunds")
+async def list_refunds(user: dict = Depends(require_permission("refund.manage"))):
+    docs = await db.refunds.find({}).sort("date", -1).to_list(1000)
+    return [serialize(d) for d in docs]
+
+
+@api_router.post("/refunds")
+async def create_refund(body: RefundModel, request: Request, user: dict = Depends(require_permission("refund.manage"))):
+    doc = {**body.model_dump(), "date": body.date or today_str(), "created_at": now_iso(), "created_by": user["name"]}
+    res = await db.refunds.insert_one(doc)
+    await log_audit(user, "refund", "create", request, record_id=str(res.inserted_id), new={"amount": body.amount})
+    return serialize(await db.refunds.find_one({"_id": res.inserted_id}))
+
+
+@api_router.patch("/refunds/{rid}/status")
+async def refund_status(rid: str, body: dict, request: Request, user: dict = Depends(require_permission("refund.manage"))):
+    await db.refunds.update_one({"_id": ObjectId(rid)}, {"$set": {"status": body.get("status", "PENDING")}})
+    return serialize(await db.refunds.find_one({"_id": ObjectId(rid)}))
+
+
+# ---------- Report builders ----------
+async def _invoices_in(frm, to):
+    docs = await db.invoices.find({}).to_list(5000)
+    for d in docs:
+        await _recompute_invoice_status(str(d["_id"]))
+    docs = await db.invoices.find({}).to_list(5000)
+    return [d for d in docs if _in_range(d.get("created_at"), frm, to)]
+
+
+async def report_revenue(frm=None, to=None):
+    invs = await _invoices_in(frm, to)
+    gross = sum(float(i.get("amount") or 0) for i in invs)
+    discount = sum(float(i.get("discount_amount") or 0) for i in invs)
+    tax = sum(float(i.get("tax_amount") or 0) for i in invs)
+    net = gross - discount
+    revenue = sum(float(i.get("total") or 0) for i in invs)
+    exps = [e for e in await db.expenses.find({}).to_list(5000) if _in_range(e.get("date"), frm, to)]
+    cost = sum(float(e.get("amount") or 0) for e in exps)
+    gp = revenue - cost
+    gm = round(gp / revenue * 100, 2) if revenue else 0
+    return {"title": "Revenue Report", "columns": ["Metric", "Amount"],
+            "rows": [["Gross Sales", gross], ["Discount", discount], ["Net Sales", net], ["Tax", tax],
+                     ["Revenue", revenue], ["Cost (Expenses)", cost], ["Gross Profit", gp], ["Gross Margin %", gm]],
+            "summary": {"gross_sales": gross, "discount": discount, "net_sales": net, "tax": tax,
+                        "revenue": revenue, "cost": cost, "gross_profit": gp, "gross_margin": gm}}
+
+
+async def report_tax(frm=None, to=None):
+    invs = await _invoices_in(frm, to)
+    taxable = sum(float(i.get("amount") or 0) for i in invs if float(i.get("tax_amount") or 0) > 0)
+    non_taxable = sum(float(i.get("amount") or 0) for i in invs if float(i.get("tax_amount") or 0) <= 0)
+    dpp = taxable
+    tax_amount = sum(float(i.get("tax_amount") or 0) for i in invs)
+    by_pkg = {}
+    for i in invs:
+        k = i.get("package_name") or "-"
+        b = by_pkg.setdefault(k, {"dpp": 0, "tax": 0})
+        b["dpp"] += float(i.get("amount") or 0) if float(i.get("tax_amount") or 0) > 0 else 0
+        b["tax"] += float(i.get("tax_amount") or 0)
+    by_period = {}
+    for i in invs:
+        k = (i.get("created_at") or "")[:7]
+        by_period[k] = by_period.get(k, 0) + float(i.get("tax_amount") or 0)
+    rows = [[i.get("invoice_number"), i.get("customer_name"), i.get("package_name"),
+             float(i.get("amount") or 0), float(i.get("tax_percent") or 0), float(i.get("tax_amount") or 0)] for i in invs]
+    return {"title": "Tax Report", "columns": ["Invoice", "Customer", "Package", "DPP", "Rate %", "Tax"],
+            "rows": rows,
+            "summary": {"taxable_sales": taxable, "non_taxable_sales": non_taxable, "dpp": dpp, "tax_amount": tax_amount},
+            "by_package": [{"package": k, **v} for k, v in by_pkg.items()],
+            "by_period": [{"period": k, "tax": v} for k, v in sorted(by_period.items())]}
+
+
+async def report_expense(frm=None, to=None):
+    exps = [e for e in await db.expenses.find({}).sort("date", -1).to_list(5000) if _in_range(e.get("date"), frm, to)]
+    by_cat = {}
+    for e in exps:
+        by_cat[e.get("category")] = by_cat.get(e.get("category"), 0) + float(e.get("amount") or 0)
+    rows = [[e.get("date"), e.get("category"), e.get("description"), e.get("vendor"), float(e.get("amount") or 0)] for e in exps]
+    return {"title": "Expense Report", "columns": ["Date", "Category", "Description", "Vendor", "Amount"], "rows": rows,
+            "summary": {"total_expense": sum(float(e.get("amount") or 0) for e in exps)},
+            "by_category": [{"category": k, "amount": v} for k, v in by_cat.items()]}
+
+
+async def report_profitability(frm=None, to=None):
+    invs = await _invoices_in(frm, to)
+    exps = [e for e in await db.expenses.find({}).to_list(5000) if _in_range(e.get("date"), frm, to)]
+    exp_by_pkg = {}
+    for e in exps:
+        if e.get("package_id"):
+            exp_by_pkg[e["package_id"]] = exp_by_pkg.get(e["package_id"], 0) + float(e.get("amount") or 0)
+    by_pkg = {}
+    for i in invs:
+        pid = i.get("package_id")
+        b = by_pkg.setdefault(pid, {"name": i.get("package_name"), "revenue": 0})
+        b["revenue"] += float(i.get("total") or 0)
+    rows = []
+    for pid, b in by_pkg.items():
+        cost = exp_by_pkg.get(pid, 0)
+        gp = b["revenue"] - cost
+        gm = round(gp / b["revenue"] * 100, 2) if b["revenue"] else 0
+        rows.append([b["name"], b["revenue"], cost, gp, gm])
+    return {"title": "Profitability Report", "columns": ["Package", "Revenue", "Cost", "Gross Profit", "Margin %"], "rows": rows}
+
+
+async def report_sales(frm=None, to=None):
+    bks = [b for b in await db.bookings.find({}).sort("created_at", -1).to_list(5000) if _in_range(b.get("created_at"), frm, to)]
+    rows = [[b.get("booking_number"), b.get("customer_name"), b.get("package_name"), b.get("pax"),
+             b.get("sales_pic_name"), b.get("booking_source"), float(b.get("total") or 0)] for b in bks]
+    return {"title": "Sales Report", "columns": ["Booking", "Customer", "Package", "Pax", "Sales", "Source", "Total"], "rows": rows,
+            "summary": {"total_bookings": len(bks), "total_value": sum(float(b.get("total") or 0) for b in bks)}}
+
+
+async def report_receivable_r(frm=None, to=None):
+    invs = await _invoices_in(frm, to)
+    rows = []
+    total_out = 0
+    for i in invs:
+        out = float(i.get("outstanding") or 0)
+        if out > 0:
+            total_out += out
+            rows.append([i.get("invoice_number"), i.get("customer_name"), float(i.get("total") or 0),
+                         float(i.get("paid_amount") or 0), out, i.get("due_date"), i.get("status")])
+    return {"title": "Receivable Report", "columns": ["Invoice", "Customer", "Total", "Paid", "Outstanding", "Due", "Status"],
+            "rows": rows, "summary": {"total_outstanding": total_out}}
+
+
+async def report_hpp_r(frm=None, to=None):
+    pkgs = await db.packages.find({}).to_list(2000)
+    rows = []
+    for p in pkgs:
+        rows.append([p.get("package_name"), norm_type(p.get("product_type")), float(p.get("total_cost") or 0),
+                     float(p.get("cost_per_pax") or 0), float(p.get("selling_price") or 0),
+                     float(p.get("gross_profit") or 0), float(p.get("gross_margin") or 0)])
+    deps = await db.departures.find({}).to_list(2000)
+    dep_rows = [[d.get("departure_code") or str(d.get("_id")), d.get("package_name", ""), d.get("date", ""),
+                 float(d.get("total_cost") or 0), float(d.get("cost_per_pax") or 0)] for d in deps]
+    return {"title": "HPP Report", "columns": ["Package", "Type", "Total Cost", "Cost/Pax", "Selling Price", "Gross Profit", "Margin %"],
+            "rows": rows, "by_departure": dep_rows}
+
+
+REPORTS = {"revenue": (report_revenue, "reports.view"), "tax": (report_tax, "tax.view"),
+           "expense": (report_expense, "expense.view"), "profitability": (report_profitability, "reports.view"),
+           "sales": (report_sales, "reports.view"), "receivable": (report_receivable_r, "receivable.view"),
+           "hpp": (report_hpp_r, "hpp.view")}
+
+
+@api_router.get("/reports/{name}")
+async def get_report(name: str, frm: Optional[str] = None, to: Optional[str] = None, user: dict = Depends(get_current_user)):
+    if name not in REPORTS:
+        raise HTTPException(status_code=404, detail="Report not found")
+    fn, perm = REPORTS[name]
+    up = await perms_of(user)
+    if perm not in up:
+        raise HTTPException(status_code=403, detail="403 Forbidden")
+    return await fn(frm, to)
+
+
+def _fmt_cell(v):
+    return v
+
+
+def export_response(fmt, title, columns, rows):
+    fname = title.replace(" ", "_")
+    if fmt == "csv":
+        sio = StringIO()
+        w = _csv.writer(sio)
+        w.writerow(columns)
+        for r in rows:
+            w.writerow(r)
+        return Response(content=sio.getvalue(), media_type="text/csv",
+                        headers={"Content-Disposition": f"attachment; filename={fname}.csv"})
+    if fmt == "xlsx":
+        wb = Workbook()
+        ws = wb.active
+        ws.title = title[:31]
+        ws.append(columns)
+        for r in rows:
+            ws.append([(_fmt_cell(c)) for c in r])
+        bio = BytesIO()
+        wb.save(bio)
+        return Response(content=bio.getvalue(),
+                        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        headers={"Content-Disposition": f"attachment; filename={fname}.xlsx"})
+    # pdf
+    buf = BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4, topMargin=18 * mm, bottomMargin=18 * mm)
+    styles = getSampleStyleSheet()
+    el = [Paragraph(f"<b>{title}</b>", styles["Heading2"]), Spacer(1, 6 * mm)]
+    data = [columns] + [[str(c) for c in r] for r in rows]
+    t = Table(data, repeatRows=1)
+    t.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1d4ed8")),
+                           ("TEXTCOLOR", (0, 0), (-1, 0), colors.white), ("FONTSIZE", (0, 0), (-1, -1), 8),
+                           ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#cbd5e1")),
+                           ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f1f5f9")])]))
+    el.append(t)
+    doc.build(el)
+    return Response(content=buf.getvalue(), media_type="application/pdf",
+                    headers={"Content-Disposition": f"attachment; filename={fname}.pdf"})
+
+
+@api_router.get("/reports/{name}/export")
+async def export_report(name: str, format: str = "xlsx", frm: Optional[str] = None, to: Optional[str] = None,
+                        authorization: str = Header(None), auth: str = Query(None)):
+    token = authorization[7:] if (authorization or "").startswith("Bearer ") else auth
+    user = await user_from_token(token) if token else None
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    if name not in REPORTS:
+        raise HTTPException(status_code=404, detail="Report not found")
+    fn, perm = REPORTS[name]
+    up = await get_user_permissions(user)
+    if perm not in up and "reports.export" not in up:
+        raise HTTPException(status_code=403, detail="403 Forbidden")
+    rep = await fn(frm, to)
+    fmt = format if format in ("csv", "xlsx", "pdf") else "xlsx"
+    return export_response(fmt, rep["title"], rep["columns"], rep["rows"])
+
+
+# ---------- Commission & n8n settings (Accounting must be 403) ----------
+@api_router.get("/commission-settings")
+async def get_commission_settings(user: dict = Depends(require_permission("commission.manage"))):
+    s = await get_settings_dict()
+    return s.get("commission", {"default_percent": 2.5})
+
+
+@api_router.put("/commission-settings")
+async def put_commission_settings(body: dict, request: Request, user: dict = Depends(require_permission("commission.manage"))):
+    await db.system_settings.update_one({"key": "system"}, {"$set": {"settings.commission": body}})
+    await log_audit(user, "settings", "update_commission", request, new=body)
+    return body
+
+
+@api_router.get("/integrations/n8n")
+async def get_n8n_settings(user: dict = Depends(require_permission("settings.manage"))):
+    s = await get_settings_dict()
+    n = s.get("n8n", {}) or {}
+    return {"webhook_url": n.get("webhook_url", ""), "enabled": bool(n.get("enabled")),
+            "events": {**{e: True for e in N8N_EVENTS}, **(n.get("events") or {})},
+            "whatsapp_templates": {**DEFAULT_WA_TEMPLATES, **(n.get("whatsapp_templates") or {})}}
+
+
+@api_router.put("/integrations/n8n")
+async def put_n8n_settings(body: dict, request: Request, user: dict = Depends(require_permission("settings.manage"))):
+    await db.system_settings.update_one({"key": "system"}, {"$set": {"settings.n8n": body}})
+    await log_audit(user, "settings", "update_n8n", request, new=body)
+    return body
+
+
+@api_router.get("/integrations/n8n/events")
+async def n8n_events_catalog(user: dict = Depends(require_permission("settings.manage"))):
+    return {"events": N8N_EVENTS, "default_templates": DEFAULT_WA_TEMPLATES}
+
+
+@api_router.post("/integrations/n8n/test")
+async def n8n_test(body: dict, request: Request, user: dict = Depends(require_permission("settings.manage"))):
+    event = (body or {}).get("event") or "test.ping"
+    result = await _deliver_n8n(event, {"message": "Test event dari Safar Travel CRM", "triggered_by": user["name"], "sample": True})
+    await log_audit(user, "integration", "n8n_test", request, new={"event": event, "ok": result.get("ok")})
+    return result
+
+
+@api_router.get("/integrations/n8n/logs")
+async def n8n_logs(user: dict = Depends(require_permission("settings.manage"))):
+    docs = await db.n8n_logs.find().sort("created_at", -1).to_list(100)
+    return [serialize(d) for d in docs]
+
+
+@api_router.post("/payment-reminders/dispatch")
+async def dispatch_payment_reminders(request: Request, user: dict = Depends(require_permission("receivable.view"))):
+    cfg = await _n8n_cfg()
+    reminders = await _compute_reminders(user)
+    company = await db.company_settings.find_one({"key": "company"}) or {}
+    tmpl = (cfg.get("whatsapp_templates") or {}).get("payment.reminder") or DEFAULT_WA_TEMPLATES["payment.reminder"]
+    sent = 0
+    for r in reminders:
+        phone = await _cust_phone(r.get("customer_id"))
+        ctx = {"customer_name": r.get("customer_name", ""), "invoice_number": r.get("invoice_number", ""),
+               "outstanding": _fmt_rp(r.get("outstanding")), "due_date": (r.get("due_date") or "")[:10],
+               "stage": r.get("stage", ""), "company_name": company.get("company_name", "Safar Travel")}
+        message = _render_template(tmpl, ctx)
+        res = await _deliver_n8n("payment.reminder", {**r, "customer_phone": phone, "message": message, "channel": "whatsapp"})
+        if res.get("ok"):
+            sent += 1
+    await log_audit(user, "integration", "dispatch_reminders", request, new={"count": len(reminders), "sent": sent})
+    return {"total": len(reminders), "dispatched": sent,
+            "n8n_enabled": bool(cfg.get("enabled") and cfg.get("webhook_url"))}
 
 
 app.include_router(api_router)
@@ -2384,6 +2893,21 @@ async def seed():
     await db.payments.create_index("invoice_id")
     await db.travelers.create_index("booking_id")
     await db.documents.create_index("traveler_id")
+    if await db.tax_masters.count_documents({}) == 0:
+        await db.tax_masters.insert_many([
+            {"tax_code": "NONTAX", "tax_name": "Non Taxable", "tax_type": "OTHER", "rate": 0, "tax_base": "SELLING_PRICE",
+             "effective_from": "2024-01-01", "effective_until": "", "treatment": "NON_TAXABLE", "tax_account": "",
+             "description": "Umrah murni / non taxable", "active": True, "created_at": now_iso(), "created_by": "system"},
+            {"tax_code": "PPN11", "tax_name": "PPN Standard 11%", "tax_type": "PPN", "rate": 11, "tax_base": "DPP",
+             "effective_from": "2024-01-01", "effective_until": "", "treatment": "PPN_STANDARD", "tax_account": "2100",
+             "description": "PPN standar", "active": True, "created_at": now_iso(), "created_by": "system"},
+            {"tax_code": "PPN11T", "tax_name": "PPN Besaran Tertentu 1.1%", "tax_type": "PPN", "rate": 1.1, "tax_base": "SELLING_PRICE",
+             "effective_from": "2024-01-01", "effective_until": "", "treatment": "PPN_TERTENTU", "tax_account": "2100",
+             "description": "PPN besaran tertentu paket tour", "active": True, "created_at": now_iso(), "created_by": "system"},
+            {"tax_code": "UMRPLUS", "tax_name": "Umrah Plus 1.1%", "tax_type": "PPN", "rate": 1.1, "tax_base": "TOUR_PORTION",
+             "effective_from": "2024-01-01", "effective_until": "", "treatment": "UMRAH_PLUS", "tax_account": "2100",
+             "description": "Umrah plus - porsi tour", "active": True, "created_at": now_iso(), "created_by": "system"},
+        ])
     if await db.packages.count_documents({}) == 0:
         umrah = {
             "package_code": "UMR-0001", "package_name": "Umrah Reguler 9 Hari", "product_type": "UMRAH",

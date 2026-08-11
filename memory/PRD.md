@@ -1,5 +1,21 @@
 # Safar Travel CRM — Product Requirements (Living Doc)
 
+## Phase 6 — Integrations: n8n + WhatsApp (2026-06) — DONE
+- WhatsApp dikirim VIA n8n saja (backend POST JSON ke webhook n8n; n8n teruskan ke WA). User punya instance n8n sendiri.
+- Config n8n (Super Admin only, perm settings.manage): webhook_url, enabled, per-event toggles, WhatsApp templates. Page baru `/integration` (perm integration.view, super_admin).
+- Event auto-trigger (fire-and-forget via asyncio): quotation.created, quotation.sent, quotation.accepted, booking.created, invoice.created, payment.recorded. Setiap kiriman dicatat di collection `n8n_logs` (ok/skipped/error, status_code, payload) — tercatat walau n8n disabled (skipped=true).
+- Payment reminder dispatch: POST /api/payment-reminders/dispatch hitung invoice H-30/H-14/H-7/H-3/DUE/OVERDUE, render template WA (placeholder {customer_name}{invoice_number}{outstanding}{due_date}{stage}{company_name}) + nomor WA customer, kirim ke n8n. Return {total, dispatched, n8n_enabled}.
+- Endpoints: GET/PUT /api/integrations/n8n, GET /api/integrations/n8n/events, POST /api/integrations/n8n/test, GET /api/integrations/n8n/logs, POST /api/payment-reminders/dispatch.
+- RBAC: semua endpoint n8n = settings.manage (Sales & Accounting → 403). Verified iteration_13.json (backend 16/16, frontend 100%).
+- Fix: dedupe menu "Accounting" ganda di nav super_admin.
+
+## Phase 5 — Accounting, HPP & Tax Engine (2026-06) — DONE
+- Accounting Workspace (/accounting) tabs: Dashboard (Gross Sales/Discount/Net/Tax/Revenue/Cost/Gross Profit/Margin), Invoice, Receivable, Expense (CRUD), Refund (CRUD), HPP report, Tax, Reports.
+- Tax Master fully configurable (Tax Code/Name/Type/Rate/Base/Effective From-Until/Treatment/Account/Active), no hardcoded rates, all changes audit-logged; treatments NON_TAXABLE/PPN_TERTENTU/PPN_STANDARD/CUSTOM_TAX/UMRAH_MURNI/UMRAH_PLUS. Seeded 4 defaults.
+- Reports: revenue, tax (taxable/non-taxable/DPP/by package/by period/reconciliation), expense, profitability, sales, receivable, hpp — export Excel(openpyxl)/CSV/PDF(reportlab).
+- New perms: hpp.edit, expense.view/manage, refund.manage, tax.manage, commission.manage. Security matrix verified: Sales→HPP/Tax/Accounting=403; Accounting→n8n(settings.manage)/Commission(commission.manage)=403; SA full.
+- New collections: tax_masters, expenses, refunds. Tests: backend curl full pass; frontend 100% (iteration_12.json).
+
 ## Feature: Discount type + Super-Admin-only approval (2026-06)
 - Quotation discount kini bisa PERCENT (%) atau AMOUNT (Rp nominal); backend hitung discount_amount + ekuivalen % untuk threshold approval.
 - Approval super-admin-only: PATCH /quotations/{id}/status ACCEPTED butuh perm quotation.approve (403 utk Sales); discount-approval juga quotation.approve. Sales hanya buat/edit quotation. UI: tombol Accept & Approve/Reject hanya untuk Super Admin. Verified iteration_11.json (frontend 100%).

@@ -1,0 +1,35 @@
+{
+  "summary": "Phase 6 (n8n WhatsApp integration) tested end-to-end. Backend: 16/16 pytest tests pass covering GET/PUT/GET-events/POST-test/GET-logs/POST-payment-reminders-dispatch, RBAC 403 for Sales & Accounting on all 4 endpoints (8 param cases), event auto-trigger on POST /api/quotations writes a quotation.created log entry (verified against logs). Config persistence verified via GET-after-PUT. Test endpoint returns ok=false + skipped=true when disabled. Logs are JSON-serializable (no ObjectId leak). Payment reminder dispatch returns {total, dispatched, n8n_enabled} and does not crash on 0 due invoices. Frontend: Super Admin sees 'Integration' sidebar menu; /integration page renders with data-testid=integration-page and all required testids present: n8n-webhook-url, n8n-enabled-switch (aria-checked toggling), n8n-save-btn, n8n-test-btn, wa-save-btn, dispatch-reminders-btn, refresh-logs-btn, n8n-logs-table, 7 event-toggle-* switches, 3 wa-template-* textareas. Saving config triggers Indonesian toast 'Konfigurasi n8n tersimpan'. Test event, dispatch reminders, refresh logs all work and populate the log table (4 rows observed). RBAC frontend: Sales user does NOT see 'Integration' in sidebar; direct nav to /integration renders a clean '403 — Forbidden' page (integration-page not mounted). Cleanup performed: webhook_url reset to empty and enabled=false at the end of both API and UI runs.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Super Admin sidebar", "issues": ["React console warning: 'Encountered two children with the same key, Accounting' — the sidebar renders two menu items keyed 'Accounting' (visible as duplicated Accounting rows in nav). Pre-existing (iteration_12 noted it) and still present. Non-blocking but should be fixed by de-duping nav config or making keys unique."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_phase6_n8n.py",
+    "/app/test_reports/pytest/phase6_results.xml"
+  ],
+  "action_items": [
+    "Fix duplicate 'Accounting' entry in /app/frontend/src/config/nav.js (two menu entries with the same key/label produce React duplicate-key warning and visually duplicated sidebar row for Super Admin)."
+  ],
+  "critical_code_review_comments": [
+    "Phase 6 backend routes (get_n8n_settings, put_n8n_settings, n8n_test, n8n_logs, dispatch_payment_reminders) correctly enforce settings.manage; RBAC via require_permission consistently returns 403 for Sales/Accounting.",
+    "trigger_n8n writes a delivery log even when disabled (skipped=true) — good for observability. Log serialization strips ObjectId (_id -> string) as required.",
+    "server.py continues to grow beyond 3000 lines; Phase 6 helpers could live in a routers/integrations.py module for maintainability.",
+    "Frontend Integration page: enabled Switch uses aria-checked properly and testids are complete; no error states observed."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_phase6_n8n.py (new)",
+    "/app/test_reports/pytest/phase6_results.xml (new)"
+  ],
+  "success_rate": {"backend": "100% (16/16)", "frontend": "100% of Phase 6 flows"},
+  "test_credentials": "Used provided seeded accounts: dedyirawan18@gmail.com/Admin@123, sales@safarcrm.com/Sales@123, accounting@safarcrm.com/Account@123.",
+  "seed_data_creation": "Created one TEST quotation to exercise quotation.created event trigger; created several n8n delivery log entries (skipped=true) via test event + dispatch. Config was left cleaned: webhook_url='' and enabled=false.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Phase 6 verified end-to-end. n8n config persisted cleanly (empty URL, disabled). Log collection may contain multiple entries from this run (event=payment.reminder skipped=true and quotation.created skipped=true) — safe to keep. The pre-existing duplicate 'Accounting' sidebar bug (React duplicate key warning) is still present, tracked from iteration_12; not scope for this iteration.",
+  "rca of the issue": "No blocking issues. Only design nit: duplicate 'Accounting' menu entry in nav config -> fix by de-duplicating entries or using unique keys in nav.js render."
+}

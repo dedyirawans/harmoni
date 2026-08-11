@@ -27,6 +27,7 @@ import Quotations from "@/pages/Quotations";
 import Bookings from "@/pages/Bookings";
 import BookingDetail from "@/pages/BookingDetail";
 import Accounting from "@/pages/Accounting";
+import Integration from "@/pages/Integration";
 
 const PAGES = {
   "/dashboard": Dashboard,
@@ -43,6 +44,7 @@ const PAGES = {
   "/quotations": Quotations,
   "/booking": Bookings,
   "/accounting": Accounting,
+  "/integration": Integration,
 };
 
 function App() {
