@@ -930,6 +930,8 @@ async def move_stage(lid: str, body: StageUpdate, request: Request, user: dict =
     doc = await db.leads.find_one({"_id": ObjectId(lid)})
     if not doc or not can_access_record(user, doc):
         raise HTTPException(status_code=403, detail="403 Forbidden")
+    if user["role"] != "super_admin" and doc.get("sales_pic_id") != user["_id"]:
+        raise HTTPException(status_code=403, detail="403 Forbidden: only the assigned sales or super admin can move this lead")
     old_stage = doc.get("status")
     await db.leads.update_one({"_id": ObjectId(lid)}, {"$set": {"status": body.stage, "last_contact": now_iso()}})
     await db.sales_pipeline.insert_one({

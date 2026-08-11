@@ -1,0 +1,26 @@
+{
+  "summary": "Re-verified Sales Pipeline stage-move enhancement (dropdown + drag&drop + owner/super-admin RBAC). Backend: 5/5 new pipeline tests PASS (owner move 200 + persistence, super_admin move any 200, Sales B move Sales A's lead 403, HPP still 403 for Sales, create-lead regression). Frontend: All UI acceptance criteria pass on /sales. Sales A sees 3-column Kanban grid (9 columns total across rows), 5 own lead cards, cards have draggable=true, moved a card via per-card move-stage-<id> dropdown from QUALIFIED to CONTACTED and change persisted after full page reload. Super Admin sees all leads, dropdown enabled (not disabled), moved a lead to NEGOTIATION and persisted. Sales B sees 0 lead cards (scope=own). Regression: add-lead-button opens dialog, lead-save-button creates a NEW lead that appears in kanban-col-NEW immediately (test lead cleaned up via API). Native HTML5 DnD not simulated (per instructions - draggable attribute presence verified instead).",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": { "ui_bugs": [], "integration_issues": [], "design_issues": [] },
+  "test_report_links": [
+    "/app/backend/tests/test_pipeline_move.py",
+    "/app/test_reports/pytest/pipeline_move.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "SalesPipeline.jsx canMove uses user._id === lead.sales_pic_id and role check - matches backend logic in move_stage() at server.py:933. Consistent enforcement.",
+    "Backend move_stage returns 403 with message 'Only the assigned sales or super admin can move this lead' - verified via API for non-owner Sales B.",
+    "Drag & drop uses native HTML5 events; onDragOver only sets dropCol when draggedId is set (prevents cross-page ghost drops). Column onDrop calls move() which re-checks canMove client-side and backend enforces authoritatively.",
+    "Minor: leftover TEST_UI_L_416072 lead in LOST column from previous iteration (Sales A). Not blocking. Consider cleanup.",
+    "server.py still 1216 lines (already flagged prior). No new bloat from this change - only ~2 lines added in move_stage()."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_pipeline_move.py (new - 5 tests for pipeline RBAC + regression)"
+  ],
+  "success_rate": { "backend": "100% (5/5 pipeline move tests)", "frontend": "100% (all acceptance criteria verified)" },
+  "test_credentials": "Admin dedyirawan18@gmail.com/Admin@123; SalesA sales@safarcrm.com/Sales@123; SalesB salesb@safarcrm.com/SalesB@123",
+  "seed_data_creation": "Created and deleted TEST_UI_pipeline_regression lead via UI (auto-cleaned via API). API test creates/deletes TEST_PIPELINE_regression lead. Moved stages restored to originals after each test.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Pipeline move RBAC tests live at /app/backend/tests/test_pipeline_move.py. Login response uses 'token' key (not 'access_token'). PATCH /api/leads/{id}/stage body: {stage: 'NEW|CONTACTED|QUALIFIED|QUOTATION|NEGOTIATION|BOOKING|PAID|COMPLETED|LOST'}. Frontend testids stable: kanban-board, kanban-col-<STAGE>, lead-card-<id>, move-stage-<id>, add-lead-button, lead-save-button, lead-dialog, lead-package-input. Sales B has zero leads by design (scope=own)."
+}
