@@ -1,5 +1,16 @@
 # Safar Travel CRM — Product Requirements (Living Doc)
 
+## Phase 6 — Sales Commission & Monthly Closing (2026-06) — DONE
+- **Rules (user-confirmed)**: tier rate FLAT untuk semua pax berdasar tier total pax sales; tanggal periode ikut Calculation Basis (PAID=tgl lunas, CONFIRMED/BOOKED=tgl booking, COMPLETED=tgl selesai/departure); eligible pax = jumlah traveler booking; sumber = Bookings + Invoices/Payments.
+- **Scheme** (commission_schemes): scheme_name, product_type ALL/UMROH/TOUR/UMROH_PLUS, package_id, effective_from/until, calculation_basis (BOOKED/CONFIRMED/PAID/COMPLETED), tiers [{min_pax,max_pax,rate_per_pax}], auto_sales, status. Edit HANYA Super Admin (require_role); Accounting view-only.
+- **Monthly Closing** (commission_closings): status OPEN→CALCULATING→REVIEW→APPROVED→CLOSED→PAID. Calculate menghitung lines+items; CLOSED mengunci (recalc/adjustment 400). REOPEN hanya Super Admin. Set PAID menandai semua line payment_status=PAID.
+- **Report lines** (commission_lines): Sales, Total Pax, Tier, Rate, Total Commission, Adjustment (editable sebelum CLOSED), Final Commission, Payment Status. Drill-down per sales (commission_items).
+- **Anti-duplikasi**: unique index (booking_id, traveler_id, period); traveler yang sudah masuk periode lain di-skip → tidak double-count antar bulan.
+- **AUTO SALES**: booking source AUTO SALES tidak dapat komisi kecuali setting auto_sales_commission=ON (default OFF, Super Admin only) + scheme khusus auto_sales.
+- **RBAC**: scheme edit/settings PUT/reopen = super_admin only; calculate/close/report/adjust/payment = commission.manage (Accounting kini punya commission.manage); /commissions/my = commission.view (Sales lihat milik sendiri). Legacy PUT /commission-settings dikunci super_admin.
+- **Frontend** `/commission` (Commission.jsx): SA/Accounting → tab Monthly Closing + Commission Scheme (+ Settings SA only); Sales → My Commission (4 kartu + previous closing).
+- **Acceptance test PASS**: A=5→Rp500k(0-9), B=12→Rp1.8jt(10-19), C=25→Rp6.25jt(20+); Sept exclude Aug-closed; CLOSED recalc ditolak. Tests: iteration_14.json (backend 19/19, frontend 100%), test_commission_acceptance.py.
+
 ## Phase 6 — Integrations: n8n + WhatsApp (2026-06) — DONE
 - WhatsApp dikirim VIA n8n saja (backend POST JSON ke webhook n8n; n8n teruskan ke WA). User punya instance n8n sendiri.
 - Config n8n (Super Admin only, perm settings.manage): webhook_url, enabled, per-event toggles, WhatsApp templates. Page baru `/integration` (perm integration.view, super_admin).

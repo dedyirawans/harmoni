@@ -62,7 +62,7 @@ DEFAULT_ROLE_PERMISSIONS = {
     ],
     "accounting": [
         "accounting.view", "transactions.view", "hpp.view", "tax.view", "product.view",
-        "commission.view", "reports.view", "reports.export", "notifications.view",
+        "commission.view", "commission.manage", "reports.view", "reports.export", "notifications.view",
         "booking.view", "quotation.view", "invoice.view", "invoice.manage",
         "payment.view", "payment.manage", "receivable.view", "document.manage",
         "expense.view", "expense.manage", "refund.manage", "tax.manage",
@@ -2683,10 +2683,14 @@ async def get_commission_settings(user: dict = Depends(require_permission("commi
 
 
 @api_router.put("/commission-settings")
-async def put_commission_settings(body: dict, request: Request, user: dict = Depends(require_permission("commission.manage"))):
-    await db.system_settings.update_one({"key": "system"}, {"$set": {"settings.commission": body}})
+async def put_commission_settings(body: dict, request: Request, user: dict = Depends(require_role("super_admin"))):
+    if "default_percent" in (body or {}):
+        await db.system_settings.update_one({"key": "system"}, {"$set": {"settings.commission.default_percent": body.get("default_percent")}})
+    if "auto_sales_commission" in (body or {}):
+        await db.system_settings.update_one({"key": "system"}, {"$set": {"settings.commission.auto_sales_commission": bool(body.get("auto_sales_commission"))}})
     await log_audit(user, "settings", "update_commission", request, new=body)
-    return body
+    s = await get_settings_dict()
+    return s.get("commission", {})
 
 
 @api_router.get("/integrations/n8n")
@@ -2743,6 +2747,378 @@ async def dispatch_payment_reminders(request: Request, user: dict = Depends(requ
     await log_audit(user, "integration", "dispatch_reminders", request, new={"count": len(reminders), "sent": sent})
     return {"total": len(reminders), "dispatched": sent,
             "n8n_enabled": bool(cfg.get("enabled") and cfg.get("webhook_url"))}
+
+
+# ============================================================================
+# PHASE 6 — SALES COMMISSION & MONTHLY CLOSING
+# ============================================================================
+COMMISSION_BASES = ["BOOKED", "CONFIRMED", "PAID", "COMPLETED"]
+CLOSING_STATUSES = ["OPEN", "CALCULATING", "REVIEW", "APPROVED", "CLOSED", "PAID"]
+COMMISSION_PRODUCT_TYPES = ["ALL", "UMROH", "TOUR", "UMROH_PLUS"]
+
+
+class CommissionTier(BaseModel):
+    min_pax: int = 0
+    max_pax: Optional[int] = None
+    rate_per_pax: float = 0
+
+
+class CommissionScheme(BaseModel):
+    scheme_name: str
+    product_type: str = "ALL"
+    package_id: Optional[str] = ""
+    effective_from: Optional[str] = ""
+    effective_until: Optional[str] = ""
+    calculation_basis: str = "PAID"
+    tiers: List[dict] = []
+    auto_sales: bool = False
+    status: str = "ACTIVE"
+
+
+def _period_bounds(period: str):
+    import calendar
+    y, m = int(period[:4]), int(period[5:7])
+    last = calendar.monthrange(y, m)[1]
+    return f"{period}-01", f"{period}-{last:02d}"
+
+
+def _tier_for(tiers, pax):
+    best = None
+    for t in sorted(tiers or [], key=lambda x: int(x.get("min_pax", 0) or 0)):
+        mn = int(t.get("min_pax", 0) or 0)
+        mx = t.get("max_pax")
+        mx = int(mx) if mx not in (None, "", 0, "0") else None
+        if pax >= mn and (mx is None or pax <= mx):
+            best = t
+    if best is None:
+        return 0.0, "-"
+    mx = best.get("max_pax")
+    label = f"{best.get('min_pax', 0)}-{mx if mx not in (None, '', 0, '0') else '∞'}"
+    return float(best.get("rate_per_pax", 0) or 0), label
+
+
+def _scheme_matches(s, is_auto, product_type, package_id):
+    if bool(s.get("auto_sales")) != is_auto:
+        return False
+    pt = s.get("product_type", "ALL")
+    if pt not in ("ALL", "", None) and pt != product_type:
+        return False
+    pkg = s.get("package_id")
+    if pkg and pkg != package_id:
+        return False
+    return True
+
+
+def _scheme_rank(s):
+    r = 0
+    if s.get("package_id"):
+        r += 2
+    if s.get("product_type") not in ("ALL", "", None):
+        r += 1
+    return r
+
+
+async def _booking_eligibility(booking, basis):
+    status = booking.get("status")
+    if status == "CANCELLED":
+        return False, None
+    bid = str(booking["_id"])
+    if basis == "BOOKED":
+        return True, (booking.get("created_at") or "")[:10]
+    if basis == "CONFIRMED":
+        if status in ("CONFIRMED", "COMPLETED"):
+            return True, (booking.get("confirmed_at") or booking.get("created_at") or "")[:10]
+        return False, None
+    if basis == "COMPLETED":
+        if status == "COMPLETED":
+            return True, (booking.get("completed_at") or booking.get("departure_date") or booking.get("created_at") or "")[:10]
+        return False, None
+    if basis == "PAID":
+        invs = await db.invoices.find({"booking_id": bid}).to_list(50)
+        if not invs:
+            return False, None
+        paid_dates, all_paid = [], True
+        for inv in invs:
+            await _recompute_invoice_status(str(inv["_id"]))
+            inv = await db.invoices.find_one({"_id": inv["_id"]})
+            if inv.get("status") != "Paid":
+                all_paid = False
+            for p in await db.payments.find({"invoice_id": str(inv["_id"])}).to_list(200):
+                if p.get("payment_date"):
+                    paid_dates.append(p["payment_date"][:10])
+        if not all_paid or not paid_dates:
+            return False, None
+        return True, max(paid_dates)
+    return False, None
+
+
+async def _compute_period(period, only_sales_id=None):
+    settings = await get_settings_dict()
+    auto_on = bool((settings.get("commission") or {}).get("auto_sales_commission", False))
+    schemes = [serialize(s) for s in await db.commission_schemes.find({"status": "ACTIVE"}).to_list(500)]
+    start, end = _period_bounds(period)
+    claimed = set()
+    async for it in db.commission_items.find({"period": {"$ne": period}}):
+        claimed.add((it.get("booking_id"), it.get("traveler_id")))
+    q = {} if not only_sales_id else {"sales_pic_id": only_sales_id}
+    bookings = await db.bookings.find(q).to_list(5000)
+    sales_map = {}
+    for b in bookings:
+        if b.get("status") == "CANCELLED":
+            continue
+        bid = str(b["_id"])
+        is_auto = (b.get("booking_source") == "AUTO SALES")
+        if is_auto and not auto_on:
+            continue
+        pkg = await db.packages.find_one({"_id": ObjectId(b["package_id"])}) if b.get("package_id") else None
+        product_type = norm_type((pkg or {}).get("product_type") or "")
+        cands = [s for s in schemes if _scheme_matches(s, is_auto, product_type, b.get("package_id"))]
+        cands.sort(key=lambda s: (_scheme_rank(s), s.get("effective_from") or ""), reverse=True)
+        chosen, bdate = None, None
+        for s in cands:
+            elig, d = await _booking_eligibility(b, s.get("calculation_basis", "PAID"))
+            if not elig or not d:
+                continue
+            ef, eu = s.get("effective_from") or "", s.get("effective_until") or ""
+            if ef and d < ef:
+                continue
+            if eu and d > eu:
+                continue
+            chosen, bdate = s, d
+            break
+        if not chosen or not (start <= bdate <= end):
+            continue
+        travelers = await db.travelers.find({"booking_id": bid}).to_list(500)
+        if travelers:
+            tlist = [(str(t["_id"]), t.get("full_name", "Traveler")) for t in travelers]
+        else:
+            n = int(b.get("pax") or 0)
+            tlist = [(f"{bid}#pax{i + 1}", f"Pax {i + 1}") for i in range(n)]
+        sid, sname = b.get("sales_pic_id"), b.get("sales_pic_name", "")
+        for tid, tname in tlist:
+            if (bid, tid) in claimed:
+                continue
+            grp = sales_map.setdefault(sid, {"name": sname, "groups": {}})
+            g = grp["groups"].setdefault(chosen["_id"], {"scheme": chosen, "items": []})
+            g["items"].append({"booking_id": bid, "booking_number": b.get("booking_number"),
+                "traveler_id": tid, "traveler_name": tname, "package_name": b.get("package_name"),
+                "product_type": product_type, "departure_date": b.get("departure_date") or "",
+                "basis_date": bdate, "scheme_id": chosen["_id"], "scheme_name": chosen.get("scheme_name"),
+                "calculation_basis": chosen.get("calculation_basis")})
+    lines, items = [], []
+    for sid, data in sales_map.items():
+        total_pax, total_comm, ngroups, single_label, single_rate = 0, 0.0, 0, None, None
+        for scheme_id, g in data["groups"].items():
+            pax = len(g["items"])
+            ngroups += 1
+            rate, label = _tier_for(g["scheme"].get("tiers", []), pax)
+            total_pax += pax
+            total_comm += rate * pax
+            single_label, single_rate = label, rate
+            for it in g["items"]:
+                items.append({**it, "period": period, "sales_pic_id": sid, "sales_pic_name": data["name"],
+                              "commission_rate": rate, "tier": label})
+        tier = single_label if ngroups == 1 else "Multiple"
+        rate_disp = single_rate if ngroups == 1 else (round(total_comm / total_pax) if total_pax else 0)
+        lines.append({"period": period, "sales_pic_id": sid, "sales_pic_name": data["name"],
+            "total_pax": total_pax, "tier": tier, "commission_rate": rate_disp,
+            "total_commission": total_comm})
+    return lines, items
+
+
+async def _get_closing(period):
+    return await db.commission_closings.find_one({"period": period})
+
+
+# ---------- Commission Schemes (view: commission.manage; edit: Super Admin only) ----------
+@api_router.get("/commissions/schemes")
+async def list_commission_schemes(user: dict = Depends(require_permission("commission.manage"))):
+    docs = await db.commission_schemes.find().sort("created_at", -1).to_list(500)
+    return [serialize(d) for d in docs]
+
+
+@api_router.post("/commissions/schemes")
+async def create_commission_scheme(body: CommissionScheme, request: Request, user: dict = Depends(require_role("super_admin"))):
+    if body.product_type not in COMMISSION_PRODUCT_TYPES:
+        raise HTTPException(status_code=400, detail="Invalid product type")
+    if body.calculation_basis not in COMMISSION_BASES:
+        raise HTTPException(status_code=400, detail="Invalid calculation basis")
+    doc = body.model_dump()
+    doc.update({"created_at": now_iso(), "created_by": user["name"]})
+    res = await db.commission_schemes.insert_one(doc)
+    await log_audit(user, "commission", "create_scheme", request, record_id=str(res.inserted_id), new={"name": body.scheme_name})
+    return serialize(await db.commission_schemes.find_one({"_id": res.inserted_id}))
+
+
+@api_router.put("/commissions/schemes/{sid}")
+async def update_commission_scheme(sid: str, body: CommissionScheme, request: Request, user: dict = Depends(require_role("super_admin"))):
+    old = await db.commission_schemes.find_one({"_id": ObjectId(sid)})
+    if not old:
+        raise HTTPException(status_code=404, detail="Scheme not found")
+    await db.commission_schemes.update_one({"_id": ObjectId(sid)}, {"$set": body.model_dump()})
+    await log_audit(user, "commission", "update_scheme", request, record_id=sid, new={"name": body.scheme_name})
+    return serialize(await db.commission_schemes.find_one({"_id": ObjectId(sid)}))
+
+
+@api_router.delete("/commissions/schemes/{sid}")
+async def delete_commission_scheme(sid: str, request: Request, user: dict = Depends(require_role("super_admin"))):
+    await db.commission_schemes.delete_one({"_id": ObjectId(sid)})
+    await log_audit(user, "commission", "delete_scheme", request, record_id=sid)
+    return {"ok": True}
+
+
+# ---------- Commission Settings (AUTO SALES) — Super Admin edit only ----------
+@api_router.get("/commissions/settings")
+async def get_commission_settings2(user: dict = Depends(require_permission("commission.manage"))):
+    s = await get_settings_dict()
+    c = s.get("commission", {}) or {}
+    return {"auto_sales_commission": bool(c.get("auto_sales_commission", False)),
+            "default_percent": c.get("default_percent", 2.5)}
+
+
+@api_router.put("/commissions/settings")
+async def put_commission_settings2(body: dict, request: Request, user: dict = Depends(require_role("super_admin"))):
+    await db.system_settings.update_one({"key": "system"},
+        {"$set": {"settings.commission.auto_sales_commission": bool(body.get("auto_sales_commission", False))}})
+    await log_audit(user, "commission", "update_settings", request, new=body)
+    s = await get_settings_dict()
+    return s.get("commission", {})
+
+
+# ---------- Commission Closings ----------
+@api_router.get("/commissions/closings")
+async def list_closings(user: dict = Depends(require_permission("commission.manage"))):
+    docs = await db.commission_closings.find().sort("period", -1).to_list(200)
+    return [serialize(d) for d in docs]
+
+
+@api_router.post("/commissions/closings")
+async def create_closing(body: dict, request: Request, user: dict = Depends(require_permission("commission.manage"))):
+    period = (body or {}).get("period", "")
+    if len(period) != 7 or period[4] != "-":
+        raise HTTPException(status_code=400, detail="Period must be YYYY-MM")
+    existing = await _get_closing(period)
+    if existing:
+        return serialize(existing)
+    doc = {"period": period, "status": "OPEN", "total_pax": 0, "total_commission": 0,
+           "created_at": now_iso(), "created_by": user["name"]}
+    res = await db.commission_closings.insert_one(doc)
+    await log_audit(user, "commission", "create_closing", request, record_id=period, new={"period": period})
+    return serialize(await db.commission_closings.find_one({"_id": res.inserted_id}))
+
+
+@api_router.post("/commissions/closings/{period}/calculate")
+async def calculate_closing(period: str, request: Request, user: dict = Depends(require_permission("commission.manage"))):
+    c = await _get_closing(period)
+    if not c:
+        c = {"period": period, "status": "OPEN", "created_at": now_iso(), "created_by": user["name"]}
+        await db.commission_closings.insert_one(dict(c))
+    if c.get("status") in ("CLOSED", "PAID"):
+        raise HTTPException(status_code=400, detail="Closing sudah CLOSED. Lakukan REOPEN dulu (Super Admin).")
+    await db.commission_closings.update_one({"period": period}, {"$set": {"status": "CALCULATING"}})
+    await db.commission_items.delete_many({"period": period})
+    await db.commission_lines.delete_many({"period": period})
+    lines, items = await _compute_period(period)
+    total_pax = total_comm = 0
+    for ln in lines:
+        ln.update({"adjustment": 0, "final_commission": ln["total_commission"], "payment_status": "UNPAID",
+                   "created_at": now_iso()})
+        total_pax += ln["total_pax"]
+        total_comm += ln["total_commission"]
+    if lines:
+        await db.commission_lines.insert_many([dict(x) for x in lines])
+    if items:
+        await db.commission_items.insert_many([dict(x) for x in items])
+    await db.commission_closings.update_one({"period": period},
+        {"$set": {"status": "REVIEW", "total_pax": total_pax, "total_commission": total_comm,
+                  "calculated_at": now_iso(), "calculated_by": user["name"]}})
+    await log_audit(user, "commission", "calculate", request, record_id=period,
+                    new={"lines": len(lines), "pax": total_pax})
+    return {"period": period, "lines": len(lines), "total_pax": total_pax, "total_commission": total_comm}
+
+
+@api_router.get("/commissions/closings/{period}")
+async def get_closing_detail(period: str, user: dict = Depends(require_permission("commission.manage"))):
+    c = await _get_closing(period)
+    lines = [serialize(x) for x in await db.commission_lines.find({"period": period}).sort("total_commission", -1).to_list(1000)]
+    return {"closing": serialize(c) if c else None, "lines": lines}
+
+
+@api_router.get("/commissions/closings/{period}/sales/{sid}")
+async def closing_sales_detail(period: str, sid: str, user: dict = Depends(require_permission("commission.manage"))):
+    items = [serialize(x) for x in await db.commission_items.find({"period": period, "sales_pic_id": sid}).to_list(3000)]
+    return {"period": period, "sales_pic_id": sid, "items": items}
+
+
+@api_router.patch("/commissions/closings/{period}/status")
+async def set_closing_status(period: str, body: dict, request: Request, user: dict = Depends(require_permission("commission.manage"))):
+    c = await _get_closing(period)
+    if not c:
+        raise HTTPException(status_code=404, detail="Closing not found")
+    new_status = (body or {}).get("status")
+    if new_status not in CLOSING_STATUSES:
+        raise HTTPException(status_code=400, detail="Invalid status")
+    if c.get("status") in ("CLOSED", "PAID") and new_status not in ("PAID",):
+        raise HTTPException(status_code=400, detail="Closing terkunci. Gunakan REOPEN (Super Admin).")
+    await db.commission_closings.update_one({"period": period}, {"$set": {"status": new_status}})
+    if new_status == "PAID":
+        await db.commission_lines.update_many({"period": period}, {"$set": {"payment_status": "PAID"}})
+    await log_audit(user, "commission", "closing_status", request, record_id=period, new={"status": new_status})
+    return serialize(await _get_closing(period))
+
+
+@api_router.post("/commissions/closings/{period}/reopen")
+async def reopen_closing(period: str, request: Request, user: dict = Depends(require_role("super_admin"))):
+    c = await _get_closing(period)
+    if not c:
+        raise HTTPException(status_code=404, detail="Closing not found")
+    await db.commission_closings.update_one({"period": period}, {"$set": {"status": "OPEN"}})
+    await log_audit(user, "commission", "reopen", request, record_id=period)
+    return serialize(await _get_closing(period))
+
+
+@api_router.patch("/commissions/lines/{line_id}/adjustment")
+async def set_line_adjustment(line_id: str, body: dict, request: Request, user: dict = Depends(require_permission("commission.manage"))):
+    ln = await db.commission_lines.find_one({"_id": ObjectId(line_id)})
+    if not ln:
+        raise HTTPException(status_code=404, detail="Line not found")
+    c = await _get_closing(ln["period"])
+    if c and c.get("status") in ("CLOSED", "PAID"):
+        raise HTTPException(status_code=400, detail="Closing terkunci, adjustment tidak diizinkan.")
+    adj = float((body or {}).get("adjustment", 0) or 0)
+    final = float(ln.get("total_commission") or 0) + adj
+    await db.commission_lines.update_one({"_id": ObjectId(line_id)},
+        {"$set": {"adjustment": adj, "adjustment_notes": (body or {}).get("notes", ""), "final_commission": final}})
+    await log_audit(user, "commission", "adjustment", request, record_id=line_id, new={"adjustment": adj})
+    return serialize(await db.commission_lines.find_one({"_id": ObjectId(line_id)}))
+
+
+@api_router.patch("/commissions/lines/{line_id}/payment")
+async def set_line_payment(line_id: str, body: dict, request: Request, user: dict = Depends(require_permission("commission.manage"))):
+    ln = await db.commission_lines.find_one({"_id": ObjectId(line_id)})
+    if not ln:
+        raise HTTPException(status_code=404, detail="Line not found")
+    ps = (body or {}).get("payment_status", "PAID")
+    await db.commission_lines.update_one({"_id": ObjectId(line_id)}, {"$set": {"payment_status": ps}})
+    await log_audit(user, "commission", "line_payment", request, record_id=line_id, new={"payment_status": ps})
+    return serialize(await db.commission_lines.find_one({"_id": ObjectId(line_id)}))
+
+
+# ---------- My Commission (Sales) ----------
+@api_router.get("/commissions/my")
+async def my_commission(user: dict = Depends(require_permission("commission.view"))):
+    now = datetime.now(timezone.utc)
+    period = f"{now.year:04d}-{now.month:02d}"
+    lines, _ = await _compute_period(period, only_sales_id=user["_id"])
+    current = lines[0] if lines else {"period": period, "total_pax": 0, "tier": "-",
+                                      "commission_rate": 0, "total_commission": 0}
+    prev = []
+    for ln in await db.commission_lines.find({"sales_pic_id": user["_id"]}).sort("period", -1).to_list(200):
+        c = await _get_closing(ln["period"])
+        if c and c.get("status") in ("APPROVED", "CLOSED", "PAID"):
+            prev.append({**serialize(ln), "closing_status": c.get("status")})
+    return {"current": current, "period": period, "previous": prev}
+
 
 
 app.include_router(api_router)
@@ -2893,6 +3269,16 @@ async def seed():
     await db.payments.create_index("invoice_id")
     await db.travelers.create_index("booking_id")
     await db.documents.create_index("traveler_id")
+    await db.commission_schemes.create_index("status")
+    await db.commission_closings.create_index("period", unique=True)
+    await db.commission_lines.create_index("period")
+    try:
+        await db.commission_items.create_index([("booking_id", 1), ("traveler_id", 1), ("period", 1)], unique=True)
+    except Exception:
+        pass
+    await db.system_settings.update_one(
+        {"key": "system", "settings.commission.auto_sales_commission": {"$exists": False}},
+        {"$set": {"settings.commission.auto_sales_commission": False}})
     if await db.tax_masters.count_documents({}) == 0:
         await db.tax_masters.insert_many([
             {"tax_code": "NONTAX", "tax_name": "Non Taxable", "tax_type": "OTHER", "rate": 0, "tax_base": "SELLING_PRICE",
