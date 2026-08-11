@@ -1,0 +1,16 @@
+{
+  "summary": "Frontend-only testing of Edit Quotation feature on /quotations. Tested Sales and Super Admin flows. All acceptance criteria met.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [],
+  "updated_files": [],
+  "success_rate": {"backend": "n/a", "frontend": "100%"},
+  "test_credentials": "Sales sales@safarcrm.com/Sales@123; SuperAdmin dedyirawan18@gmail.com/Admin@123",
+  "seed_data_creation": "None; existing DRAFT quotations used (QT-00002, QT-00004).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Verified: (a) Pencil Edit button appears only for DRAFT/SENT & !converted_booking_id (row testid quot-edit-{id}). (b) Clicking opens dialog with title 'Edit Quotation', save button label 'Update quotation', pre-filled with customer/package/pax/room/discount/addons. (c) Editing QT-00004 pax 2->5 & discount 8->5 -> toast 'Quotation diperbarui' shown, row updated to 5 pax / Rp 95.550.000 / diskon 5%. (d) After edit, opening New Quotation resets form (pax=1, discount=0, title 'New Quotation', save 'Create quotation'). (e) ACCEPTED (QT-00006) and CONVERTED (QT-00001,00003,00005) rows have NO edit button. (f) Super Admin can also edit DRAFT quotation successfully with toast confirmed.",
+  "rca of the issue": "N/A - feature working as expected."
+}

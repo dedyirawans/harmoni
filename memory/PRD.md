@@ -1,5 +1,8 @@
 # Safar Travel CRM — Product Requirements (Living Doc)
 
+## Feature: Edit Quotation (2026-06)
+- Quotation dapat diedit selama status DRAFT/SENT dan belum converted; backend PUT /quotations/{id} recompute amounts & tolak (400) jika ACCEPTED/converted. Tombol Pencil di /quotations, dialog "Edit Quotation". Verified iteration_10.json (frontend 100%).
+
 ## Bug fix (2026-06)
 - Super Admin 403 on /quotations: hasPerm (AuthContext) now bypasses for role super_admin, matching backend ALL_PERMISSIONS. Verified iteration_9.json (frontend 100%).
 

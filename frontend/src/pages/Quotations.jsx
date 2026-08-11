@@ -11,7 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogTrigger } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Plus, Loader2, FileText, Check, X, ArrowRightCircle, Trash2 } from "lucide-react";
+import { Plus, Loader2, FileText, Check, X, ArrowRightCircle, Trash2, Pencil } from "lucide-react";
 import { toast } from "sonner";
 
 const HEAD = "bg-blue-600 text-white font-semibold text-xs uppercase tracking-wide border-r border-blue-500/40 last:border-r-0";
@@ -27,8 +27,9 @@ export default function Quotations() {
   const [customers, setCustomers] = useState([]);
   const [packages, setPackages] = useState([]);
   const [open, setOpen] = useState(false);
+  const [editId, setEditId] = useState(null);
   const [saving, setSaving] = useState(false);
-  const empty = { customer_id: "", package_id: "", pax: 1, room_type: "QUAD", discount_percent: 0, addons: [] };
+  const empty = { customer_id: "", package_id: "", pax: 1, room_type: "QUAD", discount_percent: 0, addons: [], departure_id: null, notes: "", terms: "" };
   const [form, setForm] = useState(empty);
 
   const load = () => {
@@ -44,15 +45,27 @@ export default function Quotations() {
   const set = (k) => (v) => setForm((f) => ({ ...f, [k]: v }));
   const openPdf = (id) => window.open(`${API}/quotations/${id}/pdf?auth=${localStorage.getItem("token")}`, "_blank");
 
+  const openCreate = () => { setEditId(null); setForm(empty); setOpen(true); };
+  const openEdit = (q) => {
+    setEditId(q._id);
+    setForm({ customer_id: q.customer_id, package_id: q.package_id, pax: q.pax, room_type: q.room_type || "QUAD",
+      discount_percent: q.discount_percent, addons: q.addons || [], departure_id: q.departure_id || null,
+      notes: q.notes || "", terms: q.terms || "" });
+    setOpen(true);
+  };
+  const onDialogChange = (v) => { setOpen(v); if (!v) { setEditId(null); setForm(empty); } };
+
   const save = async () => {
     if (!form.customer_id || !form.package_id) return toast.error("Pilih customer & package");
     setSaving(true);
+    const body = {
+      ...form, pax: Number(form.pax), discount_percent: Number(form.discount_percent),
+      addons: (form.addons || []).filter((a) => a.name).map((a) => ({ name: a.name, amount: Number(a.amount || 0) })),
+    };
     try {
-      await api.post("/quotations", {
-        ...form, pax: Number(form.pax), discount_percent: Number(form.discount_percent),
-        addons: (form.addons || []).filter((a) => a.name).map((a) => ({ name: a.name, amount: Number(a.amount || 0) })),
-      });
-      toast.success("Quotation dibuat"); setOpen(false); setForm(empty); load();
+      if (editId) { await api.put(`/quotations/${editId}`, body); toast.success("Quotation diperbarui"); }
+      else { await api.post("/quotations", body); toast.success("Quotation dibuat"); }
+      onDialogChange(false); load();
     } catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); }
     finally { setSaving(false); }
   };
@@ -70,10 +83,10 @@ export default function Quotations() {
           <p className="text-slate-500 mt-1">Buat penawaran, kelola approval diskon, dan konversi ke booking.</p>
         </div>
         {canManage && (
-          <Dialog open={open} onOpenChange={setOpen}>
-            <DialogTrigger asChild><Button className="bg-blue-600 hover:bg-blue-700" data-testid="add-quotation-button"><Plus className="h-4 w-4 mr-2" aria-hidden="true" />New Quotation</Button></DialogTrigger>
+          <Dialog open={open} onOpenChange={onDialogChange}>
+            <DialogTrigger asChild><Button className="bg-blue-600 hover:bg-blue-700" onClick={openCreate} data-testid="add-quotation-button"><Plus className="h-4 w-4 mr-2" aria-hidden="true" />New Quotation</Button></DialogTrigger>
             <DialogContent className="bg-white max-w-xl max-h-[90vh] overflow-y-auto" data-testid="quotation-dialog">
-              <DialogHeader><DialogTitle className="font-display">New Quotation</DialogTitle><DialogDescription>Harga dasar otomatis dari Package Master.</DialogDescription></DialogHeader>
+              <DialogHeader><DialogTitle className="font-display">{editId ? "Edit Quotation" : "New Quotation"}</DialogTitle><DialogDescription>Harga dasar otomatis dari Package Master.</DialogDescription></DialogHeader>
               <div className="grid grid-cols-2 gap-4 py-2">
                 <Field label="Customer" full><Select value={form.customer_id} onValueChange={set("customer_id")}><SelectTrigger data-testid="quot-customer-select"><SelectValue placeholder="Pilih customer" /></SelectTrigger><SelectContent className="bg-white">{customers.map((c) => <SelectItem key={c._id} value={c._id}>{c.full_name}</SelectItem>)}</SelectContent></Select></Field>
                 <Field label="Package" full><Select value={form.package_id} onValueChange={set("package_id")}><SelectTrigger data-testid="quot-package-select"><SelectValue placeholder="Pilih package" /></SelectTrigger><SelectContent className="bg-white">{packages.map((p) => <SelectItem key={p._id} value={p._id}>{p.package_name} — {fmtIDR(p.selling_price)}</SelectItem>)}</SelectContent></Select></Field>
@@ -91,7 +104,7 @@ export default function Quotations() {
                   ))}
                 </div>
               </div>
-              <DialogFooter><Button onClick={save} disabled={saving} className="bg-blue-600 hover:bg-blue-700" data-testid="quotation-save-button">{saving ? "Saving..." : "Create quotation"}</Button></DialogFooter>
+              <DialogFooter><Button onClick={save} disabled={saving} className="bg-blue-600 hover:bg-blue-700" data-testid="quotation-save-button">{saving ? "Saving..." : editId ? "Update quotation" : "Create quotation"}</Button></DialogFooter>
             </DialogContent>
           </Dialog>
         )}
@@ -120,6 +133,9 @@ export default function Quotations() {
                     <TableCell className={`${CELL} text-right`}>
                       <div className="flex items-center gap-1 justify-end flex-wrap">
                         <Button size="sm" variant="outline" onClick={() => openPdf(q._id)} data-testid={`quot-pdf-${q._id}`}><FileText className="h-4 w-4" /></Button>
+                        {canManage && ["DRAFT", "SENT"].includes(q.status) && !q.converted_booking_id && (
+                          <Button size="sm" variant="outline" onClick={() => openEdit(q)} data-testid={`quot-edit-${q._id}`}><Pencil className="h-4 w-4" /></Button>
+                        )}
                         {canApprove && q.discount_status === "PENDING" && (
                           <>
                             <Button size="sm" className="bg-emerald-600 hover:bg-emerald-700" onClick={() => act(() => api.patch(`/quotations/${q._id}/discount-approval`, { action: "approve" }), "Diskon disetujui")} data-testid={`quot-approve-${q._id}`}><Check className="h-4 w-4" /></Button>
