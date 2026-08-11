@@ -1,7 +1,7 @@
 import {
   LayoutDashboard, Users2, Briefcase, Package, CalendarCheck, Calculator,
   Receipt, Percent, FileBarChart, Plug, UserCog, Settings, ScrollText,
-  Plane, PlaneTakeoff, Bell, Wallet, TrendingUp, ListChecks, FileText,
+  Plane, PlaneTakeoff, Bell, Wallet, TrendingUp, ListChecks, FileText, ShieldCheck,
 } from "lucide-react";
 
 // Route -> permission required (mirrors backend). null = any authenticated user.
@@ -16,6 +16,7 @@ export const ROUTE_PERMS = {
   "/transactions": "transactions.view",
   "/tax": "tax.view",
   "/commission": "commission.view",
+  "/approvals": "cancellation.request",
   "/reports": "reports.view",
   "/integration": "integration.view",
   "/users": "users.view",
@@ -40,6 +41,7 @@ export const MENUS = {
     { label: "Booking", path: "/booking", icon: CalendarCheck },
     { label: "Tax", path: "/tax", icon: Receipt },
     { label: "Commission", path: "/commission", icon: Percent },
+    { label: "Approval", path: "/approvals", icon: ShieldCheck },
     { label: "Reports", path: "/reports", icon: FileBarChart },
     { label: "Integration", path: "/integration", icon: Plug },
     { label: "User Management", path: "/users", icon: UserCog },
@@ -56,12 +58,14 @@ export const MENUS = {
     { label: "Packages", path: "/packages", icon: Plane },
     { label: "Departures", path: "/departures", icon: PlaneTakeoff },
     { label: "My Commission", path: "/commission", icon: Wallet },
+    { label: "Cancellations", path: "/approvals", icon: ShieldCheck },
     { label: "Notifications", path: "/notifications", icon: Bell },
   ],
   accounting: [
     { label: "Accounting Dashboard", path: "/dashboard", icon: LayoutDashboard },
     { label: "Bookings", path: "/booking", icon: CalendarCheck },
     { label: "Invoices & AR", path: "/accounting", icon: Calculator },
+    { label: "Cancellation & Refund", path: "/approvals", icon: ShieldCheck },
     { label: "Transactions", path: "/transactions", icon: Receipt },
     { label: "Costing / HPP", path: "/hpp", icon: TrendingUp },
     { label: "Packages", path: "/products", icon: Package },

@@ -1,5 +1,13 @@
 # Safar Travel CRM — Product Requirements (Living Doc)
 
+## Phase 8 — Cancellation & Refund Approval Workflow (2026-06) — DONE
+- **Prinsip**: SEMUA cancellation/partial cancellation/refund WAJIB approval Super Admin. Tidak ada yang final tanpa Accounting Review → Super Admin Approval.
+- **Cancellation flow**: Sales Request (Booking Detail, pilih full/partial pax + reason/detail/docs) → REQUESTED → Accounting Review (input cancellation_fee/non_refundable/supplier/other_deduction + recommendation, hitung estimated_refund = paid − fee − nonref − other) → ACCOUNTING_REVIEWED → Super Admin APPROVE/REJECT/REQUEST_REVISION. APPROVE → booking CANCELLED (atau PARTIALLY_CANCELLED), seat departure ter-update, traveler dibatalkan, + **auto-create Refund Request (CALCULATED)**. REJECT (reason wajib) → booking tetap aktif. REOPEN super_admin only.
+- **Refund flow**: CALCULATED → Accounting Review (bank + recommendation + docs) → ACCOUNTING_REVIEWED → Super Admin APPROVE (boleh override proposed_refund) → APPROVED → Accounting Process Payment → REFUNDED / PARTIALLY_REFUNDED. Tombol Process 403 sebelum APPROVED.
+- **RBAC (backend-enforced)**: cancellation.request (all), cancellation.review (accounting+SA), cancellation.approve (SA only), refund.request/review/process (accounting+SA), refund.approve (SA only), refund.view (all, sales own). Sales approve→403, Accounting approve→403, Accounting process sebelum approve→403.
+- **Menu Approval** (SA), Cancellation & Refund (Accounting), Cancellations (Sales own read-only). **Notifikasi real** (collection notifications, /api/notifications per user/role) di setiap tahap. **Audit trail** + timeline per request (tidak dihapus).
+- **Tests**: iteration_16.json — backend 17/17 + 2/2, frontend 100% (3 role E2E). Files: test_phase8_cancel_refund.py, test_phase8_frontend_ext.py, qa8_seed.py.
+
 ## Phase 7 — N8N Integration API & AUTO SALES (2026-06) — DONE
 - **N8N API config** (Super Admin only, require_role): base_url, webhook_url, crm_api_url, environment, connection_status, api_key (masked di GET), api_secret & webhook_secret disimpan **terenkripsi Fernet** (ENCRYPTION_KEY di backend/.env). Endpoint: GET/PUT /api/integrations/n8n/api-config, POST .../generate (kredensial ditampilkan sekali), GET .../api-logs. Sales & Accounting → 403.
 - **Machine API `/api/v1/*`** diamankan `n8n_auth`: X-API-Key + X-Signature=HMAC-SHA256(secret, timestamp+"."+body) + X-Timestamp (±300s anti-replay) + X-Idempotency-Key + rate limit 120/60s. Endpoint: POST customers/leads/bookings/payments/communications, PUT bookings/{id}, GET packages/departures/customers/{id}/bookings/{id}. HPP di-strip pada /v1/packages. Tidak ada akses HPP/Tax/Commission/Users/Settings/Audit.

@@ -1,0 +1,30 @@
+{
+  "summary": "Phase 8 (Cancellation & Refund with mandatory Super Admin approval) fully verified end-to-end. Backend: re-ran /app/backend/tests/test_phase8_cancel_refund.py -> 17/17 PASS (full workflow, seat decrement 10->7, auto-refund creation with CALCULATED status and proposed_refund=paid-fee-nonref, notifications delivered, and the entire 403 matrix: sales review/approve cancellation, accounting approve cancellation, sales/accounting approve refund, accounting process refund before SA approval). Added /app/backend/tests/test_phase8_frontend_ext.py (2/2 PASS via PUBLIC URL) confirming /api/notifications returns real per-user items referencing cancellation/refund/approval (NOT the old static welcome stub) and that non-SA approve endpoints return 403/404. Frontend Playwright (single run, real UI, all 3 roles): SEED QA8-B1 booking (CONFIRMED, paid 20jt/30jt, 3 travelers, dep quota 50/12) -> (1) SALES login -> /booking/<id> shows request-cancellation-button, opens cancellation-dialog (cancel-full/cancel-partial/cancel-trav-*/cancel-reason/cancel-detail/cancel-notes), submits FULL cancellation -> success; on /approvals sees exactly 1 own cx row, opening cx-detail-dialog shows NO cx-submit-review and NO cx-approve buttons (read-only, correct). (2) ACCOUNTING /approvals -> opens same cx, sees cx-submit-review = TRUE and cx-approve = FALSE (correct), fills cx-cancellation_fee=2jt, cx-non_refundable_cost=1jt, cx-recommendation and submits -> ACCOUNTING_REVIEWED. (3) SUPER ADMIN /approvals -> opens cx, sees cx-approve/cx-reject/cx-revision all present, cx-cancellation_fee editable, clicks Approve -> booking CANCELLED, refund auto-created (visible on tab-refund with rf-open-<id> = 1 QA8 refund CALCULATED). (4) ACCOUNTING refund detail -> rf-submit-review TRUE, rf-approve FALSE, rf-process HIDDEN (canProcess=false before approval, correct), fills rf-bank-name/account/holder + rf-recommendation and submits -> ACCOUNTING_REVIEWED. (5) SUPER ADMIN refund -> rf-approve visible, clicks Approve -> APPROVED. (6) ACCOUNTING refund detail after approval -> rf-process button now VISIBLE (canProcess=true), fills rf-pay-amount=17jt, rf-pay-bank=BCA, rf-pay-date, clicks Process -> status REFUNDED (badge emerald 'REFUNDED', refunded_amount Rp 17.000.000, toast 'Pembayaran refund tercatat'). All data-testids from the spec are present and behave per RBAC.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_phase8_cancel_refund.py",
+    "/app/backend/tests/test_phase8_frontend_ext.py",
+    "/app/backend/tests/qa8_seed.py",
+    "/app/test_reports/pytest/phase8_ext.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py has grown further (Phase 8 adds ~600 lines of cancellation/refund endpoints, models, helpers, notification fan-out) — consider extracting a phase8/cancellation_refund router module and a shared notifications helper.",
+    "Approvals.jsx doApprove sends the whole rev dict (fee, non_refundable_cost, supplier_cost, other_deduction) via spread and also passes proposed_refund on refund approve — good, matches spec (SA can override); worth documenting that the backend must recompute estimated_refund server-side to prevent tampering (already does per test — keep the guard).",
+    "RefundDetail canApprove includes 'CALCULATED' as an acceptable state; happy path goes CALCULATED -> ACCOUNTING_REVIEWED -> APPROVED. If SA approves directly from CALCULATED (skipping accounting review), bank details will not be captured before payout. Consider forcing ACCOUNTING_REVIEWED before approve, or clearly document the SA-bypass path.",
+    "BookingDetail: request-cancellation-button is hidden only when status is exactly 'CANCELLED'; should also hide/disable for 'PARTIALLY_CANCELLED' if no travelers remain assignable, otherwise sales can raise a second full cancel on an already partially cancelled booking. Backend appears to guard this — cosmetic UI polish only.",
+    "Approvals.jsx CX_COLORS is missing style for 'PARTIALLY_CANCELLED' cancellation state — no visual regression today because status label is on booking, not cancellation, but worth aligning."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_phase8_frontend_ext.py (new)",
+    "/app/backend/tests/qa8_seed.py (new — seed/cleanup helper)"
+  ],
+  "success_rate": {"backend": "100% (17/17 phase8 workflow + 2/2 notifications/403 via public URL)", "frontend": "100% (Sales / Accounting / Super Admin full E2E across cancellation + refund happy path)"},
+  "test_credentials": "From /app/memory/test_credentials.md — Super Admin dedyirawan18@gmail.com/Admin@123, Sales sales@safarcrm.com/Sales@123, Accounting accounting@safarcrm.com/Account@123.",
+  "seed_data_creation": "Seeded booking QA8-B1 (customer QA8-Cust, package QA8-Pkg, departure QA8-DEP quota 50/12, invoice QA8-INV1 paid 20jt/30jt, 3 travelers QA8-Trav0..2) assigned to Sales A. After the E2E run cleaned up: 1 booking, 1 cancellation_request, 1 refund_request, 1 invoice, 3 travelers, 1 departure, and 3 QA8-tagged notifications deleted. DB restored to pre-run state.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Phase 8 fully green. Reusable artefacts: qa8_seed.py (seed|cleanup) to spin up an identical fixture booking, and test_phase8_frontend_ext.py for a quick smoke that pings /notifications + the 403 rules through the PUBLIC URL. Frontend E2E can be replayed by calling qa8_seed.py seed, capturing BID, then feeding it into the Playwright script shown in this run. All 3 role logins go to /login (data-testid=login-email-input/password/submit) then wait for /dashboard before further nav.",
+  "rca of the issue": "N/A — no failures."
+}

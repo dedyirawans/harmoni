@@ -50,6 +50,8 @@ ALL_PERMISSIONS = [
     "traveler.manage", "document.manage", "invoice.view", "invoice.manage",
     "payment.view", "payment.manage", "receivable.view",
     "hpp.edit", "expense.view", "expense.manage", "refund.manage", "tax.manage", "commission.manage",
+    "cancellation.request", "cancellation.review", "cancellation.approve",
+    "refund.request", "refund.review", "refund.approve", "refund.process", "refund.view",
 ]
 
 DEFAULT_ROLE_PERMISSIONS = {
@@ -59,6 +61,7 @@ DEFAULT_ROLE_PERMISSIONS = {
         "departures.view", "commission.view", "notifications.view",
         "booking.view", "quotation.view", "quotation.manage", "booking.manage",
         "traveler.manage", "document.manage", "invoice.view", "payment.view",
+        "cancellation.request", "refund.view",
     ],
     "accounting": [
         "accounting.view", "transactions.view", "hpp.view", "tax.view", "product.view",
@@ -66,6 +69,8 @@ DEFAULT_ROLE_PERMISSIONS = {
         "booking.view", "quotation.view", "invoice.view", "invoice.manage",
         "payment.view", "payment.manage", "receivable.view", "document.manage",
         "expense.view", "expense.manage", "refund.manage", "tax.manage",
+        "cancellation.request", "cancellation.review",
+        "refund.request", "refund.review", "refund.process", "refund.view",
     ],
 }
 
@@ -623,10 +628,17 @@ async def dashboard_charts(user: dict = Depends(get_current_user)):
 
 @api_router.get("/notifications")
 async def notifications(user: dict = Depends(require_permission("notifications.view"))):
-    return [
-        {"id": 1, "title": "Welcome to Safar CRM", "body": "Your account is ready.", "time": "just now"},
-        {"id": 2, "title": "New departure added", "body": "Umrah Ramadhan 2026 is now live.", "time": "2h ago"},
-    ]
+    q = {"$or": [{"user_id": user["_id"]}, {"role": user["role"]}]}
+    docs = await db.notifications.find(q).sort("created_at", -1).to_list(50)
+    return [{"id": str(d["_id"]), "title": d.get("title", ""), "body": d.get("body", ""),
+             "link": d.get("link", ""), "read": d.get("read", False),
+             "time": d.get("created_at", "")} for d in docs]
+
+
+@api_router.patch("/notifications/{nid}/read")
+async def mark_notification_read(nid: str, user: dict = Depends(require_permission("notifications.view"))):
+    await db.notifications.update_one({"_id": ObjectId(nid)}, {"$set": {"read": True}})
+    return {"ok": True}
 
 
 @api_router.get("/public/login-config")
@@ -3488,6 +3500,319 @@ async def v1_create_communication(payload: dict = Body(default={}), request: Req
     return {"success": True, "communication": serialize(await db.communications.find_one({"_id": res.inserted_id}))}
 
 
+# ============================================================================
+# PHASE 8 — CANCELLATION & REFUND APPROVAL WORKFLOW (Super Admin approval)
+# ============================================================================
+CANCEL_STATUSES = ["REQUESTED", "ACCOUNTING_REVIEWED", "APPROVED", "REJECTED"]
+REFUND_STATUSES = ["CALCULATED", "ACCOUNTING_REVIEWED", "APPROVED", "REJECTED", "PROCESSING", "PARTIALLY_REFUNDED", "REFUNDED"]
+
+
+async def _notify(title, body, link="", role=None, user_id=None):
+    await db.notifications.insert_one({"role": role, "user_id": user_id, "title": title,
+        "body": body, "link": link, "read": False, "created_at": now_iso()})
+
+
+def _timeline_entry(user, action, old_status, new_status, request, reason="", amount=None):
+    return {"action": action, "by": user.get("name"), "role": user.get("role"),
+            "at": now_iso(), "old_status": old_status, "new_status": new_status,
+            "reason": reason, "amount": amount,
+            "ip": request.client.host if request and request.client else None}
+
+
+async def _booking_financials(bid):
+    invs = await db.invoices.find({"booking_id": bid}).to_list(50)
+    total_paid = sum(float(i.get("paid_amount") or 0) for i in invs)
+    total_billed = sum(float(i.get("total") or 0) for i in invs)
+    return total_paid, total_billed
+
+
+async def _can_view_cancellation(user, doc):
+    if user["role"] in ("super_admin", "accounting"):
+        return True
+    return doc.get("sales_pic_id") == user["_id"]
+
+
+# ---------- CANCELLATION ----------
+@api_router.post("/cancellations")
+async def create_cancellation(body: dict, request: Request, user: dict = Depends(require_permission("cancellation.request"))):
+    bid = body.get("booking_id")
+    b = await db.bookings.find_one({"_id": ObjectId(bid)}) if bid and ObjectId.is_valid(bid) else None
+    if not b:
+        raise HTTPException(status_code=404, detail="Booking not found")
+    if user["role"] == "sales" and b.get("sales_pic_id") != user["_id"]:
+        raise HTTPException(status_code=403, detail="403 Forbidden")
+    if b.get("status") in ("CANCELLED",):
+        raise HTTPException(status_code=400, detail="Booking sudah dibatalkan")
+    existing = await db.cancellation_requests.find_one({"booking_id": bid, "status": {"$in": ["REQUESTED", "ACCOUNTING_REVIEWED"]}})
+    if existing:
+        raise HTTPException(status_code=400, detail="Sudah ada pengajuan cancellation aktif untuk booking ini")
+    total_pax = int(b.get("pax") or 0)
+    trav_ids = body.get("cancelled_traveler_ids") or []
+    cancelled_pax = len(trav_ids) if trav_ids else total_pax
+    is_partial = bool(trav_ids) and cancelled_pax < total_pax
+    number = await next_number("CXL", db.cancellation_requests, "cancellation_number")
+    total_paid, _tb = await _booking_financials(bid)
+    doc = {"cancellation_number": number, "booking_id": bid, "booking_number": b.get("booking_number"),
+           "customer_id": b.get("customer_id"), "customer_name": b.get("customer_name"),
+           "package_id": b.get("package_id"), "package_name": b.get("package_name"),
+           "departure_id": b.get("departure_id"), "departure_date": b.get("departure_date", ""),
+           "sales_pic_id": b.get("sales_pic_id"), "sales_name": b.get("sales_name") or b.get("sales_pic_name"),
+           "total_pax": total_pax, "cancelled_pax": cancelled_pax, "cancelled_traveler_ids": trav_ids,
+           "is_partial": is_partial, "total_booking_value": float(b.get("total") or 0),
+           "total_paid": total_paid, "outstanding": float(b.get("total") or 0) - total_paid,
+           "reason": body.get("reason", ""), "detail": body.get("detail", ""), "notes": body.get("notes", ""),
+           "supporting_documents": body.get("supporting_documents", []),
+           "accounting_review": None, "approval": None, "prev_booking_status": b.get("status"),
+           "status": "REQUESTED", "created_by": user["name"], "created_by_id": user["_id"], "created_at": now_iso(),
+           "timeline": [_timeline_entry(user, "Request Created", None, "REQUESTED", request, body.get("reason", ""))]}
+    res = await db.cancellation_requests.insert_one(doc)
+    await log_audit(user, "cancellation", "request", request, record_id=str(res.inserted_id), new={"number": number, "cancelled_pax": cancelled_pax})
+    await _notify("Cancellation baru diajukan", f"{number} • {b.get('booking_number')} oleh {user['name']}", "/approvals", role="accounting")
+    await _notify("Cancellation baru diajukan", f"{number} • {b.get('booking_number')} menunggu review", "/approvals", role="super_admin")
+    return serialize(await db.cancellation_requests.find_one({"_id": res.inserted_id}))
+
+
+@api_router.get("/cancellations")
+async def list_cancellations(status: Optional[str] = None, user: dict = Depends(require_permission("cancellation.request"))):
+    q = {}
+    if user["role"] == "sales":
+        q["sales_pic_id"] = user["_id"]
+    if status and status != "all":
+        q["status"] = status
+    docs = await db.cancellation_requests.find(q).sort("created_at", -1).to_list(1000)
+    return [serialize(d) for d in docs]
+
+
+@api_router.get("/cancellations/{cid}")
+async def get_cancellation(cid: str, user: dict = Depends(require_permission("cancellation.request"))):
+    d = await db.cancellation_requests.find_one({"_id": ObjectId(cid)})
+    if not d:
+        raise HTTPException(status_code=404, detail="Not found")
+    if not await _can_view_cancellation(user, d):
+        raise HTTPException(status_code=403, detail="403 Forbidden")
+    return serialize(d)
+
+
+@api_router.patch("/cancellations/{cid}/review")
+async def review_cancellation(cid: str, body: dict, request: Request, user: dict = Depends(require_permission("cancellation.review"))):
+    d = await db.cancellation_requests.find_one({"_id": ObjectId(cid)})
+    if not d:
+        raise HTTPException(status_code=404, detail="Not found")
+    if d["status"] not in ("REQUESTED",):
+        raise HTTPException(status_code=400, detail="Status tidak valid untuk review")
+    fee = float(body.get("cancellation_fee") or 0)
+    nonref = float(body.get("non_refundable_cost") or 0)
+    supplier = float(body.get("supplier_cost") or 0)
+    other = float(body.get("other_deduction") or 0)
+    estimated = max(0.0, float(d.get("total_paid") or 0) - fee - nonref - other)
+    review = {"cancellation_fee": fee, "non_refundable_cost": nonref, "supplier_cost": supplier,
+              "other_deduction": other, "estimated_refund": estimated,
+              "financial_impact": fee + nonref + supplier + other,
+              "recommendation": body.get("recommendation", ""), "reviewed_by": user["name"], "reviewed_at": now_iso()}
+    tl = d.get("timeline", []) + [_timeline_entry(user, "Accounting Reviewed", d["status"], "ACCOUNTING_REVIEWED", request, body.get("recommendation", ""), estimated)]
+    await db.cancellation_requests.update_one({"_id": ObjectId(cid)}, {"$set": {"accounting_review": review, "status": "ACCOUNTING_REVIEWED", "timeline": tl}})
+    await log_audit(user, "cancellation", "review", request, record_id=cid, new=review)
+    await _notify("Cancellation siap approval", f"{d['cancellation_number']} sudah direview Accounting", "/approvals", role="super_admin")
+    return serialize(await db.cancellation_requests.find_one({"_id": ObjectId(cid)}))
+
+
+@api_router.patch("/cancellations/{cid}/approve")
+async def approve_cancellation(cid: str, body: dict, request: Request, user: dict = Depends(require_role("super_admin"))):
+    d = await db.cancellation_requests.find_one({"_id": ObjectId(cid)})
+    if not d:
+        raise HTTPException(status_code=404, detail="Not found")
+    action = (body.get("action") or "").upper()
+    if action not in ("APPROVE", "REJECT", "REQUEST_REVISION"):
+        raise HTTPException(status_code=400, detail="Invalid action")
+    if d["status"] not in ("ACCOUNTING_REVIEWED",):
+        raise HTTPException(status_code=400, detail="Cancellation harus melalui Accounting Review dulu")
+    old = d["status"]
+    if action == "REJECT":
+        reason = body.get("reason", "")
+        if not reason:
+            raise HTTPException(status_code=400, detail="Rejection reason wajib diisi")
+        tl = d.get("timeline", []) + [_timeline_entry(user, "Super Admin Rejected", old, "REJECTED", request, reason)]
+        await db.cancellation_requests.update_one({"_id": ObjectId(cid)}, {"$set": {"status": "REJECTED", "approval": {"action": "REJECT", "by": user["name"], "at": now_iso(), "reason": reason}, "timeline": tl}})
+        await log_audit(user, "cancellation", "reject", request, record_id=cid, old={"status": old}, new={"status": "REJECTED", "reason": reason})
+        await _notify("Cancellation ditolak", f"{d['cancellation_number']} ditolak: {reason}", "/approvals", role="accounting")
+        await _notify("Cancellation ditolak", f"{d['cancellation_number']} ditolak: {reason}", "/approvals", user_id=d.get("created_by_id"))
+        return serialize(await db.cancellation_requests.find_one({"_id": ObjectId(cid)}))
+    if action == "REQUEST_REVISION":
+        tl = d.get("timeline", []) + [_timeline_entry(user, "Revision Requested", old, "REQUESTED", request, body.get("reason", ""))]
+        await db.cancellation_requests.update_one({"_id": ObjectId(cid)}, {"$set": {"status": "REQUESTED", "timeline": tl}})
+        await log_audit(user, "cancellation", "request_revision", request, record_id=cid)
+        await _notify("Revisi cancellation diminta", f"{d['cancellation_number']} perlu revisi", "/approvals", role="accounting")
+        return serialize(await db.cancellation_requests.find_one({"_id": ObjectId(cid)}))
+    # APPROVE — Super Admin may override amounts
+    review = d.get("accounting_review") or {}
+    fee = float(body.get("cancellation_fee", review.get("cancellation_fee", 0)) or 0)
+    nonref = float(body.get("non_refundable_cost", review.get("non_refundable_cost", 0)) or 0)
+    other = float(body.get("other_deduction", review.get("other_deduction", 0)) or 0)
+    estimated = max(0.0, float(d.get("total_paid") or 0) - fee - nonref - other)
+    b = await db.bookings.find_one({"_id": ObjectId(d["booking_id"])})
+    new_booking_status = "PARTIALLY_CANCELLED" if d.get("is_partial") else "CANCELLED"
+    upd = {"status": new_booking_status}
+    if d.get("is_partial"):
+        upd["pax"] = max(0, int(b.get("pax") or 0) - int(d.get("cancelled_pax") or 0))
+        await db.travelers.update_many({"_id": {"$in": [ObjectId(t) for t in d.get("cancelled_traveler_ids", []) if ObjectId.is_valid(t)]}}, {"$set": {"cancelled": True}})
+    if b:
+        await db.bookings.update_one({"_id": b["_id"]}, {"$set": upd})
+        if b.get("departure_id") and ObjectId.is_valid(b["departure_id"]):
+            await db.departures.update_one({"_id": ObjectId(b["departure_id"])}, {"$inc": {"confirmed_pax": -int(d.get("cancelled_pax") or 0)}})
+    tl = d.get("timeline", []) + [_timeline_entry(user, "Super Admin Approved", old, "APPROVED", request, "", estimated)]
+    await db.cancellation_requests.update_one({"_id": ObjectId(cid)}, {"$set": {"status": "APPROVED",
+        "approval": {"action": "APPROVE", "by": user["name"], "at": now_iso(),
+                     "cancellation_fee": fee, "non_refundable_cost": nonref, "other_deduction": other, "estimated_refund": estimated},
+        "timeline": tl}})
+    await log_audit(user, "cancellation", "approve", request, record_id=cid, old={"status": old, "booking_status": b.get("status") if b else None}, new={"status": "APPROVED", "booking_status": new_booking_status, "estimated_refund": estimated})
+    # Auto-create refund request (CALCULATED)
+    rnum = await next_number("RFD", db.refund_requests, "refund_number")
+    refund = {"refund_number": rnum, "cancellation_id": cid, "cancellation_number": d["cancellation_number"],
+              "booking_id": d["booking_id"], "booking_number": d["booking_number"],
+              "customer_id": d.get("customer_id"), "customer_name": d.get("customer_name"),
+              "package_name": d.get("package_name"), "sales_pic_id": d.get("sales_pic_id"), "sales_name": d.get("sales_name"),
+              "original_booking_value": d.get("total_booking_value"), "discount": 0,
+              "net_booking_value": d.get("total_booking_value"), "total_paid": d.get("total_paid"),
+              "cancellation_fee": fee, "non_refundable_cost": nonref, "other_deduction": other,
+              "proposed_refund": estimated, "recommendation": review.get("recommendation", ""),
+              "bank": {"bank_name": "", "account_number": "", "account_holder": ""},
+              "supporting_documents": [], "payments": [], "refunded_amount": 0.0,
+              "approval": None, "status": "CALCULATED", "created_by": "SYSTEM", "created_at": now_iso(),
+              "timeline": [_timeline_entry(user, "Refund Calculated", None, "CALCULATED", request, "", estimated)]}
+    await db.refund_requests.insert_one(refund)
+    await _notify("Booking dibatalkan", f"{d['booking_number']} disetujui. Refund {rnum} dibuat (Rp {estimated:,.0f})".replace(",", "."), "/approvals", role="accounting")
+    await _notify("Cancellation disetujui", f"{d['cancellation_number']} disetujui Super Admin", "/approvals", user_id=d.get("created_by_id"))
+    return serialize(await db.cancellation_requests.find_one({"_id": ObjectId(cid)}))
+
+
+@api_router.post("/cancellations/{cid}/reopen")
+async def reopen_cancellation(cid: str, request: Request, user: dict = Depends(require_role("super_admin"))):
+    d = await db.cancellation_requests.find_one({"_id": ObjectId(cid)})
+    if not d:
+        raise HTTPException(status_code=404, detail="Not found")
+    tl = d.get("timeline", []) + [_timeline_entry(user, "Reopened", d["status"], "REQUESTED", request)]
+    await db.cancellation_requests.update_one({"_id": ObjectId(cid)}, {"$set": {"status": "REQUESTED", "timeline": tl}})
+    await log_audit(user, "cancellation", "reopen", request, record_id=cid)
+    return serialize(await db.cancellation_requests.find_one({"_id": ObjectId(cid)}))
+
+
+# ---------- REFUND ----------
+@api_router.get("/refund-requests")
+async def list_refund_requests(status: Optional[str] = None, user: dict = Depends(require_permission("refund.view"))):
+    q = {}
+    if user["role"] == "sales":
+        q["sales_pic_id"] = user["_id"]
+    if status and status != "all":
+        q["status"] = status
+    docs = await db.refund_requests.find(q).sort("created_at", -1).to_list(1000)
+    return [serialize(d) for d in docs]
+
+
+@api_router.get("/refund-requests/{rid}")
+async def get_refund_request(rid: str, user: dict = Depends(require_permission("refund.view"))):
+    d = await db.refund_requests.find_one({"_id": ObjectId(rid)})
+    if not d:
+        raise HTTPException(status_code=404, detail="Not found")
+    if user["role"] == "sales" and d.get("sales_pic_id") != user["_id"]:
+        raise HTTPException(status_code=403, detail="403 Forbidden")
+    return serialize(d)
+
+
+@api_router.patch("/refund-requests/{rid}/review")
+async def review_refund(rid: str, body: dict, request: Request, user: dict = Depends(require_permission("refund.review"))):
+    d = await db.refund_requests.find_one({"_id": ObjectId(rid)})
+    if not d:
+        raise HTTPException(status_code=404, detail="Not found")
+    if d["status"] not in ("CALCULATED",):
+        raise HTTPException(status_code=400, detail="Status tidak valid untuk review")
+    bank = body.get("bank") or {}
+    tl = d.get("timeline", []) + [_timeline_entry(user, "Accounting Reviewed (submitted)", d["status"], "ACCOUNTING_REVIEWED", request, body.get("recommendation", ""))]
+    await db.refund_requests.update_one({"_id": ObjectId(rid)}, {"$set": {
+        "bank": {"bank_name": bank.get("bank_name", ""), "account_number": bank.get("account_number", ""), "account_holder": bank.get("account_holder", "")},
+        "supporting_documents": body.get("supporting_documents", d.get("supporting_documents", [])),
+        "recommendation": body.get("recommendation", d.get("recommendation", "")),
+        "status": "ACCOUNTING_REVIEWED", "timeline": tl}})
+    await log_audit(user, "refund", "review", request, record_id=rid, new={"bank": bank})
+    await _notify("Refund menunggu approval", f"{d['refund_number']} siap di-approve Super Admin", "/approvals", role="super_admin")
+    return serialize(await db.refund_requests.find_one({"_id": ObjectId(rid)}))
+
+
+@api_router.patch("/refund-requests/{rid}/approve")
+async def approve_refund(rid: str, body: dict, request: Request, user: dict = Depends(require_role("super_admin"))):
+    d = await db.refund_requests.find_one({"_id": ObjectId(rid)})
+    if not d:
+        raise HTTPException(status_code=404, detail="Not found")
+    action = (body.get("action") or "").upper()
+    if action not in ("APPROVE", "REJECT", "REQUEST_REVISION"):
+        raise HTTPException(status_code=400, detail="Invalid action")
+    if d["status"] not in ("ACCOUNTING_REVIEWED",):
+        raise HTTPException(status_code=400, detail="Refund harus melalui Accounting Review dulu")
+    old = d["status"]
+    if action == "REJECT":
+        reason = body.get("reason", "")
+        if not reason:
+            raise HTTPException(status_code=400, detail="Rejection reason wajib diisi")
+        tl = d.get("timeline", []) + [_timeline_entry(user, "Refund Rejected", old, "REJECTED", request, reason)]
+        await db.refund_requests.update_one({"_id": ObjectId(rid)}, {"$set": {"status": "REJECTED", "approval": {"action": "REJECT", "by": user["name"], "at": now_iso(), "reason": reason}, "timeline": tl}})
+        await log_audit(user, "refund", "reject", request, record_id=rid, new={"reason": reason})
+        await _notify("Refund ditolak", f"{d['refund_number']}: {reason}", "/approvals", role="accounting")
+        return serialize(await db.refund_requests.find_one({"_id": ObjectId(rid)}))
+    if action == "REQUEST_REVISION":
+        tl = d.get("timeline", []) + [_timeline_entry(user, "Revision Requested", old, "CALCULATED", request, body.get("reason", ""))]
+        await db.refund_requests.update_one({"_id": ObjectId(rid)}, {"$set": {"status": "CALCULATED", "timeline": tl}})
+        await log_audit(user, "refund", "request_revision", request, record_id=rid)
+        await _notify("Revisi refund diminta", f"{d['refund_number']} perlu revisi", "/approvals", role="accounting")
+        return serialize(await db.refund_requests.find_one({"_id": ObjectId(rid)}))
+    proposed = float(body.get("proposed_refund", d.get("proposed_refund", 0)) or 0)
+    tl = d.get("timeline", []) + [_timeline_entry(user, "Refund Approved", old, "APPROVED", request, "", proposed)]
+    await db.refund_requests.update_one({"_id": ObjectId(rid)}, {"$set": {"status": "APPROVED", "proposed_refund": proposed,
+        "approval": {"action": "APPROVE", "by": user["name"], "at": now_iso(), "proposed_refund": proposed}, "timeline": tl}})
+    await log_audit(user, "refund", "approve", request, record_id=rid, new={"proposed_refund": proposed})
+    await _notify("Refund disetujui", f"{d['refund_number']} disetujui. Accounting dapat memproses pembayaran.", "/approvals", role="accounting")
+    await _notify("Refund disetujui", f"{d['refund_number']} disetujui Super Admin", "/approvals", user_id=d.get("sales_pic_id"))
+    return serialize(await db.refund_requests.find_one({"_id": ObjectId(rid)}))
+
+
+@api_router.post("/refund-requests/{rid}/process")
+async def process_refund(rid: str, body: dict, request: Request, user: dict = Depends(require_permission("refund.process"))):
+    d = await db.refund_requests.find_one({"_id": ObjectId(rid)})
+    if not d:
+        raise HTTPException(status_code=404, detail="Not found")
+    if d["status"] not in ("APPROVED", "PROCESSING", "PARTIALLY_REFUNDED"):
+        raise HTTPException(status_code=403, detail="403 Forbidden — Refund belum disetujui Super Admin")
+    amount = float(body.get("amount") or 0)
+    if amount <= 0:
+        raise HTTPException(status_code=400, detail="Amount tidak valid")
+    payment = {"payment_date": body.get("payment_date", today_str()), "amount": amount,
+               "bank": body.get("bank", ""), "account": body.get("account", ""),
+               "transaction_reference": body.get("transaction_reference", ""),
+               "proof_url": body.get("proof_url", ""), "notes": body.get("notes", ""),
+               "processed_by": user["name"], "processed_at": now_iso()}
+    refunded = float(d.get("refunded_amount") or 0) + amount
+    new_status = "REFUNDED" if refunded >= float(d.get("proposed_refund") or 0) else "PARTIALLY_REFUNDED"
+    tl = d.get("timeline", []) + [_timeline_entry(user, "Payment Processed", d["status"], new_status, request, "", amount)]
+    await db.refund_requests.update_one({"_id": ObjectId(rid)}, {"$push": {"payments": payment},
+        "$set": {"refunded_amount": refunded, "status": new_status, "timeline": tl}})
+    await db.refunds.insert_one({"amount": amount, "reason": f"Refund {d['refund_number']} • {d['booking_number']}",
+        "method": body.get("bank", ""), "date": payment["payment_date"], "status": "PAID",
+        "refund_request_id": rid, "created_at": now_iso(), "created_by": user["name"]})
+    await log_audit(user, "refund", "process", request, record_id=rid, new={"amount": amount, "status": new_status})
+    await _notify("Refund diproses", f"{d['refund_number']} • Rp {amount:,.0f} ({new_status})".replace(",", "."), "/approvals", role="super_admin")
+    await _notify("Refund diproses", f"{d['refund_number']} telah diproses", "/approvals", user_id=d.get("sales_pic_id"))
+    return serialize(await db.refund_requests.find_one({"_id": ObjectId(rid)}))
+
+
+@api_router.post("/refund-requests/{rid}/reopen")
+async def reopen_refund(rid: str, request: Request, user: dict = Depends(require_role("super_admin"))):
+    d = await db.refund_requests.find_one({"_id": ObjectId(rid)})
+    if not d:
+        raise HTTPException(status_code=404, detail="Not found")
+    tl = d.get("timeline", []) + [_timeline_entry(user, "Reopened", d["status"], "CALCULATED", request)]
+    await db.refund_requests.update_one({"_id": ObjectId(rid)}, {"$set": {"status": "CALCULATED", "timeline": tl}})
+    await log_audit(user, "refund", "reopen", request, record_id=rid)
+    return serialize(await db.refund_requests.find_one({"_id": ObjectId(rid)}))
+
+
 app.include_router(api_router)
 
 app.add_middleware(
@@ -3649,6 +3974,10 @@ async def seed():
     await db.idempotency_keys.create_index("key", unique=True)
     await db.bookings.create_index("external_booking_id")
     await db.n8n_api_logs.create_index("timestamp")
+    await db.cancellation_requests.create_index("booking_id")
+    await db.cancellation_requests.create_index("status")
+    await db.refund_requests.create_index("status")
+    await db.notifications.create_index([("role", 1), ("created_at", -1)])
     if await db.tax_masters.count_documents({}) == 0:
         await db.tax_masters.insert_many([
             {"tax_code": "NONTAX", "tax_name": "Non Taxable", "tax_type": "OTHER", "rate": 0, "tax_base": "SELLING_PRICE",

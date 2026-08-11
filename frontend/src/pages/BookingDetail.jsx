@@ -12,7 +12,7 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
-import { ArrowLeft, Loader2, Plus, Trash2, Upload, FileText, Users, CreditCard } from "lucide-react";
+import { ArrowLeft, Loader2, Plus, Trash2, Upload, FileText, Users, CreditCard, Ban } from "lucide-react";
 import { toast } from "sonner";
 
 export default function BookingDetail() {
@@ -24,9 +24,11 @@ export default function BookingDetail() {
   const canInvoice = hasPerm("invoice.manage");
   const canPay = hasPerm("payment.manage");
   const canSchedule = hasPerm("booking.manage");
+  const canCancel = hasPerm("cancellation.request");
   const [data, setData] = useState(undefined);
   const [travOpen, setTravOpen] = useState(false);
   const [payFor, setPayFor] = useState(null);
+  const [cancelOpen, setCancelOpen] = useState(false);
 
   const load = useCallback(() => {
     api.get(`/bookings/${id}`).then((r) => setData(r.data)).catch(() => setData(null));
@@ -51,7 +53,9 @@ export default function BookingDetail() {
           <div className="flex items-center gap-2"><h1 className="font-display text-3xl font-bold text-slate-900">{b.customer_name}</h1><Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200">{b.status}</Badge></div>
           <p className="text-slate-500 mt-1 font-mono text-xs">{b.booking_number} · v{b.package_version} · {b.package_name} · Source: {b.booking_source}</p>
         </div>
-        <div className="text-right"><p className="font-display text-2xl font-bold text-slate-900">{fmtIDR(b.total)}</p><p className="text-xs text-slate-400">{b.pax} pax · diskon {b.discount_percent}%</p></div>
+        <div className="text-right"><p className="font-display text-2xl font-bold text-slate-900">{fmtIDR(b.total)}</p><p className="text-xs text-slate-400">{b.pax} pax · diskon {b.discount_percent}%</p>
+          {canCancel && !["CANCELLED"].includes(b.status) && <Button size="sm" variant="outline" className="mt-2 text-red-600 border-red-200" onClick={() => setCancelOpen(true)} data-testid="request-cancellation-button"><Ban className="h-4 w-4 mr-1" />Request Cancellation</Button>}
+        </div>
       </div>
 
       <Tabs defaultValue="travelers">
@@ -95,6 +99,7 @@ export default function BookingDetail() {
 
       {travOpen && <TravelerDialog bookingId={id} onClose={() => setTravOpen(false)} onSaved={() => { setTravOpen(false); load(); }} />}
       {payFor && <PaymentDialog invoice={payFor} onClose={() => setPayFor(null)} onSaved={() => { setPayFor(null); load(); }} />}
+      {cancelOpen && <CancellationDialog booking={b} travelers={data.travelers} onClose={() => setCancelOpen(false)} onSaved={() => { setCancelOpen(false); load(); }} />}
     </div>
   );
 }
@@ -193,6 +198,49 @@ function PaymentDialog({ invoice, onClose, onSaved }) {
           <div className="space-y-1"><Label className="text-xs">Reference No.</Label><Input value={f.reference_number} onChange={(e) => set("reference_number")(e.target.value)} data-testid="pay-ref" /></div>
         </div>
         <DialogFooter><Button onClick={save} disabled={saving} className="bg-blue-600 hover:bg-blue-700" data-testid="save-payment-button">{saving ? "Saving..." : "Simpan pembayaran"}</Button></DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function CancellationDialog({ booking, travelers, onClose, onSaved }) {
+  const [selected, setSelected] = useState([]);
+  const [reason, setReason] = useState("");
+  const [detail, setDetail] = useState("");
+  const [notes, setNotes] = useState("");
+  const [full, setFull] = useState(true);
+  const toggle = (id) => setSelected((s) => s.includes(id) ? s.filter((x) => x !== id) : [...s, id]);
+  const submit = async () => {
+    if (!reason) return toast.error("Cancellation reason wajib diisi");
+    const body = { booking_id: booking._id, reason, detail, notes,
+      cancelled_traveler_ids: full ? [] : selected };
+    if (!full && selected.length === 0) return toast.error("Pilih minimal 1 jamaah");
+    try { await api.post("/cancellations", body); toast.success("Cancellation diajukan — menunggu review & approval"); onSaved(); }
+    catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); }
+  };
+  return (
+    <Dialog open onOpenChange={onClose}>
+      <DialogContent className="bg-white max-w-lg" data-testid="cancellation-dialog">
+        <DialogHeader><DialogTitle>Request Cancellation — {booking.booking_number}</DialogTitle></DialogHeader>
+        <div className="space-y-3 text-sm">
+          <div className="flex items-center gap-4">
+            <label className="flex items-center gap-2"><input type="radio" checked={full} onChange={() => setFull(true)} data-testid="cancel-full" /> Full Cancellation</label>
+            <label className="flex items-center gap-2"><input type="radio" checked={!full} onChange={() => setFull(false)} data-testid="cancel-partial" /> Partial (pilih jamaah)</label>
+          </div>
+          {!full && (
+            <div className="border border-slate-200 rounded p-2 max-h-40 overflow-y-auto space-y-1">
+              {travelers.length === 0 ? <p className="text-slate-400">Belum ada jamaah.</p> : travelers.map((t) => (
+                <label key={t._id} className="flex items-center gap-2" data-testid={`cancel-trav-${t._id}`}>
+                  <input type="checkbox" checked={selected.includes(t._id)} onChange={() => toggle(t._id)} /> {t.full_name}
+                </label>
+              ))}
+            </div>
+          )}
+          <div><Label className="text-xs">Cancellation Reason</Label><Input value={reason} onChange={(e) => setReason(e.target.value)} data-testid="cancel-reason" /></div>
+          <div><Label className="text-xs">Cancellation Detail</Label><Input value={detail} onChange={(e) => setDetail(e.target.value)} data-testid="cancel-detail" /></div>
+          <div><Label className="text-xs">Notes</Label><Input value={notes} onChange={(e) => setNotes(e.target.value)} data-testid="cancel-notes" /></div>
+        </div>
+        <DialogFooter><Button variant="outline" onClick={onClose}>Batal</Button><Button className="bg-red-600 hover:bg-red-700" onClick={submit} data-testid="cancel-submit">Ajukan</Button></DialogFooter>
       </DialogContent>
     </Dialog>
   );

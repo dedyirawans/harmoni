@@ -29,6 +29,7 @@ import BookingDetail from "@/pages/BookingDetail";
 import Accounting from "@/pages/Accounting";
 import Integration from "@/pages/Integration";
 import Commission from "@/pages/Commission";
+import Approvals from "@/pages/Approvals";
 
 const PAGES = {
   "/dashboard": Dashboard,
@@ -47,6 +48,7 @@ const PAGES = {
   "/accounting": Accounting,
   "/integration": Integration,
   "/commission": Commission,
+  "/approvals": Approvals,
 };
 
 function App() {
