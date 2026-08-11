@@ -109,7 +109,7 @@ export default function ProductDetail() {
                   ))}
                 </div>
               )}
-              {p.sub_category === "OPEN_TRIP" && p.min_quota_pax > 0 && (
+              {["OPEN_TRIP", "SEAT_IN_COACH"].includes(p.sub_category) && p.min_quota_pax > 0 && (
                 <div className="flex justify-between text-sm pt-2 border-t"><span className="text-slate-500">Min. Kuota Pax</span><span className="font-medium text-slate-800">{p.min_quota_pax}</span></div>
               )}
               {canHpp && p.gross_margin != null && (

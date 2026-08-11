@@ -45,6 +45,7 @@ Super Admin can edit sales/accounting permissions via Settings > Roles & Permiss
 
 ## Phase 3.2 — Product Filters + Dashboard Charts (2026-06) — DONE
 - Product Management: Category filter (package-type-filter) + Sub-Category filter (package-sub-filter); backend list_packages accepts sub_category param.
+- SEAT_IN_COACH now supports min_quota_pax with the SAME pricing logic as OPEN_TRIP (pax<quota → per-pax = quota*base/pax). Backend /packages/{id}/price handles both; UI shows Min Kuota Pax input + detail breakdown for both sub-categories.
 - Package category & sub-category editable after creation (edit-type-select + Sub Kategori in edit dialog).
 - Dashboard: data + charts only (removed quick-action nav buttons + placeholder). New GET /api/dashboard/charts (leads_by_stage, leads_by_source, monthly_leads, packages_by_type; ownership-scoped for Sales). Super Admin stat cards now real (Users/Customers/Leads/Packages). Charts via recharts.
 - Tests: frontend 100% (iteration_7.json); backend curl-verified.

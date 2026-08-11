@@ -1508,13 +1508,13 @@ async def package_price(pid: str, pax: int = 1, hotel: Optional[str] = None,
         return {"mode": "private", "pax": pax, "hotel": hotel,
                 "price_per_pax": round(float(match["price"])) if match else round(base),
                 "tiers": pkg.get("pricing_tiers", [])}
-    if sub == "OPEN_TRIP":
+    if sub in ("OPEN_TRIP", "SEAT_IN_COACH"):
         minq = int(pkg.get("min_quota_pax") or 0)
         if minq and pax and pax < minq:
             eff = (minq * base) / pax
         else:
             eff = base
-        return {"mode": "open_trip", "pax": pax, "min_quota_pax": minq,
+        return {"mode": "open_trip" if sub == "OPEN_TRIP" else "seat_in_coach", "pax": pax, "min_quota_pax": minq,
                 "base_price": round(base), "price_per_pax": round(eff),
                 "quota_met": (not minq) or pax >= minq}
     return {"mode": "fixed", "pax": pax, "price_per_pax": round(base)}

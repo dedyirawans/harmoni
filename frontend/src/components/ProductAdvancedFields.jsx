@@ -68,9 +68,9 @@ export function ProductAdvancedFields({ f, set }) {
             <Input type="number" value={f.tour_price_portion ?? 0} onChange={(e) => set("tour_price_portion")(e.target.value)} data-testid="tour-portion-input" />
           </div>
         )}
-        {f.sub_category === "OPEN_TRIP" && (
+        {["OPEN_TRIP", "SEAT_IN_COACH"].includes(f.sub_category) && (
           <div className="space-y-2 col-span-2 sm:col-span-1">
-            <Label>Minimum Kuota Pax (Open Trip)</Label>
+            <Label>Minimum Kuota Pax ({f.sub_category === "OPEN_TRIP" ? "Open Trip" : "Seat in Coach"})</Label>
             <Input type="number" value={f.min_quota_pax ?? 0} onChange={(e) => set("min_quota_pax")(e.target.value)} data-testid="min-quota-input" />
           </div>
         )}
