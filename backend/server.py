@@ -4309,7 +4309,7 @@ async def n8n_reply(body: dict, user: dict = Depends(require_role("super_admin")
     wa = (cust or {}).get("whatsapp") or body.get("whatsapp", "")
     doc = {"conversation_id": str(_uuid.uuid4()), "customer_id": cid, "customer_name": (cust or {}).get("full_name"),
            "whatsapp": wa, "channel": "WHATSAPP", "direction": "OUTBOUND", "message": msg, "message_type": "TEXT",
-           "sender_type": "SALES", "receiver": wa, "ai_or_human": "HUMAN", "n8n_workflow_id": "", "status": "SENT",
+           "sender_type": "SALES", "sender_name": user["name"], "receiver": wa, "ai_or_human": "HUMAN", "n8n_workflow_id": "", "status": "SENT",
            "timestamp": now_iso(), "created_at": now_iso()}
     await db.conversations.insert_one(doc)
     if cid and ObjectId.is_valid(cid):

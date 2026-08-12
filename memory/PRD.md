@@ -1,6 +1,11 @@
 # Safar Travel CRM — Product Requirements (Living Doc)
 
-## N8N Inbox Enhancements — Unread, Search & Quick-Reply Templates (2026-06) — DONE
+## N8N Inbox — Custom Templates, Handover Filter & Sender Indicator (2026-06) — DONE
+- **Template CS Kustom**: dikelola Super Admin di **Settings → Global → "Template Balasan Cepat N8N Inbox"** (tambah/ubah/hapus label+teks). Disimpan di `system_settings.settings.n8n_reply_templates` (pakai PUT `/api/system-settings` yang sudah ada, tanpa endpoint baru). N8N Inbox memuat template ini via GET `/api/system-settings` (fallback ke 4 default bila kosong); chip kirim satu ketuk.
+- **Filter "Perlu CS"**: toggle Semua / Perlu CS di Inbox — menyaring percakapan `status=REQUIRES_HUMAN` + badge jumlah, agar handover mudah diprioritaskan.
+- **Sender indicator**: reply CS kini menyimpan `sender_name` (nama user). Bubble menampilkan label pengirim: nama customer (inbound), "AI Bot" (AI), "AUTO SALES / System" (SYSTEM), "<Nama> · Sales/CS" (SALES).
+- Verifikasi: curl (template persist Salam Pembuka/Minta Data Jamaah, reply sender_name="Dedy Irawan") + screenshot (Settings editor card, Inbox filter Perlu CS=1, bubble label AI Bot/Sales-CS/nama).
+
 - **Unread indicator**: monitor menghitung `unread_count` per percakapan (jumlah pesan INBOUND dengan timestamp > `last_read_at`). UI: titik biru + nama tebal + badge merah per item, badge total di tab Inbox. `POST /api/integrations/n8n/conversations/read` (super_admin) menandai dibaca (koleksi `n8n_inbox_reads` key=customer_id atau `wa:<no>`); dipanggil otomatis saat percakapan dibuka.
 - **Search Inbox**: kotak cari client-side by nama customer / nomor WhatsApp.
 - **Quick-Reply Templates CS**: 4 template siap pakai (Jam Operasional, Minta Data Jamaah, Cek Ketersediaan, Info Pembayaran) sebagai chip di atas kotak balasan; klik = kirim satu ketuk via endpoint reply.

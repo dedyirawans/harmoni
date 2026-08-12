@@ -21,8 +21,15 @@ export default function N8N() {
   const [d, setD] = useState(null);
   const [testing, setTesting] = useState(false);
   const [retrying, setRetrying] = useState(null);
+  const [templates, setTemplates] = useState(DEFAULT_TEMPLATES);
   const load = () => api.get("/integrations/n8n/monitor").then((r) => setD(r.data)).catch(() => setD(false));
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    load();
+    api.get("/system-settings").then((r) => {
+      const t = r.data?.settings?.n8n_reply_templates;
+      if (Array.isArray(t) && t.length) setTemplates(t);
+    }).catch(() => {});
+  }, []);
   if (user.role !== "super_admin") return <Navigate to="/dashboard" replace />;
 
   const testConn = async () => {
@@ -87,7 +94,7 @@ export default function N8N() {
           </div>
         </TabsContent>
         <TabsContent value="inbox">
-          <Inbox conversations={d.conversations} refresh={load} />
+          <Inbox conversations={d.conversations} refresh={load} templates={templates} />
         </TabsContent>
         <TabsContent value="conversations">
           <Tbl testid="n8n-conv-table" cols={["Customer", "WhatsApp", "Last Message", "AI", "Status", "Last Activity"]} rows={d.conversations}
@@ -111,26 +118,36 @@ export default function N8N() {
   );
 }
 
-const TEMPLATES = [
+const DEFAULT_TEMPLATES = [
   { label: "Jam Operasional", text: "Halo, terima kasih sudah menghubungi kami. Jam operasional CS kami Senin–Sabtu pukul 08.00–17.00 WIB. Kami akan segera membantu Anda. 🙏" },
   { label: "Minta Data Jamaah", text: "Untuk proses pendaftaran, mohon kirimkan data jamaah: Nama sesuai paspor, NIK, No. Paspor & masa berlaku, tanggal lahir, dan nomor WhatsApp aktif. Terima kasih." },
   { label: "Cek Ketersediaan", text: "Baik, kami cek ketersediaan seat untuk tanggal keberangkatan yang Anda inginkan terlebih dahulu ya. Mohon ditunggu sebentar." },
   { label: "Info Pembayaran", text: "Untuk melanjutkan pemesanan, silakan lakukan pembayaran DP. Detail rekening & invoice akan kami kirimkan. Ada yang bisa kami bantu lagi?" },
 ];
 
-function Inbox({ conversations, refresh }) {
+function Inbox({ conversations, refresh, templates }) {
   const [active, setActive] = useState(null);
   const [thread, setThread] = useState([]);
   const [loading, setLoading] = useState(false);
   const [reply, setReply] = useState("");
   const [sending, setSending] = useState(false);
   const [q, setQ] = useState("");
+  const [flt, setFlt] = useState("all");
 
+  const humanCount = (conversations || []).filter((c) => c.status === "REQUIRES_HUMAN").length;
   const filtered = (conversations || []).filter((c) => {
+    if (flt === "human" && c.status !== "REQUIRES_HUMAN") return false;
     const s = q.trim().toLowerCase();
     if (!s) return true;
     return (c.customer_name || "").toLowerCase().includes(s) || (c.whatsapp || "").toLowerCase().includes(s);
   });
+  const senderLabel = (m) => {
+    if (m.direction === "INBOUND") return m.customer_name || "Customer";
+    if (m.sender_type === "AI") return "AI Bot";
+    if (m.sender_type === "SYSTEM") return "AUTO SALES / System";
+    if (m.sender_type === "SALES") return m.sender_name ? `${m.sender_name} · Sales/CS` : "Sales/CS";
+    return m.sender_name || m.sender_type || "—";
+  };
 
   const open = async (c) => {
     setActive(c); setReply(""); setLoading(true);
@@ -170,6 +187,14 @@ function Inbox({ conversations, refresh }) {
               <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Cari nama / nomor…"
                 className="w-full pl-8 pr-3 py-2 text-sm rounded-md border border-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-100 focus:border-blue-300"
                 data-testid="n8n-inbox-search" />
+            </div>
+            <div className="flex gap-1.5 mt-2">
+              <button onClick={() => setFlt("all")} data-testid="n8n-filter-all"
+                className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${flt === "all" ? "bg-slate-900 text-white border-slate-900" : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50"}`}>Semua</button>
+              <button onClick={() => setFlt("human")} data-testid="n8n-filter-human"
+                className={`text-xs px-2.5 py-1 rounded-full border flex items-center gap-1 transition-colors ${flt === "human" ? "bg-amber-500 text-white border-amber-500" : "bg-white text-amber-700 border-amber-200 hover:bg-amber-50"}`}>
+                Perlu CS{humanCount > 0 && <span className="inline-flex items-center justify-center min-w-[16px] h-[16px] px-1 rounded-full bg-red-500 text-white text-[9px] font-semibold">{humanCount}</span>}
+              </button>
             </div>
           </div>
           <div className="flex-1 overflow-y-auto" data-testid="n8n-inbox-list">
@@ -218,14 +243,14 @@ function Inbox({ conversations, refresh }) {
                         <div key={i} className={`flex ${mine ? "justify-end" : "justify-start"}`}>
                           <div className={`max-w-[75%] rounded-2xl px-3.5 py-2 text-sm ${mine ? "bg-blue-600 text-white rounded-br-sm" : "bg-white border border-slate-200 text-slate-800 rounded-bl-sm"}`}>
                             <p className="whitespace-pre-wrap break-words">{m.message}</p>
-                            <p className={`text-[10px] mt-1 ${mine ? "text-blue-100" : "text-slate-400"}`}>{m.sender_type} · {fmt(m.timestamp)}</p>
+                            <p className={`text-[10px] mt-1 ${mine ? "text-blue-100" : "text-slate-400"}`}>{senderLabel(m)} · {fmt(m.timestamp)}</p>
                           </div>
                         </div>
                       );
                     })}
               </div>
               <div className="px-3 pt-2.5 border-t border-slate-200 flex flex-wrap gap-1.5" data-testid="n8n-quick-replies">
-                {TEMPLATES.map((t, i) => (
+                {(templates || []).filter((t) => t.label && t.text).map((t, i) => (
                   <button key={i} onClick={() => send(t.text)} disabled={sending} data-testid={`n8n-template-${i}`}
                     className="text-xs px-2.5 py-1 rounded-full border border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100 disabled:opacity-50 transition-colors">
                     {t.label}
