@@ -1,5 +1,14 @@
 # Safar Travel CRM — Product Requirements (Living Doc)
 
+## N8N Enhancements — Retry, Central Inbox + CS Reply, Order Confirmation (2026-06) — DONE
+- **Retry Failed Sync**: tab Sync Logs (`N8N.jsx`) kolom Retry + Action; baris FAILED punya tombol Retry → `POST /api/integrations/n8n/sync/{log_id}/retry` (super_admin). Re-deliver ke n8n bila base_url ada; hasil SUCCESS/FAILED/REJECTED + retry_count++ (idempotent, non-destruktif).
+- **Centralized Conversation Inbox**: tab baru "Inbox" di `/n8n` (super_admin only). 2 panel: kiri daftar percakapan per-customer (nama/last message/HANDOVER badge), kanan thread bubble (customer kiri, AI/SALES/OUTBOUND kanan biru) + kotak balasan CS.
+- **CS Reply**: `POST /api/integrations/n8n/conversations/reply` (super_admin) — simpan conversation OUTBOUND (sender_type SALES, ai_or_human HUMAN, status SENT), set customer.conversation_status=AGENT_REPLIED, trigger event `conversation.reply` ke n8n. Thread endpoint `GET /api/integrations/n8n/conversations/thread?customer_id|whatsapp` (super_admin) menangani percakapan tanpa customer_id (match by whatsapp).
+- **Order Confirmation auto-reply**: sudah otomatis di backend — `v1_create_booking` (AUTO SALES) trigger `order.confirmation` (booking_number, customer, package, total, customer_phone) ke n8n saat booking dibuat.
+- **RBAC**: semua endpoint baru super_admin only; Sales/Accounting tidak melihat menu N8N.
+- Verifikasi: curl (thread 3 msg, reply OUTBOUND success, retry REJECTED tanpa base_url) + screenshot UI Inbox (bubble kiri/kanan, balasan CS terkirim & tampil).
+
+
 ## Phase 8J — N8N Admin Monitoring & Order Sync (2026-06) — DONE
 - **Menu N8N khusus Super Admin** (`/n8n` → `N8N.jsx`; tidak tampil untuk Sales/Accounting; backend monitor 403 utk non-super_admin).
 - **Dashboard**: `GET /api/integrations/n8n/monitor` (super_admin) — Connection Status, Last Sync, Messages Today (in/out/AI), Human Handover, Orders Today, AUTO SALES Orders, Failed Requests, API Errors (dari koleksi conversations, bookings AUTO SALES, n8n_api_logs, config).

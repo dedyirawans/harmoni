@@ -4267,6 +4267,58 @@ async def n8n_monitor(user: dict = Depends(require_role("super_admin"))):
             "conversations": conversations, "orders": orders, "sync_logs": sync_logs}
 
 
+@api_router.post("/integrations/n8n/sync/{log_id}/retry")
+async def n8n_retry(log_id: str, user: dict = Depends(require_role("super_admin"))):
+    l = await db.n8n_api_logs.find_one({"_id": ObjectId(log_id)}) if ObjectId.is_valid(log_id) else None
+    if not l:
+        raise HTTPException(status_code=404, detail="Log not found")
+    cfg = await _n8n_cfg()
+    ok = False
+    if cfg.get("base_url"):
+        try:
+            await _deliver_n8n("retry", {"endpoint": l.get("endpoint"), "method": l.get("method"),
+                                         "external_id": l.get("external_id"), "retried_by": user["name"]})
+            ok = True
+        except Exception:
+            ok = False
+    status = "SUCCESS" if ok else ("FAILED" if cfg.get("base_url") else "REJECTED")
+    await db.n8n_api_logs.update_one({"_id": l["_id"]}, {"$set": {"ok": ok, "status": status}, "$inc": {"retry_count": 1}})
+    return {"success": ok, "status": status}
+
+
+@api_router.post("/integrations/n8n/conversations/reply")
+async def n8n_reply(body: dict, user: dict = Depends(require_role("super_admin"))):
+    cid = body.get("customer_id")
+    msg = (body.get("message") or "").strip()
+    if not msg:
+        raise HTTPException(status_code=400, detail="Pesan tidak boleh kosong")
+    cust = await db.customers.find_one({"_id": ObjectId(cid)}) if (cid and ObjectId.is_valid(cid)) else None
+    wa = (cust or {}).get("whatsapp") or body.get("whatsapp", "")
+    doc = {"conversation_id": str(_uuid.uuid4()), "customer_id": cid, "customer_name": (cust or {}).get("full_name"),
+           "whatsapp": wa, "channel": "WHATSAPP", "direction": "OUTBOUND", "message": msg, "message_type": "TEXT",
+           "sender_type": "SALES", "receiver": wa, "ai_or_human": "HUMAN", "n8n_workflow_id": "", "status": "SENT",
+           "timestamp": now_iso(), "created_at": now_iso()}
+    await db.conversations.insert_one(doc)
+    if cid and ObjectId.is_valid(cid):
+        await db.customers.update_one({"_id": ObjectId(cid)}, {"$set": {"conversation_status": "AGENT_REPLIED"}})
+    trigger_n8n("conversation.reply", {"customer_id": cid, "whatsapp": wa, "message": msg, "agent": user["name"]})
+    return {"success": True, "conversation": serialize(doc)}
+
+
+@api_router.get("/integrations/n8n/conversations/thread")
+async def n8n_conv_thread(customer_id: Optional[str] = None, whatsapp: Optional[str] = None,
+                          user: dict = Depends(require_role("super_admin"))):
+    q = {}
+    if customer_id:
+        q = {"customer_id": customer_id}
+    elif whatsapp:
+        q = {"whatsapp": whatsapp}
+    else:
+        raise HTTPException(status_code=400, detail="customer_id atau whatsapp wajib diisi")
+    docs = await db.conversations.find(q).sort("timestamp", 1).to_list(2000)
+    return [serialize(d) for d in docs]
+
+
 # ---------- Phase 8I: Availability, Conversation Log, Human Handover ----------
 async def _availability(package_id, departure_id=None):
     pkg = await db.packages.find_one({"_id": ObjectId(package_id)}) if ObjectId.is_valid(package_id) else None
@@ -4544,6 +4596,20 @@ async def v1_create_booking(payload: dict = Body(default={}), request: Request =
         "created_at": now_iso(), "created_by": "SYSTEM"})
     if ext:
         await db.idempotency_keys.update_one({"key": ext}, {"$set": {"booking_id": bid, "created_at": now_iso()}}, upsert=True)
+    pay_link = f"/pay/{inv_number}"
+    conf_msg = (f"Halo {cust.get('full_name')}, booking Anda berhasil dibuat.\n"
+                f"No Booking: {number}\nPaket: {pkg.get('package_name')}\nPax: {pax}\n"
+                f"Total: Rp {int(total):,}\nStatus Bayar: Unpaid\nPembayaran: {pay_link}").replace(",", ".")
+    await db.conversations.insert_one({"conversation_id": str(_uuid.uuid4()), "customer_id": cid,
+        "customer_name": cust.get("full_name"), "whatsapp": cust.get("whatsapp", ""), "channel": "WHATSAPP",
+        "direction": "OUTBOUND", "message": conf_msg, "message_type": "ORDER_CONFIRMATION", "sender_type": "SYSTEM",
+        "receiver": cust.get("whatsapp", ""), "ai_or_human": "SYSTEM", "n8n_workflow_id": payload.get("workflow_id", ""),
+        "status": "SENT", "timestamp": now_iso(), "created_at": now_iso()})
+    trigger_n8n("order.confirmation", {"booking_number": number, "customer": cust.get("full_name"),
+        "customer_phone": cust.get("whatsapp", ""), "package": pkg.get("package_name"),
+        "departure": (dep or {}).get("departure_date", ""), "pax": pax, "total_price": total,
+        "payment_status": "Unpaid", "booking_status": "CONFIRMED", "payment_link": pay_link,
+        "invoice_number": inv_number, "message": conf_msg})
     trigger_n8n("booking.created", {"id": bid, "booking_number": number, "customer_name": cust.get("full_name"),
         "customer_phone": cust.get("whatsapp", ""), "total": total, "source": "AUTO SALES"})
     await _api_log(request, "/v1/bookings", "POST", ext, True, 201, start)
