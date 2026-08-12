@@ -837,6 +837,156 @@ async def cron_notifications_tasks(request: Request, background: BackgroundTasks
     return {"accepted": True}
 
 
+# ---------- Phase 9C: Central Approval Center ----------
+ADJ_TYPES = ["PRICE_ADJUSTMENT", "PAYMENT_ADJUSTMENT", "ACCOUNTING_ADJUSTMENT", "OTHER"]
+
+
+def _ac_can(user):
+    return user["role"] in ("super_admin", "accounting")
+
+
+def _ac_norm_status(s):
+    s = (s or "").upper()
+    if s in ("APPROVED", "REFUNDED", "PARTIALLY_REFUNDED", "PAID"):
+        return "APPROVED"
+    if s == "REJECTED":
+        return "REJECTED"
+    if s in ("REVISION", "NEEDS_REVISION", "REQUEST_REVISION"):
+        return "REVISION"
+    return "PENDING"
+
+
+def _ac_last_at(timeline):
+    if isinstance(timeline, list) and timeline:
+        return timeline[-1].get("at")
+    return None
+
+
+async def _collect_approvals(user, type_filter=None):
+    role = user["role"]
+    rows = []
+    if not type_filter or type_filter in ADJ_TYPES or type_filter == "ADJUSTMENT":
+        async for d in db.approvals.find({}):
+            rows.append({"source": "adjustment", "id": str(d["_id"]), "approval_number": d.get("approval_number"),
+                "type": d.get("atype"), "reference": d.get("reference", ""), "customer": d.get("customer_name", ""),
+                "amount": d.get("amount", 0), "requested_by": d.get("requested_by", ""), "requested_date": d.get("created_at"),
+                "status": _ac_norm_status(d.get("status")), "decided_date": d.get("decided_at"), "actionable": role == "super_admin"})
+    if role in ("super_admin", "accounting") and (not type_filter or type_filter == "REFUND"):
+        async for d in db.refund_requests.find({}):
+            rows.append({"source": "refund", "id": str(d["_id"]), "approval_number": d.get("refund_number"),
+                "type": "REFUND", "reference": d.get("booking_number") or d.get("cancellation_number", ""),
+                "customer": d.get("customer_name", ""), "amount": d.get("approved_refund") or d.get("proposed_refund") or 0,
+                "requested_by": d.get("created_by") or "System", "requested_date": d.get("created_at"),
+                "status": _ac_norm_status(d.get("status")), "decided_date": _ac_last_at(d.get("timeline")), "actionable": False, "link": "/approvals"})
+    if role in ("super_admin", "accounting") and (not type_filter or type_filter == "CANCELLATION"):
+        async for d in db.cancellation_requests.find({}):
+            rows.append({"source": "cancellation", "id": str(d["_id"]), "approval_number": d.get("cancellation_number"),
+                "type": "CANCELLATION", "reference": d.get("booking_number", ""), "customer": d.get("customer_name", ""),
+                "amount": d.get("penalty") or d.get("refund_amount") or 0, "requested_by": d.get("created_by", ""),
+                "requested_date": d.get("created_at"), "status": _ac_norm_status(d.get("status")),
+                "decided_date": _ac_last_at(d.get("timeline")), "actionable": False, "link": "/approvals"})
+    if role == "super_admin" and (not type_filter or type_filter == "COMMISSION"):
+        async for d in db.commission_closings.find({"status": {"$nin": ["DRAFT", "CALCULATING"]}}):
+            rows.append({"source": "commission", "id": str(d.get("period")), "approval_number": f"COMM-{d.get('period')}",
+                "type": "COMMISSION", "reference": d.get("period", ""), "customer": "—",
+                "amount": d.get("total_final") or d.get("total_commission") or 0, "requested_by": "System",
+                "requested_date": d.get("created_at"), "status": "APPROVED" if d.get("status") in ("APPROVED", "PAID") else "PENDING",
+                "decided_date": d.get("approved_at"), "actionable": False, "link": "/commission"})
+    if type_filter and type_filter in ADJ_TYPES:
+        rows = [r for r in rows if r["type"] == type_filter]
+    rows.sort(key=lambda x: (x.get("requested_date") or ""), reverse=True)
+    return rows
+
+
+@api_router.get("/approval-center")
+async def approval_center_list(type: Optional[str] = None, status: Optional[str] = None, user: dict = Depends(get_current_user)):
+    if not _ac_can(user):
+        raise HTTPException(status_code=403, detail="403 Forbidden")
+    rows = await _collect_approvals(user, type)
+    if status and status != "all":
+        rows = [r for r in rows if r["status"] == status.upper()]
+    return rows
+
+
+@api_router.get("/approval-center/stats")
+async def approval_center_stats(user: dict = Depends(get_current_user)):
+    if not _ac_can(user):
+        raise HTTPException(status_code=403, detail="403 Forbidden")
+    rows = await _collect_approvals(user)
+    today = today_str()
+    month = today[:7]
+    return {"pending": sum(1 for r in rows if r["status"] == "PENDING"),
+            "approved_today": sum(1 for r in rows if r["status"] == "APPROVED" and (r.get("decided_date") or "")[:10] == today),
+            "rejected_today": sum(1 for r in rows if r["status"] == "REJECTED" and (r.get("decided_date") or "")[:10] == today),
+            "total_this_month": sum(1 for r in rows if (r.get("requested_date") or "")[:7] == month)}
+
+
+@api_router.post("/approval-center/adjustments")
+async def create_adjustment(body: dict, user: dict = Depends(get_current_user)):
+    if user["role"] not in ("super_admin", "accounting"):
+        raise HTTPException(status_code=403, detail="403 Forbidden")
+    atype = body.get("atype", "OTHER")
+    if atype not in ADJ_TYPES:
+        atype = "OTHER"
+    num = await next_number("APR", db.approvals, "approval_number")
+    cust_name = body.get("customer_name", "")
+    if body.get("customer_id") and ObjectId.is_valid(body["customer_id"]):
+        c = await db.customers.find_one({"_id": ObjectId(body["customer_id"])})
+        cust_name = (c or {}).get("full_name", cust_name)
+    doc = {"approval_number": num, "atype": atype, "reference": body.get("reference", ""),
+           "customer_id": body.get("customer_id"), "customer_name": cust_name,
+           "amount": float(body.get("amount") or 0), "reason": body.get("reason", ""),
+           "evidence_url": body.get("evidence_url", ""), "related_documents": body.get("related_documents", []),
+           "requested_by": user["name"], "requested_by_id": user["_id"], "requested_by_role": user["role"],
+           "status": "PENDING", "history": [{"user": user["name"], "role": user["role"], "action": "CREATED",
+               "comment": body.get("reason", ""), "at": now_iso()}], "created_at": now_iso()}
+    res = await db.approvals.insert_one(doc)
+    await notify("Approval Pending", f"{num} • {atype} oleh {user['name']}", "/approval-center", role="super_admin", ntype="APPROVAL_PENDING", priority="high")
+    return serialize(await db.approvals.find_one({"_id": res.inserted_id}))
+
+
+@api_router.get("/approval-center/detail/{source}/{aid}")
+async def approval_detail(source: str, aid: str, user: dict = Depends(get_current_user)):
+    if not _ac_can(user):
+        raise HTTPException(status_code=403, detail="403 Forbidden")
+    if source == "commission":
+        d = await db.commission_closings.find_one({"period": aid})
+        if not d:
+            raise HTTPException(status_code=404, detail="Not found")
+        d = serialize(d)
+        d["history"] = d.get("timeline", [])
+        return d
+    coll = {"adjustment": db.approvals, "refund": db.refund_requests, "cancellation": db.cancellation_requests}.get(source)
+    if coll is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    d = await coll.find_one({"_id": ObjectId(aid)})
+    if not d:
+        raise HTTPException(status_code=404, detail="Not found")
+    d = serialize(d)
+    d["history"] = d.get("history") or d.get("timeline") or []
+    return d
+
+
+@api_router.post("/approval-center/adjustments/{aid}/action")
+async def adjustment_action(aid: str, body: dict, user: dict = Depends(require_role("super_admin"))):
+    action = (body.get("action") or "").upper()
+    reason = (body.get("reason") or body.get("comment") or "").strip()
+    if action not in ("APPROVE", "REJECT", "REQUEST_REVISION"):
+        raise HTTPException(status_code=400, detail="Invalid action")
+    if action in ("REJECT", "REQUEST_REVISION") and not reason:
+        raise HTTPException(status_code=400, detail="Reason wajib diisi untuk Reject / Request Revision")
+    d = await db.approvals.find_one({"_id": ObjectId(aid)})
+    if not d:
+        raise HTTPException(status_code=404, detail="Not found")
+    new_status = {"APPROVE": "APPROVED", "REJECT": "REJECTED", "REQUEST_REVISION": "REVISION"}[action]
+    hist = d.get("history", [])
+    hist.append({"user": user["name"], "role": user["role"], "action": action, "comment": reason, "at": now_iso()})
+    await db.approvals.update_one({"_id": ObjectId(aid)}, {"$set": {"status": new_status, "decided_at": now_iso(), "history": hist}})
+    await notify(f"Approval {new_status.title()}", f"{d.get('approval_number')} • {d.get('atype')}" + (f" — {reason}" if reason else ""),
+                 "/approval-center", user_id=d.get("requested_by_id"), ntype="APPROVAL_RESULT", priority="normal")
+    return serialize(await db.approvals.find_one({"_id": ObjectId(aid)}))
+
+
 
 
 @api_router.get("/public/login-config")

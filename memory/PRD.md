@@ -1,6 +1,13 @@
 # Safar Travel CRM — Product Requirements (Living Doc)
 
-## PHASE 9B — Notification, Task & Follow-Up Center (2026-06) — DONE
+## PHASE 9C — Central Approval Center (2026-06) — DONE
+- **Menu Approval Center** (`/approval-center`) — RBAC: Super Admin full; Accounting subset finance; Sales blocked (403).
+- **Aggregated read** (`GET /api/approval-center?type=&status=`): normalisasi lintas sumber — REFUND (refund_requests), CANCELLATION (cancellation_requests), COMMISSION (commission_closings, super_admin saja), + generic adjustments (PRICE/PAYMENT/ACCOUNTING_ADJUSTMENT/OTHER dari koleksi `approvals`). Kolom: approval #, type, reference, customer, amount, requested by, date, status, action.
+- **Dashboard** (`GET /api/approval-center/stats`): Pending, Approved Today, Rejected Today, Total This Month.
+- **Generic approval workflow** (net-new, tak mengganggu flow existing): `POST /api/approval-center/adjustments` (accounting/super_admin buat pengajuan) + `POST /api/approval-center/adjustments/{id}/action` (super_admin only: APPROVE/REJECT/REQUEST_REVISION; **reason wajib** untuk Reject/Revision) + history log (user/action/date/comment). Notifikasi APPROVAL_PENDING ke super_admin & hasil ke pemohon.
+- **Detail** (`GET /api/approval-center/detail/{source}/{id}`): transaction/customer/amount/reason/evidence + history (timeline utk refund/cancellation, history utk adjustment). Refund/Cancellation/Commission memakai tombol **Open** (deep-link) ke halaman existing (Approvals/Commission) agar state-machine teruji tidak diubah.
+- **Security verified (curl)**: accounting list tanpa COMMISSION; sales 403; accounting action 403; reject tanpa reason 400; super_admin approve→APPROVED(history 2). Screenshot UI OK.
+
 - **Notification Center**: bell di header (badge unread, dropdown per-user + per-role, titik prioritas, klik→navigate+mark-read, Mark all read). API: `GET /api/notifications`, `GET /api/notifications/unread-count`, `PATCH /{id}/read`, `POST /read-all`. Helper `notify(...)` dengan dedupe.
 - **Event notifications wired**: NEW_LEAD (create_lead), FOLLOW_UP (create_follow_up), NEW_PAYMENT (role accounting) + PAYMENT_RECEIVED (sales) di record_payment. Approval/refund/commission ke super_admin tetap via `_notify` existing.
 - **Scheduled notifications & auto-tasks** (cron `POST /api/cron/notifications-tasks`, Bearer `WEBHOOK_CRON_SECRET`, ack 2xx + BackgroundTasks, tiap 15 mnt via `.emergent/crons.yml`): FOLLOW_UP_DUE/OVERDUE, QUOTATION_EXPIRING(+task belum di-follow-up 3 hari), INVOICE_DUE/OVERDUE + PAYMENT_OVERDUE(+task tagih), CUSTOMER_REPLY handover(+task), booking tanpa dokumen(+task). Semua idempotent via `dedupe`.

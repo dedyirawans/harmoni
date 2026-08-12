@@ -29,6 +29,7 @@ export const ROUTE_PERMS = {
   "/notifications": "notifications.view",
   "/follow-ups": "sales.view",
   "/tasks": null,
+  "/approval-center": null,
 };
 
 export const MENUS = {
@@ -45,6 +46,7 @@ export const MENUS = {
     { label: "Tax", path: "/tax", icon: Receipt },
     { label: "Commission", path: "/commission", icon: Percent },
     { label: "Approval", path: "/approvals", icon: ShieldCheck },
+    { label: "Approval Center", path: "/approval-center", icon: ShieldCheck },
     { label: "Reports", path: "/reports", icon: FileBarChart },
     { label: "N8N", path: "/n8n", icon: Plug },
     { label: "Integration", path: "/integration", icon: Plug },
@@ -73,6 +75,7 @@ export const MENUS = {
     { label: "Invoices & AR", path: "/accounting", icon: Calculator },
     { label: "My Tasks", path: "/tasks", icon: CheckSquare },
     { label: "Cancellation & Refund", path: "/approvals", icon: ShieldCheck },
+    { label: "Approval Center", path: "/approval-center", icon: ShieldCheck },
     { label: "Transactions", path: "/transactions", icon: Receipt },
     { label: "Costing / HPP", path: "/hpp", icon: TrendingUp },
     { label: "Packages", path: "/products", icon: Package },
