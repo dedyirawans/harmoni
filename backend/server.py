@@ -16,6 +16,7 @@ import jwt
 import httpx
 from bson import ObjectId
 from fastapi import FastAPI, APIRouter, Request, HTTPException, Depends, BackgroundTasks, Query
+import re
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field, EmailStr, BeforeValidator, ConfigDict
@@ -1293,6 +1294,40 @@ async def create_customer(body: CustomerCreate, request: Request,
     new = serialize(await db.customers.find_one({"_id": res.inserted_id}))
     await log_audit(user, "customer", "create_customer", request, record_id=new["_id"], new={"full_name": new["full_name"]})
     return new
+
+
+@api_router.get("/customers/check-duplicate")
+async def check_customer_duplicate(phone: str = "", whatsapp: str = "", email: str = "", passport_number: str = "",
+                                   exclude_id: str = "", user: dict = Depends(require_permission("crm.view"))):
+    phone, whatsapp, email, passport_number = phone.strip(), whatsapp.strip(), email.strip(), passport_number.strip()
+    ors = []
+    if phone:
+        ors.append({"whatsapp": phone})
+    if whatsapp:
+        ors.append({"whatsapp": whatsapp})
+    if email:
+        ors.append({"email": {"$regex": f"^{re.escape(email)}$", "$options": "i"}})
+    if passport_number:
+        ors.append({"passport_number": passport_number})
+    if not ors:
+        return {"duplicates": []}
+    query = {"$or": ors, "is_deleted": {"$ne": True}}
+    if exclude_id and ObjectId.is_valid(exclude_id):
+        query["_id"] = {"$ne": ObjectId(exclude_id)}
+    docs = await db.customers.find(query).limit(10).to_list(10)
+    out = []
+    for d in docs:
+        matched = []
+        if (whatsapp and d.get("whatsapp") == whatsapp) or (phone and d.get("whatsapp") == phone):
+            matched.append("whatsapp")
+        if email and (d.get("email") or "").lower() == email.lower():
+            matched.append("email")
+        if passport_number and d.get("passport_number") == passport_number:
+            matched.append("passport_number")
+        out.append({"id": str(d["_id"]), "full_name": d.get("full_name"), "customer_code": d.get("customer_code"),
+                    "whatsapp": d.get("whatsapp"), "email": d.get("email"), "passport_number": d.get("passport_number"),
+                    "matched_fields": matched})
+    return {"duplicates": out}
 
 
 @api_router.get("/customers/{cid}")
@@ -2665,7 +2700,37 @@ async def convert_to_booking(qid: str, body: dict, request: Request, user: dict 
         raise HTTPException(status_code=400, detail="Discount belum di-approve")
     if q.get("converted_booking_id"):
         return serialize(await db.bookings.find_one({"_id": ObjectId(q["converted_booking_id"])}))
+    idem = (body or {}).get("idempotency_key") or None
+    ext_order = (body or {}).get("external_order_id") or None
+    n8n_wf = (body or {}).get("n8n_workflow_id") or None
+    if idem:
+        dup = await db.bookings.find_one({"idempotency_key": idem})
+        if dup:
+            return serialize(dup)
+    cust = await db.customers.find_one({"_id": ObjectId(q["customer_id"])}) if ObjectId.is_valid(q.get("customer_id") or "") else None
+    if not cust:
+        raise HTTPException(status_code=400, detail="Customer tidak ditemukan")
     pkg = await db.packages.find_one({"_id": ObjectId(q["package_id"])})
+    if not pkg:
+        raise HTTPException(status_code=400, detail="Package tidak ditemukan")
+    pax = int(q.get("pax") or 0)
+    if pax < 1:
+        raise HTTPException(status_code=400, detail="Jumlah pax minimal 1")
+    if float(q.get("total") or 0) <= 0 or float(q.get("per_pax_price") or 0) <= 0:
+        raise HTTPException(status_code=400, detail="Harga booking tidak valid (harus dari konfigurasi paket/departure)")
+    dep = None
+    dep_id = q.get("departure_id")
+    if dep_id and ObjectId.is_valid(dep_id):
+        dep = await db.departures.find_one({"_id": ObjectId(dep_id)})
+        if not dep:
+            raise HTTPException(status_code=400, detail="Departure tidak ditemukan")
+        if dep.get("status") in ("CLOSED", "CANCELLED"):
+            raise HTTPException(status_code=400, detail=f"Departure {dep.get('status')} — booking tidak dapat dibuat")
+        available = max(int(dep.get("quota") or 0) - int(dep.get("confirmed_pax") or 0), 0)
+        if available <= 0:
+            raise HTTPException(status_code=400, detail="Seat habis (available = 0) — booking tidak dapat dibuat")
+        if available < pax:
+            raise HTTPException(status_code=400, detail=f"Seat tidak cukup: tersedia {available}, dibutuhkan {pax}")
     settings = await get_settings_dict()
     number = await next_number((settings.get("numbering") or {}).get("booking_prefix", "BKG"), db.bookings, "booking_number")
     source = (body or {}).get("booking_source", "SALES")
@@ -2679,9 +2744,12 @@ async def convert_to_booking(qid: str, body: dict, request: Request, user: dict 
                "tax_percent": q.get("tax_percent", 0), "tax_amount": q["tax_amount"], "total": q["total"],
                "payment_schedule": [], "status": "CONFIRMED", "sales_pic_id": q["sales_pic_id"], "sales_pic_name": q["sales_pic_name"],
                "sales_type": "MANUAL", "sales_user_id": q["sales_pic_id"], "sales_name": q["sales_pic_name"],
+               "idempotency_key": idem, "external_order_id": ext_order, "n8n_workflow_id": n8n_wf,
                "branch": q.get("branch", ""), "created_at": now_iso(), "created_by": user["name"]}
     res = await db.bookings.insert_one(booking)
     bid = str(res.inserted_id)
+    if dep:
+        await db.departures.update_one({"_id": ObjectId(dep_id)}, {"$inc": {"confirmed_pax": pax}})
     await db.quotations.update_one({"_id": ObjectId(qid)}, {"$set": {"converted_booking_id": bid, "status": "CONVERTED"}})
     await log_audit(user, "booking", "convert", request, record_id=bid, new={"number": number})
     phone = await _cust_phone(q.get("customer_id"))
@@ -2753,6 +2821,8 @@ async def update_booking_status(bid: str, body: dict, request: Request, user: di
         raise HTTPException(status_code=400, detail="Tidak bisa ke status pembayaran tanpa transaksi payment tercatat")
     entry = {"old_status": old, "new_status": new, "user": user["name"], "role": user["role"], "reason": reason, "at": now_iso()}
     hist = b.get("status_history", []) + [entry]
+    if new == "CANCELLED" and old != "CANCELLED" and b.get("departure_id") and ObjectId.is_valid(b["departure_id"]):
+        await db.departures.update_one({"_id": ObjectId(b["departure_id"])}, {"$inc": {"confirmed_pax": -int(b.get("pax") or 0)}})
     await db.bookings.update_one({"_id": ObjectId(bid)}, {"$set": {"status": new, "status_history": hist, "updated_at": now_iso()}})
     await log_audit(user, "booking", "status_change", request, record_id=bid, old={"status": old}, new={"status": new, "reason": reason})
     trigger_n8n("booking.updated", {"id": bid, "booking_number": b.get("booking_number"), "status": new})
@@ -3323,6 +3393,15 @@ async def record_payment(iid: str, body: PaymentCreate, request: Request, user: 
     inv = await db.invoices.find_one({"_id": ObjectId(iid)})
     if not inv:
         raise HTTPException(status_code=404, detail="Invoice not found")
+    amt = float(body.amount or 0)
+    if amt <= 0:
+        raise HTTPException(status_code=400, detail="Jumlah pembayaran harus lebih dari 0")
+    existing = await db.payments.find({"invoice_id": iid, "status": {"$ne": "VOID"}}).to_list(500)
+    paid_before = sum(float(p.get("amount") or 0) for p in existing)
+    inv_total = float(inv.get("total") or inv.get("amount") or 0)
+    outstanding = round(inv_total - paid_before, 2)
+    if amt > outstanding + 0.01:
+        raise HTTPException(status_code=400, detail=f"Payment Rp {amt:,.0f} melebihi outstanding Rp {outstanding:,.0f}. Gunakan adjustment workflow.")
     doc = {**body.model_dump(), "invoice_id": iid, "invoice_number": inv.get("invoice_number"),
            "booking_id": inv.get("booking_id"), "status": "ACTIVE", "recorded_by": user["name"], "created_at": now_iso()}
     res = await db.payments.insert_one(doc)
@@ -3652,6 +3731,17 @@ async def list_refunds(user: dict = Depends(require_permission("refund.manage"))
 
 @api_router.post("/refunds")
 async def create_refund(body: RefundModel, request: Request, user: dict = Depends(require_permission("refund.manage"))):
+    amt = float(body.amount or 0)
+    if amt <= 0:
+        raise HTTPException(status_code=400, detail="Jumlah refund harus lebih dari 0")
+    if body.booking_id:
+        pays = await _booking_payments(body.booking_id)
+        paid = sum(float(p.get("amount") or 0) for p in pays if p.get("status") != "VOID")
+        prev = await db.refunds.find({"booking_id": body.booking_id, "status": {"$ne": "REJECTED"}}).to_list(500)
+        refunded = sum(float(r.get("amount") or 0) for r in prev)
+        refundable = round(paid - refunded, 2)
+        if amt > refundable + 0.01:
+            raise HTTPException(status_code=400, detail=f"Refund Rp {amt:,.0f} melebihi refundable Rp {refundable:,.0f} (dibayar {paid:,.0f} − sudah direfund {refunded:,.0f}).")
     doc = {**body.model_dump(), "date": body.date or today_str(), "created_at": now_iso(), "created_by": user["name"]}
     res = await db.refunds.insert_one(doc)
     await log_audit(user, "refund", "create", request, record_id=str(res.inserted_id), new={"amount": body.amount})

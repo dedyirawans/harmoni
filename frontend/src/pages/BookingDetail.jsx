@@ -11,7 +11,7 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { ArrowLeft, Loader2, Plus, Trash2, Upload, FileText, Users, CreditCard, Ban, GitBranch, Eye } from "lucide-react";
 import { expiryTone, daysUntil } from "@/components/ExpiringDocsWidget";
 import { toast } from "sonner";
@@ -378,7 +378,7 @@ function PaymentDialog({ invoice, onClose, onSaved }) {  const [f, setF] = useSt
   return (
     <Dialog open onOpenChange={onClose}>
       <DialogContent className="bg-white" data-testid="payment-dialog">
-        <DialogHeader><DialogTitle className="font-display">Record Payment — {invoice.invoice_number}</DialogTitle></DialogHeader>
+        <DialogHeader><DialogTitle className="font-display">Record Payment — {invoice.invoice_number}</DialogTitle><DialogDescription>Pembayaran tidak boleh melebihi outstanding invoice.</DialogDescription></DialogHeader>
         <div className="grid grid-cols-2 gap-3 py-2">
           <div className="space-y-1"><Label className="text-xs">Payment Date</Label><Input type="date" value={f.payment_date} onChange={(e) => set("payment_date")(e.target.value)} data-testid="pay-date" /></div>
           <div className="space-y-1"><Label className="text-xs">Amount</Label><Input type="number" value={f.amount} onChange={(e) => set("amount")(e.target.value)} data-testid="pay-amount" /></div>

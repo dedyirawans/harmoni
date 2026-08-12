@@ -33,6 +33,7 @@ export default function Customers() {
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState(EMPTY);
   const [saving, setSaving] = useState(false);
+  const [dupWarn, setDupWarn] = useState([]);
 
   const load = () => {
     setRows(null);
@@ -40,6 +41,18 @@ export default function Customers() {
       .then((r) => setRows(r.data)).catch(() => setRows([]));
   };
   useEffect(() => { load(); /* eslint-disable-next-line */ }, [type, showArchived]);
+
+  useEffect(() => {
+    if (!open) { setDupWarn([]); return; }
+    const t = setTimeout(() => {
+      const { whatsapp, email, passport_number } = form;
+      if (!whatsapp?.trim() && !email?.trim() && !passport_number?.trim()) { setDupWarn([]); return; }
+      api.get("/customers/check-duplicate", { params: { whatsapp: whatsapp || undefined, email: email || undefined, passport_number: passport_number || undefined } })
+        .then((r) => setDupWarn(r.data?.duplicates || [])).catch(() => setDupWarn([]));
+    }, 400);
+    return () => clearTimeout(t);
+    /* eslint-disable-next-line */
+  }, [form.whatsapp, form.email, form.passport_number, open]);
 
   const archive = async (c) => {
     const reason = window.prompt(`Alasan mengarsipkan customer "${c.full_name}" (wajib):`, "");
@@ -62,7 +75,7 @@ export default function Customers() {
       const payload = { ...form, tags: form.tags ? form.tags.split(",").map((t) => t.trim()).filter(Boolean) : [] };
       await api.post("/customers", payload);
       toast.success("Customer created");
-      setOpen(false); setForm(EMPTY); load();
+      setOpen(false); setForm(EMPTY); setDupWarn([]); load();
     } catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); }
     finally { setSaving(false); }
   };
@@ -117,6 +130,19 @@ export default function Customers() {
               <Field label="Tags (comma separated)" full><Input value={form.tags} onChange={(e) => set("tags")(e.target.value)} placeholder="vip, hot-lead" /></Field>
               <Field label="Notes" full><Textarea value={form.notes} onChange={(e) => set("notes")(e.target.value)} /></Field>
             </div>
+            {dupWarn.length > 0 && (
+              <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm" data-testid="customer-dup-warning">
+                <p className="font-medium text-amber-800">Peringatan — kemungkinan duplikat ({dupWarn.length}):</p>
+                <ul className="mt-1 space-y-1">
+                  {dupWarn.map((d) => (
+                    <li key={d.id} className="text-amber-700 text-xs" data-testid={`dup-item-${d.id}`}>
+                      {d.full_name} ({d.customer_code}) — cocok pada: {d.matched_fields.join(", ")}
+                    </li>
+                  ))}
+                </ul>
+                <p className="mt-1 text-[11px] text-amber-600">Anda tetap dapat melanjutkan pembuatan customer.</p>
+              </div>
+            )}
             <DialogFooter>
               <Button onClick={save} disabled={saving} className="bg-blue-600 hover:bg-blue-700" data-testid="customer-save-button">
                 {saving ? "Saving..." : "Create customer"}

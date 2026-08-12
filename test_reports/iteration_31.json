@@ -1,0 +1,25 @@
+{
+  "summary": "Phase 9H frontend verification: (1) Customer duplicate warning appears within ~0.5s when entering existing WhatsApp '+628111000999', shows dup-item-<id> with 'cocok pada: whatsapp' text, is NON-BLOCKING (customer-save-button remains enabled). Warning is cleared when whatsapp is cleared or changed to a unique value. (2) Payment overpayment: entering 999.999.999 as amount produces backend 400 and a toast/text containing 'melebihi outstanding' — dialog stays open. Valid amount 50000 succeeds (toast 'Pembayaran dicatat', Terbayar went from Rp 100.000 to Rp 150.000, active payment shown). RBAC: pages accessible for Super Admin. All required flows for Phase 9H pass on UI.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Dashboard", "issues": ["Recharts warnings: 'The width(-1) and height(-1) of chart should be greater than 0' — non-blocking but noisy console warnings"]},
+      {"screen": "PaymentDialog", "issues": ["a11y warning: Missing Description or aria-describedby for DialogContent"]}
+    ]
+  },
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Recharts responsive container is rendering with width/height -1 on dashboard; add minWidth/minHeight or fix container sizing to remove console warnings.",
+    "Add DialogDescription (or aria-describedby) to Record Payment dialog for a11y compliance."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "n/a (skipped as requested)", "frontend": "100%"},
+  "test_credentials": "dedyirawan18@gmail.com / Admin@123 (Super Admin) — worked",
+  "seed_data_creation": "None. A valid Rp 50.000 payment was added to invoice INV-00006 (6a7c6911f21f8ffb9cb4909a) during testing; can be voided by main agent if needed.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Customer duplicate check uses debounced GET /customers/check-duplicate; testids: customer-dup-warning, dup-item-<id>. PaymentDialog submit button label is 'Simpan pembayaran' (not Save/Submit). Success toast on payment: 'Pembayaran dicatat'. Booking BKG-00016 is CANCELLED but still accepts payment recording; test invoice INV-00006 outstanding was Rp 54.850.000 before adding a Rp 50.000 payment."
+}

@@ -1,5 +1,14 @@
 # Safar Travel CRM — Product Requirements (Living Doc)
 
+## PHASE 9H — Data Validation & Duplicate Prevention (2026-06) — DONE (Verified iteration_31, Frontend 100% + backend curl)
+- **Customer Duplicate** (non-blocking warning): `GET /api/customers/check-duplicate?phone&whatsapp&email&passport_number` (didaftarkan DI ATAS `/customers/{cid}` agar tak ter-shadow). UI Add Customer: `useEffect` debounce 400ms → kotak `customer-dup-warning` menampilkan kandidat + field yang cocok; user tetap bisa lanjut.
+- **N8N Duplicate / Idempotency**: `convert_to_booking` menerima `idempotency_key`/`external_order_id`/`n8n_workflow_id`; jika idempotency_key sudah dipakai → kembalikan booking sama (dedupe lintas-quotation, tanpa double-reserve). Terverifikasi curl.
+- **Booking & Seat Validation**: sebelum booking validasi customer, package, pax≥1, harga>0 (total & per_pax), departure (ada & tidak CLOSED/CANCELLED), dan **available_seat ≥ pax** (seat 0/kurang → 400). Booking **mereservasi kursi** (`$inc confirmed_pax +pax`); status CANCELLED → `$inc -pax` (kursi dikembalikan). Terverifikasi curl (pax>quota 400, reserve, release).
+- **Price Validation**: harga booking berasal dari config paket/departure (via quotation); override = diskon yang butuh approval sebelum convert (sudah ada).
+- **Financial Validation**: `record_payment` menolak amount ≤ 0 dan amount > outstanding (hitung dari total − pembayaran non-VOID) dengan pesan 'Gunakan adjustment workflow'. `create_refund` menolak amount > refundable (paid non-VOID − refund sebelumnya). Terverifikasi curl + UI (toast 'melebihi outstanding').
+- Catatan: parallel `search_replace` pada server.py berulang menyebabkan lost-write; SELALU edit server.py sekuensial (single write per pesan).
+
+
 ## PHASE 9G — Audit Trail, Soft Delete & Data Security (2026-06) — DONE (Verified iteration_29+30, Frontend 100%)
 - **Audit Trail**: `log_audit` diperluas dengan field **reason** (wajib pada aksi destruktif) & **session_id** (dari header `X-Session-Id`, di-inject global via `frontend/src/lib/api.js`). Mencatat 14 modul (customer, lead, quotation, booking, invoice, payment, refund, commission, tax, package, hpp, user, permission, settings) + old/new/IP/user-agent. Endpoint `GET /api/audit-logs` filter: module, action, user_q, date_from, date_to.
 - **Halaman Audit Log** (`AuditLog.jsx`): filter modul/user/tanggal, kolom Alasan & IP/Sesi, baris expandable menampilkan Nilai Lama vs Nilai Baru (JSON).
