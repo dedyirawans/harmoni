@@ -1,7 +1,7 @@
 import {
   LayoutDashboard, Users2, Briefcase, Package, CalendarCheck, Calculator,
   Receipt, Percent, FileBarChart, Plug, UserCog, Settings, ScrollText,
-  Plane, PlaneTakeoff, Bell, Wallet, TrendingUp, ListChecks, FileText, ShieldCheck,
+  Plane, PlaneTakeoff, Bell, Wallet, TrendingUp, ListChecks, FileText, ShieldCheck, CheckSquare,
 } from "lucide-react";
 
 // Route -> permission required (mirrors backend). null = any authenticated user.
@@ -28,6 +28,7 @@ export const ROUTE_PERMS = {
   "/hpp": "hpp.view",
   "/notifications": "notifications.view",
   "/follow-ups": "sales.view",
+  "/tasks": null,
 };
 
 export const MENUS = {
@@ -37,6 +38,7 @@ export const MENUS = {
     { label: "Sales Management", path: "/sales", icon: Briefcase },
     { label: "Quotations", path: "/quotations", icon: FileText },
     { label: "Follow Ups", path: "/follow-ups", icon: ListChecks },
+    { label: "My Tasks", path: "/tasks", icon: CheckSquare },
     { label: "Product Management", path: "/products", icon: Package },
     { label: "Accounting", path: "/accounting", icon: Calculator },
     { label: "Booking", path: "/booking", icon: CalendarCheck },
@@ -55,6 +57,7 @@ export const MENUS = {
     { label: "My CRM", path: "/crm", icon: Users2 },
     { label: "My Sales", path: "/sales", icon: Briefcase },
     { label: "Follow Ups", path: "/follow-ups", icon: ListChecks },
+    { label: "My Tasks", path: "/tasks", icon: CheckSquare },
     { label: "Quotations", path: "/quotations", icon: FileText },
     { label: "Bookings", path: "/booking", icon: CalendarCheck },
     { label: "Packages", path: "/packages", icon: Plane },
@@ -68,6 +71,7 @@ export const MENUS = {
     { label: "Accounting Dashboard", path: "/dashboard", icon: LayoutDashboard },
     { label: "Bookings", path: "/booking", icon: CalendarCheck },
     { label: "Invoices & AR", path: "/accounting", icon: Calculator },
+    { label: "My Tasks", path: "/tasks", icon: CheckSquare },
     { label: "Cancellation & Refund", path: "/approvals", icon: ShieldCheck },
     { label: "Transactions", path: "/transactions", icon: Receipt },
     { label: "Costing / HPP", path: "/hpp", icon: TrendingUp },

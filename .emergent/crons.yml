@@ -1,0 +1,8 @@
+crons:
+  - name: notif-tasks-scan
+    description: "Scans follow-ups, quotations, invoices, conversations & bookings to raise due/overdue notifications and auto tasks"
+    cron: "*/15 * * * *"
+    endpoint: "{{BASE_URL}}/api/cron/notifications-tasks"
+    method: POST
+    # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
+    enabled: true

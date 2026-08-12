@@ -15,7 +15,7 @@ import bcrypt
 import jwt
 import httpx
 from bson import ObjectId
-from fastapi import FastAPI, APIRouter, Request, HTTPException, Depends
+from fastapi import FastAPI, APIRouter, Request, HTTPException, Depends, BackgroundTasks
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field, EmailStr, BeforeValidator, ConfigDict
@@ -628,18 +628,215 @@ async def dashboard_charts(user: dict = Depends(get_current_user)):
 
 
 @api_router.get("/notifications")
-async def notifications(user: dict = Depends(require_permission("notifications.view"))):
+async def notifications(unread_only: bool = False, user: dict = Depends(require_permission("notifications.view"))):
     q = {"$or": [{"user_id": user["_id"]}, {"role": user["role"]}]}
-    docs = await db.notifications.find(q).sort("created_at", -1).to_list(50)
+    if unread_only:
+        q["read"] = False
+    docs = await db.notifications.find(q).sort("created_at", -1).to_list(100)
     return [{"id": str(d["_id"]), "title": d.get("title", ""), "body": d.get("body", ""),
-             "link": d.get("link", ""), "read": d.get("read", False),
-             "time": d.get("created_at", "")} for d in docs]
+             "link": d.get("link", ""), "type": d.get("type", "info"), "priority": d.get("priority", "normal"),
+             "read": d.get("read", False), "time": d.get("created_at", "")} for d in docs]
 
 
 @api_router.patch("/notifications/{nid}/read")
 async def mark_notification_read(nid: str, user: dict = Depends(require_permission("notifications.view"))):
     await db.notifications.update_one({"_id": ObjectId(nid)}, {"$set": {"read": True}})
     return {"ok": True}
+
+
+async def notify(title, body, link="", role=None, user_id=None, ntype="info", priority="normal", dedupe=None):
+    if dedupe and await db.notifications.find_one({"dedupe": dedupe}):
+        return
+    await db.notifications.insert_one({"role": role, "user_id": user_id, "title": title, "body": body,
+        "link": link, "type": ntype, "priority": priority, "dedupe": dedupe, "read": False, "created_at": now_iso()})
+
+
+async def create_task(task_name, assigned_user_id=None, assigned_user_name="", customer_id=None,
+                      booking_id=None, lead_id=None, due_date=None, priority="MEDIUM", notes="",
+                      created_by="system", source="manual", dedupe=None):
+    if dedupe and await db.tasks.find_one({"dedupe": dedupe}):
+        return None
+    doc = {"task_name": task_name, "assigned_user_id": assigned_user_id, "assigned_user_name": assigned_user_name,
+           "customer_id": customer_id, "booking_id": booking_id, "lead_id": lead_id, "due_date": due_date,
+           "priority": priority, "status": "TODO", "notes": notes, "created_by": created_by,
+           "source": source, "auto": source != "manual", "dedupe": dedupe, "created_at": now_iso()}
+    res = await db.tasks.insert_one(doc)
+    return str(res.inserted_id)
+
+
+@api_router.get("/notifications/unread-count")
+async def notifications_unread_count(user: dict = Depends(require_permission("notifications.view"))):
+    n = await db.notifications.count_documents({"$or": [{"user_id": user["_id"]}, {"role": user["role"]}], "read": False})
+    return {"count": n}
+
+
+@api_router.post("/notifications/read-all")
+async def mark_all_notifications_read(user: dict = Depends(require_permission("notifications.view"))):
+    await db.notifications.update_many({"$or": [{"user_id": user["_id"]}, {"role": user["role"]}], "read": False}, {"$set": {"read": True}})
+    return {"ok": True}
+
+
+# ---------- Task Center ----------
+TASK_STATUSES = ["TODO", "IN_PROGRESS", "COMPLETED", "CANCELLED"]
+TASK_PRIORITIES = ["LOW", "MEDIUM", "HIGH", "URGENT"]
+
+
+def _task_owner_q(user):
+    return {} if user["role"] == "super_admin" else {"$or": [{"assigned_user_id": user["_id"]}, {"created_by": user["name"]}]}
+
+
+@api_router.get("/tasks")
+async def list_tasks(status: Optional[str] = None, scope: Optional[str] = None, user: dict = Depends(get_current_user)):
+    q = _task_owner_q(user)
+    if status and status != "all":
+        q["status"] = status
+    docs = await db.tasks.find(q).sort("due_date", 1).to_list(3000)
+    today = today_str()
+    out = []
+    for d in docs:
+        d = serialize(d)
+        due = (d.get("due_date") or "")[:10]
+        st = d.get("status")
+        if scope == "due_today":
+            if st in ("TODO", "IN_PROGRESS") and due == today: out.append(d)
+        elif scope == "overdue":
+            if st in ("TODO", "IN_PROGRESS") and due and due < today: out.append(d)
+        elif scope == "upcoming":
+            if st in ("TODO", "IN_PROGRESS") and due and due > today: out.append(d)
+        elif scope == "completed":
+            if st == "COMPLETED": out.append(d)
+        else:
+            out.append(d)
+    return out
+
+
+@api_router.get("/tasks/stats")
+async def task_stats(user: dict = Depends(get_current_user)):
+    docs = await db.tasks.find(_task_owner_q(user)).to_list(5000)
+    today = today_str()
+    due = over = up = done = 0
+    for d in docs:
+        st = d.get("status")
+        due_d = (d.get("due_date") or "")[:10]
+        if st == "COMPLETED":
+            done += 1; continue
+        if st == "CANCELLED":
+            continue
+        if due_d == today: due += 1
+        elif due_d and due_d < today: over += 1
+        elif due_d and due_d > today: up += 1
+    return {"due_today": due, "overdue": over, "upcoming": up, "completed": done}
+
+
+@api_router.post("/tasks")
+async def create_task_api(body: dict, user: dict = Depends(get_current_user)):
+    aid = body.get("assigned_user_id") or user["_id"]
+    aname = body.get("assigned_user_name") or user["name"]
+    if body.get("assigned_user_id") and ObjectId.is_valid(body["assigned_user_id"]):
+        u = await db.users.find_one({"_id": ObjectId(body["assigned_user_id"])})
+        if u:
+            aname = u.get("name", aname)
+    tid = await create_task(body.get("task_name", "Task"), assigned_user_id=aid, assigned_user_name=aname,
+        customer_id=body.get("customer_id"), booking_id=body.get("booking_id"), lead_id=body.get("lead_id"),
+        due_date=body.get("due_date"), priority=body.get("priority", "MEDIUM"), notes=body.get("notes", ""),
+        created_by=user["name"], source="manual")
+    if aid and aid != user["_id"]:
+        await notify("New Task Assigned", body.get("task_name", "Task"), link="/tasks", user_id=aid, ntype="TASK")
+    return serialize(await db.tasks.find_one({"_id": ObjectId(tid)}))
+
+
+@api_router.patch("/tasks/{tid}")
+async def update_task_api(tid: str, body: dict, user: dict = Depends(get_current_user)):
+    t = await db.tasks.find_one({"_id": ObjectId(tid)})
+    if not t:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if user["role"] != "super_admin" and t.get("assigned_user_id") != user["_id"] and t.get("created_by") != user["name"]:
+        raise HTTPException(status_code=403, detail="403 Forbidden")
+    allowed = {k: v for k, v in body.items() if k in ("task_name", "status", "priority", "due_date", "notes", "assigned_user_id", "customer_id", "booking_id", "lead_id")}
+    if allowed.get("status") == "COMPLETED":
+        allowed["completed_at"] = now_iso()
+    await db.tasks.update_one({"_id": ObjectId(tid)}, {"$set": allowed})
+    return serialize(await db.tasks.find_one({"_id": ObjectId(tid)}))
+
+
+# ---------- Cron: due/overdue notifications + automatic tasks ----------
+def _days_ago(n):
+    return (datetime.now(timezone.utc) - timedelta(days=n)).date().isoformat()
+
+
+async def _run_auto_scan():
+    today = today_str()
+    for f in await db.follow_ups.find({"status": {"$ne": "completed"}}).to_list(5000):
+        due = (f.get("due_date") or "")[:10]
+        fid = str(f["_id"])
+        if not due:
+            continue
+        link = f"/crm/{f.get('customer_id')}" if f.get("customer_id") else "/follow-ups"
+        if due == today:
+            await notify("Follow Up Due Today", f"{f.get('activity_type', 'Follow up')} — {f.get('customer_name', '')}",
+                link=link, user_id=f.get("sales_pic_id"), ntype="FOLLOW_UP_DUE", priority="high", dedupe=f"fudue:{fid}:{today}")
+        elif due < today:
+            await notify("Follow Up Overdue", f"{f.get('activity_type', 'Follow up')} — {f.get('customer_name', '')} (due {due})",
+                link=link, user_id=f.get("sales_pic_id"), ntype="FOLLOW_UP_OVERDUE", priority="urgent", dedupe=f"fuover:{fid}:{today}")
+    for q in await db.quotations.find({"status": {"$nin": ["CONVERTED", "EXPIRED", "REJECTED"]}}).to_list(5000):
+        created = (q.get("created_at") or "")[:10]
+        if created and created <= _days_ago(3):
+            await create_task(f"Follow up quotation {q.get('quotation_number', '')}",
+                assigned_user_id=q.get("sales_pic_id"), assigned_user_name=q.get("sales_pic_name", ""),
+                customer_id=q.get("customer_id"), due_date=today, priority="HIGH",
+                notes="Quotation belum di-follow-up 3+ hari", created_by="system", source="auto_quotation",
+                dedupe=f"autoq:{str(q['_id'])}")
+            await notify("Quotation Needs Follow Up", f"{q.get('quotation_number', '')} — {q.get('customer_name', '')}",
+                link="/quotations", user_id=q.get("sales_pic_id"), ntype="QUOTATION_EXPIRING", priority="high",
+                dedupe=f"qexp:{str(q['_id'])}:{today}")
+    for inv in await db.invoices.find({"status": {"$nin": ["Paid", "PAID", "Cancelled", "CANCELLED"]}}).to_list(5000):
+        due = (inv.get("due_date") or "")[:10]
+        if not due or due > today:
+            continue
+        overdue = due < today
+        await notify("Invoice Overdue" if overdue else "Invoice Due Today",
+            f"{inv.get('invoice_number', '')} — {inv.get('customer_name', '')} (Rp {inv.get('outstanding', 0)})",
+            link="/accounting", role="accounting", ntype="INVOICE_OVERDUE" if overdue else "INVOICE_DUE",
+            priority="high", dedupe=f"inv:{str(inv['_id'])}:{today}")
+        if inv.get("sales_pic_id") and overdue:
+            await notify("Payment Overdue", f"{inv.get('invoice_number', '')} — {inv.get('customer_name', '')}",
+                link=f"/crm/{inv.get('customer_id')}" if inv.get("customer_id") else "/accounting",
+                user_id=inv.get("sales_pic_id"), ntype="PAYMENT_OVERDUE", priority="urgent", dedupe=f"payover:{str(inv['_id'])}:{today}")
+        await create_task(f"Collect payment {inv.get('invoice_number', '')}",
+            assigned_user_id=inv.get("sales_pic_id"), assigned_user_name=inv.get("sales_pic_name", ""),
+            customer_id=inv.get("customer_id"), booking_id=inv.get("booking_id"), due_date=today,
+            priority="HIGH", notes="Pembayaran jatuh tempo", created_by="system", source="auto_invoice",
+            dedupe=f"autoinv:{str(inv['_id'])}:{today}")
+    for c in await db.conversations.find({"status": "REQUIRES_HUMAN"}).to_list(3000):
+        cid = c.get("customer_id")
+        key = cid or c.get("whatsapp")
+        await create_task(f"Reply WhatsApp — {c.get('customer_name') or c.get('whatsapp', '')}",
+            customer_id=cid, due_date=today, priority="URGENT", notes="Customer butuh CS (handover)",
+            created_by="system", source="auto_handover", dedupe=f"autohandover:{key}")
+        await notify("Customer Needs Human Reply", f"{c.get('customer_name') or c.get('whatsapp', '')}",
+            link=f"/crm/{cid}" if cid else "/n8n", role="super_admin", ntype="CUSTOMER_REPLY", priority="urgent",
+            dedupe=f"handover:{key}:{today}")
+    for b in await db.bookings.find({"status": {"$ne": "CANCELLED"}}).to_list(5000):
+        bid = str(b["_id"])
+        if await db.documents.count_documents({"booking_id": bid, "is_deleted": False}) == 0:
+            await create_task(f"Upload documents — {b.get('booking_number', '')}",
+                assigned_user_id=b.get("sales_pic_id"), assigned_user_name=b.get("sales_pic_name", ""),
+                customer_id=b.get("customer_id"), booking_id=bid, due_date=today, priority="MEDIUM",
+                notes="Booking membutuhkan dokumen jamaah", created_by="system", source="auto_document", dedupe=f"autodoc:{bid}")
+
+
+@api_router.post("/cron/notifications-tasks")
+async def cron_notifications_tasks(request: Request, background: BackgroundTasks):
+    # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
+    auth = request.headers.get("Authorization", "")
+    secret = os.environ.get("WEBHOOK_CRON_SECRET", "")
+    token = auth[7:] if auth.startswith("Bearer ") else ""
+    if not secret or not _hmac.compare_digest(token, secret):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    background.add_task(_run_auto_scan)
+    return {"accepted": True}
+
+
 
 
 @api_router.get("/public/login-config")
@@ -1033,6 +1230,8 @@ async def create_lead(body: LeadCreate, request: Request, user: dict = Depends(r
     lead = serialize(await db.leads.find_one({"_id": res.inserted_id}))
     await log_activity(body.customer_id, lead["_id"], "lead_created", "Lead created",
                        f"{body.interested_package or 'New lead'} — stage {stage}", user)
+    await notify("New Lead", f"{lead.get('customer_name') or lead.get('interested_package') or lead.get('lead_code')} assigned to you",
+                 link=f"/crm/{body.customer_id}" if body.customer_id else "/sales", user_id=pic_id, ntype="NEW_LEAD", priority="high")
     await log_audit(user, "lead", "create_lead", request, record_id=lead["_id"], new={"stage": stage})
     return lead
 
@@ -1154,6 +1353,13 @@ async def create_follow_up(body: FollowUpCreate, request: Request, user: dict = 
     fu = serialize(await db.follow_ups.find_one({"_id": res.inserted_id}))
     await log_activity(body.customer_id, body.lead_id, "follow_up_created",
                        f"Follow up scheduled — {body.activity_type}", body.notes or "", user)
+    await create_task(f"Follow Up: {body.activity_type}" + (f" — {customer_name}" if customer_name else ""),
+                      assigned_user_id=pic_id, assigned_user_name=pic_name, customer_id=body.customer_id,
+                      lead_id=body.lead_id, due_date=body.due_date, priority="MEDIUM",
+                      notes=body.notes or "", created_by=user["name"], source="follow_up")
+    await notify("Follow Up Scheduled", f"{body.activity_type}" + (f" — {customer_name}" if customer_name else ""),
+                 link=f"/crm/{body.customer_id}" if body.customer_id else "/follow-ups",
+                 user_id=pic_id, ntype="FOLLOW_UP", priority="normal")
     return fu
 
 
@@ -2435,6 +2641,11 @@ async def record_payment(iid: str, body: PaymentCreate, request: Request, user: 
     res = await db.payments.insert_one(doc)
     status = await _recompute_invoice_status(iid)
     await log_audit(user, "payment", "record", request, record_id=str(res.inserted_id), new={"amount": body.amount, "invoice_status": status})
+    await notify("New Payment Recorded", f"{inv.get('invoice_number', '')} — Rp {body.amount}", link="/accounting", role="accounting", ntype="NEW_PAYMENT", priority="high")
+    if inv.get("sales_pic_id"):
+        await notify("Payment Received", f"{inv.get('invoice_number', '')} — Rp {body.amount}",
+                     link=f"/crm/{inv.get('customer_id')}" if inv.get("customer_id") else "/accounting",
+                     user_id=inv.get("sales_pic_id"), ntype="PAYMENT_RECEIVED", priority="normal")
     return serialize(await db.payments.find_one({"_id": res.inserted_id}))
 
 

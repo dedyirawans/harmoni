@@ -33,6 +33,7 @@ import Approvals from "@/pages/Approvals";
 import Tax from "@/pages/Tax";
 import Reports from "@/pages/Reports";
 import N8N from "@/pages/N8N";
+import Tasks from "@/pages/Tasks";
 
 const PAGES = {
   "/dashboard": Dashboard,
@@ -55,6 +56,7 @@ const PAGES = {
   "/tax": Tax,
   "/reports": Reports,
   "/n8n": N8N,
+  "/tasks": Tasks,
 };
 
 function App() {
