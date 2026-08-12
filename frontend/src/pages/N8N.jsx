@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
-import { Loader2, Zap, RefreshCw, PlugZap, Send, MessageSquare, RotateCcw } from "lucide-react";
+import { Loader2, Zap, RefreshCw, PlugZap, Send, MessageSquare, RotateCcw, Search } from "lucide-react";
 
 const stColor = (s) => s === "SUCCESS" || s === "CONNECTED" ? "bg-emerald-50 text-emerald-700 border-emerald-200"
   : s === "FAILED" || s === "REJECTED" ? "bg-red-50 text-red-700 border-red-200"
@@ -47,6 +47,7 @@ export default function N8N() {
   if (d === false) return <div className="p-8 text-slate-400">Gagal memuat data N8N.</div>;
   const S = d.stats;
   const kpis = [["Messages Today", S.total_today], ["Incoming", S.inbound], ["Outgoing", S.outbound], ["AI Responses", S.ai_responses], ["Human Handover", S.human_handover], ["Orders Today", S.orders_today], ["AUTO SALES Orders", S.auto_sales_orders], ["Failed Requests", S.failed_requests], ["API Errors", S.api_errors]];
+  const unreadTotal = (d.conversations || []).reduce((a, c) => a + (c.unread_count || 0), 0);
 
   return (
     <div className="space-y-5" data-testid="n8n-page">
@@ -73,7 +74,7 @@ export default function N8N() {
       <Tabs defaultValue="dashboard">
         <TabsList data-testid="n8n-tabs">
           <TabsTrigger value="dashboard" data-testid="tab-n8n-dashboard">Dashboard</TabsTrigger>
-          <TabsTrigger value="inbox" data-testid="tab-n8n-inbox">Inbox</TabsTrigger>
+          <TabsTrigger value="inbox" data-testid="tab-n8n-inbox">Inbox{unreadTotal > 0 && <span className="ml-1.5 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] font-semibold" data-testid="n8n-inbox-unread-total">{unreadTotal}</span>}</TabsTrigger>
           <TabsTrigger value="conversations" data-testid="tab-n8n-conversations">Conversations</TabsTrigger>
           <TabsTrigger value="orders" data-testid="tab-n8n-orders">Orders</TabsTrigger>
           <TabsTrigger value="logs" data-testid="tab-n8n-logs">Sync Logs</TabsTrigger>
@@ -86,7 +87,7 @@ export default function N8N() {
           </div>
         </TabsContent>
         <TabsContent value="inbox">
-          <Inbox conversations={d.conversations} onSent={load} />
+          <Inbox conversations={d.conversations} refresh={load} />
         </TabsContent>
         <TabsContent value="conversations">
           <Tbl testid="n8n-conv-table" cols={["Customer", "WhatsApp", "Last Message", "AI", "Status", "Last Activity"]} rows={d.conversations}
@@ -110,12 +111,26 @@ export default function N8N() {
   );
 }
 
-function Inbox({ conversations, onSent }) {
+const TEMPLATES = [
+  { label: "Jam Operasional", text: "Halo, terima kasih sudah menghubungi kami. Jam operasional CS kami Senin–Sabtu pukul 08.00–17.00 WIB. Kami akan segera membantu Anda. 🙏" },
+  { label: "Minta Data Jamaah", text: "Untuk proses pendaftaran, mohon kirimkan data jamaah: Nama sesuai paspor, NIK, No. Paspor & masa berlaku, tanggal lahir, dan nomor WhatsApp aktif. Terima kasih." },
+  { label: "Cek Ketersediaan", text: "Baik, kami cek ketersediaan seat untuk tanggal keberangkatan yang Anda inginkan terlebih dahulu ya. Mohon ditunggu sebentar." },
+  { label: "Info Pembayaran", text: "Untuk melanjutkan pemesanan, silakan lakukan pembayaran DP. Detail rekening & invoice akan kami kirimkan. Ada yang bisa kami bantu lagi?" },
+];
+
+function Inbox({ conversations, refresh }) {
   const [active, setActive] = useState(null);
   const [thread, setThread] = useState([]);
   const [loading, setLoading] = useState(false);
   const [reply, setReply] = useState("");
   const [sending, setSending] = useState(false);
+  const [q, setQ] = useState("");
+
+  const filtered = (conversations || []).filter((c) => {
+    const s = q.trim().toLowerCase();
+    if (!s) return true;
+    return (c.customer_name || "").toLowerCase().includes(s) || (c.whatsapp || "").toLowerCase().includes(s);
+  });
 
   const open = async (c) => {
     setActive(c); setReply(""); setLoading(true);
@@ -123,12 +138,16 @@ function Inbox({ conversations, onSent }) {
       const params = c.customer_id ? { customer_id: c.customer_id } : { whatsapp: c.whatsapp };
       const r = await api.get("/integrations/n8n/conversations/thread", { params });
       setThread(r.data || []);
+      if (c.unread_count) {
+        await api.post("/integrations/n8n/conversations/read", { customer_id: c.customer_id, whatsapp: c.whatsapp });
+        refresh && refresh();
+      }
     } catch { setThread([]); toast.error("Gagal memuat percakapan"); }
     finally { setLoading(false); }
   };
 
-  const send = async () => {
-    const msg = reply.trim();
+  const send = async (preset) => {
+    const msg = (typeof preset === "string" ? preset : reply).trim();
     if (!msg || !active) return;
     setSending(true);
     try {
@@ -136,7 +155,7 @@ function Inbox({ conversations, onSent }) {
       toast.success("Balasan terkirim ke N8N");
       setReply("");
       await open(active);
-      onSent && onSent();
+      refresh && refresh();
     } catch { toast.error("Gagal mengirim balasan"); }
     finally { setSending(false); }
   };
@@ -144,19 +163,39 @@ function Inbox({ conversations, onSent }) {
   return (
     <Card className="border-slate-200 shadow-sm overflow-hidden" data-testid="n8n-inbox">
       <div className="grid grid-cols-1 md:grid-cols-3 h-[560px]">
-        <div className="border-r border-slate-200 overflow-y-auto" data-testid="n8n-inbox-list">
-          {(conversations || []).length === 0 ? <div className="p-6 text-sm text-slate-400">Belum ada percakapan.</div>
-            : conversations.map((c, i) => (
-              <button key={i} onClick={() => open(c)} data-testid={`n8n-inbox-item-${i}`}
-                className={`w-full text-left px-4 py-3 border-b border-slate-100 hover:bg-slate-50 transition-colors ${active && (active.customer_id === c.customer_id && active.whatsapp === c.whatsapp) ? "bg-blue-50" : ""}`}>
-                <div className="flex items-center justify-between gap-2">
-                  <span className="font-medium text-slate-800 text-sm truncate">{c.customer_name || c.whatsapp || "Unknown"}</span>
-                  {c.status === "REQUIRES_HUMAN" && <Badge className="bg-amber-50 text-amber-700 border-amber-200 text-[10px]">HANDOVER</Badge>}
-                </div>
-                <p className="text-xs text-slate-500 truncate mt-0.5">{c.last_message || "—"}</p>
-                <p className="text-[10px] text-slate-400 mt-0.5">{fmt(c.last_activity)}</p>
-              </button>
-            ))}
+        <div className="border-r border-slate-200 flex flex-col">
+          <div className="p-2.5 border-b border-slate-100">
+            <div className="relative">
+              <Search className="h-4 w-4 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+              <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Cari nama / nomor…"
+                className="w-full pl-8 pr-3 py-2 text-sm rounded-md border border-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-100 focus:border-blue-300"
+                data-testid="n8n-inbox-search" />
+            </div>
+          </div>
+          <div className="flex-1 overflow-y-auto" data-testid="n8n-inbox-list">
+            {filtered.length === 0 ? <div className="p-6 text-sm text-slate-400">Belum ada percakapan.</div>
+              : filtered.map((c, i) => {
+                const unread = (c.unread_count || 0) > 0;
+                const sel = active && active.customer_id === c.customer_id && active.whatsapp === c.whatsapp;
+                return (
+                  <button key={i} onClick={() => open(c)} data-testid={`n8n-inbox-item-${i}`}
+                    className={`w-full text-left px-4 py-3 border-b border-slate-100 hover:bg-slate-50 transition-colors ${sel ? "bg-blue-50" : unread ? "bg-blue-50/40" : ""}`}>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className={`text-sm truncate flex items-center gap-1.5 ${unread ? "font-bold text-slate-900" : "font-medium text-slate-800"}`}>
+                        {unread && <span className="h-2 w-2 rounded-full bg-blue-500 shrink-0" />}
+                        {c.customer_name || c.whatsapp || "Unknown"}
+                      </span>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        {c.status === "REQUIRES_HUMAN" && <Badge className="bg-amber-50 text-amber-700 border-amber-200 text-[10px]">HANDOVER</Badge>}
+                        {unread && <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] font-semibold" data-testid={`n8n-inbox-unread-${i}`}>{c.unread_count}</span>}
+                      </div>
+                    </div>
+                    <p className={`text-xs truncate mt-0.5 ${unread ? "text-slate-700 font-medium" : "text-slate-500"}`}>{c.last_message || "—"}</p>
+                    <p className="text-[10px] text-slate-400 mt-0.5">{fmt(c.last_activity)}</p>
+                  </button>
+                );
+              })}
+          </div>
         </div>
         <div className="md:col-span-2 flex flex-col">
           {!active ? (
@@ -185,11 +224,19 @@ function Inbox({ conversations, onSent }) {
                       );
                     })}
               </div>
-              <div className="p-3 border-t border-slate-200 flex items-end gap-2">
+              <div className="px-3 pt-2.5 border-t border-slate-200 flex flex-wrap gap-1.5" data-testid="n8n-quick-replies">
+                {TEMPLATES.map((t, i) => (
+                  <button key={i} onClick={() => send(t.text)} disabled={sending} data-testid={`n8n-template-${i}`}
+                    className="text-xs px-2.5 py-1 rounded-full border border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100 disabled:opacity-50 transition-colors">
+                    {t.label}
+                  </button>
+                ))}
+              </div>
+              <div className="p-3 flex items-end gap-2">
                 <Textarea value={reply} onChange={(e) => setReply(e.target.value)} placeholder="Tulis balasan CS…" rows={2}
                   className="resize-none" data-testid="n8n-reply-input"
                   onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }} />
-                <Button onClick={send} disabled={sending || !reply.trim()} data-testid="n8n-reply-send">
+                <Button onClick={() => send()} disabled={sending || !reply.trim()} data-testid="n8n-reply-send">
                   {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
                 </Button>
               </div>

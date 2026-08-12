@@ -4234,6 +4234,10 @@ async def get_n8n_api_logs(user: dict = Depends(require_role("super_admin"))):
     return [serialize(d) for d in docs]
 
 
+def _inbox_key(customer_id, whatsapp):
+    return customer_id if customer_id else ("wa:" + (whatsapp or ""))
+
+
 @api_router.get("/integrations/n8n/monitor")
 async def n8n_monitor(user: dict = Depends(require_role("super_admin"))):
     today = today_str()
@@ -4242,12 +4246,21 @@ async def n8n_monitor(user: dict = Depends(require_role("super_admin"))):
     auto = await db.bookings.find({"booking_source": "AUTO SALES"}).sort("created_at", -1).to_list(3000)
     logs = await db.n8n_api_logs.find({}).sort("timestamp", -1).to_list(500)
     cfg = await _n8n_cfg()
+    reads = {r.get("key"): (r.get("last_read_at") or "") for r in await db.n8n_inbox_reads.find({}).to_list(5000)}
     bycust = {}
     for c in sorted(convs, key=lambda x: x.get("timestamp") or x.get("created_at") or ""):
         k = c.get("customer_id") or c.get("whatsapp") or "?"
-        bycust[k] = {"customer_id": c.get("customer_id"), "customer_name": c.get("customer_name"),
-                     "whatsapp": c.get("whatsapp"), "last_message": c.get("message"),
-                     "ai_status": c.get("ai_or_human"), "status": c.get("status"), "last_activity": c.get("timestamp")}
+        ts = c.get("timestamp") or c.get("created_at") or ""
+        e = bycust.get(k) or {"_inbound_ts": []}
+        e.update({"customer_id": c.get("customer_id"), "customer_name": c.get("customer_name") or e.get("customer_name"),
+                  "whatsapp": c.get("whatsapp"), "last_message": c.get("message"),
+                  "ai_status": c.get("ai_or_human"), "status": c.get("status"), "last_activity": c.get("timestamp")})
+        if c.get("direction") == "INBOUND":
+            e.setdefault("_inbound_ts", []).append(ts)
+        bycust[k] = e
+    for e in bycust.values():
+        lr = reads.get(_inbox_key(e.get("customer_id"), e.get("whatsapp"))) or ""
+        e["unread_count"] = sum(1 for t in e.pop("_inbound_ts", []) if t and t > lr)
     conversations = sorted(bycust.values(), key=lambda x: x.get("last_activity") or "", reverse=True)[:100]
     orders = [{"order_id": b.get("booking_number"), "customer": b.get("customer_name"), "package": b.get("package_name"),
                "departure": b.get("departure_date"), "pax": b.get("pax"), "order_date": (b.get("created_at") or "")[:10],
@@ -4317,6 +4330,13 @@ async def n8n_conv_thread(customer_id: Optional[str] = None, whatsapp: Optional[
         raise HTTPException(status_code=400, detail="customer_id atau whatsapp wajib diisi")
     docs = await db.conversations.find(q).sort("timestamp", 1).to_list(2000)
     return [serialize(d) for d in docs]
+
+
+@api_router.post("/integrations/n8n/conversations/read")
+async def n8n_conv_read(body: dict, user: dict = Depends(require_role("super_admin"))):
+    key = _inbox_key(body.get("customer_id"), body.get("whatsapp"))
+    await db.n8n_inbox_reads.update_one({"key": key}, {"$set": {"key": key, "last_read_at": now_iso()}}, upsert=True)
+    return {"success": True}
 
 
 # ---------- Phase 8I: Availability, Conversation Log, Human Handover ----------

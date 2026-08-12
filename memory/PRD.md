@@ -1,6 +1,11 @@
 # Safar Travel CRM — Product Requirements (Living Doc)
 
-## N8N Enhancements — Retry, Central Inbox + CS Reply, Order Confirmation (2026-06) — DONE
+## N8N Inbox Enhancements — Unread, Search & Quick-Reply Templates (2026-06) — DONE
+- **Unread indicator**: monitor menghitung `unread_count` per percakapan (jumlah pesan INBOUND dengan timestamp > `last_read_at`). UI: titik biru + nama tebal + badge merah per item, badge total di tab Inbox. `POST /api/integrations/n8n/conversations/read` (super_admin) menandai dibaca (koleksi `n8n_inbox_reads` key=customer_id atau `wa:<no>`); dipanggil otomatis saat percakapan dibuka.
+- **Search Inbox**: kotak cari client-side by nama customer / nomor WhatsApp.
+- **Quick-Reply Templates CS**: 4 template siap pakai (Jam Operasional, Minta Data Jamaah, Cek Ketersediaan, Info Pembayaran) sebagai chip di atas kotak balasan; klik = kirim satu ketuk via endpoint reply.
+- Verifikasi: curl (unread 2→0 setelah read) + screenshot (badge unread + dot + search box + 4 chip template + thread bubble).
+
 - **Retry Failed Sync**: tab Sync Logs (`N8N.jsx`) kolom Retry + Action; baris FAILED punya tombol Retry → `POST /api/integrations/n8n/sync/{log_id}/retry` (super_admin). Re-deliver ke n8n bila base_url ada; hasil SUCCESS/FAILED/REJECTED + retry_count++ (idempotent, non-destruktif).
 - **Centralized Conversation Inbox**: tab baru "Inbox" di `/n8n` (super_admin only). 2 panel: kiri daftar percakapan per-customer (nama/last message/HANDOVER badge), kanan thread bubble (customer kiri, AI/SALES/OUTBOUND kanan biru) + kotak balasan CS.
 - **CS Reply**: `POST /api/integrations/n8n/conversations/reply` (super_admin) — simpan conversation OUTBOUND (sender_type SALES, ai_or_human HUMAN, status SENT), set customer.conversation_status=AGENT_REPLIED, trigger event `conversation.reply` ke n8n. Thread endpoint `GET /api/integrations/n8n/conversations/thread?customer_id|whatsapp` (super_admin) menangani percakapan tanpa customer_id (match by whatsapp).
