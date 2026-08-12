@@ -1,6 +1,10 @@
 # Safar Travel CRM — Product Requirements (Living Doc)
 
-## N8N Inbox — Custom Templates, Handover Filter & Sender Indicator (2026-06) — DONE
+## N8N Inbox — Assign CS ("Tangani") & SLA Handover (2026-06) — DONE
+- **Assign / Tangani**: percakapan handover bisa di-claim CS via tombol **"Tangani"** di header thread → tampil badge "Ditangani: <nama>" + tombol **"Lepas"**; indikator "● <nama>" di list item. `POST /api/integrations/n8n/conversations/assign` (super_admin, body {customer_id/whatsapp, release?}) simpan/hapus di koleksi `n8n_inbox_assignments` (key=customer_id atau `wa:<no>`). Anti-balas-ganda: bila membalas percakapan yang ditangani orang lain → konfirmasi dulu.
+- **SLA Handover**: monitor menghitung `waiting_minutes` (sejak pesan INBOUND terakhir bila belum dibalas) & `sla_overdue` bila status REQUIRES_HUMAN dan waiting > `n8n_sla_minutes`. Ambang **SLA Handover (menit)** diatur di Settings → Global → Integration & Notifications (default 15). UI: badge merah "SLA <n>m" di list item + KPI "SLA Overdue" di dashboard N8N.
+- Verifikasi: curl (assign→"Dedy Irawan"; SLA=1 → sla_overdue=1, waiting 6m>1m) + screenshot (header "Ditangani: Dedy Irawan"+Lepas, list "● Dedy Irawan", badge "SLA 7m").
+
 - **Template CS Kustom**: dikelola Super Admin di **Settings → Global → "Template Balasan Cepat N8N Inbox"** (tambah/ubah/hapus label+teks). Disimpan di `system_settings.settings.n8n_reply_templates` (pakai PUT `/api/system-settings` yang sudah ada, tanpa endpoint baru). N8N Inbox memuat template ini via GET `/api/system-settings` (fallback ke 4 default bila kosong); chip kirim satu ketuk.
 - **Filter "Perlu CS"**: toggle Semua / Perlu CS di Inbox — menyaring percakapan `status=REQUIRES_HUMAN` + badge jumlah, agar handover mudah diprioritaskan.
 - **Sender indicator**: reply CS kini menyimpan `sender_name` (nama user). Bubble menampilkan label pengirim: nama customer (inbound), "AI Bot" (AI), "AUTO SALES / System" (SYSTEM), "<Nama> · Sales/CS" (SALES).

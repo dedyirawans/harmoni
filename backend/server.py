@@ -4246,7 +4246,10 @@ async def n8n_monitor(user: dict = Depends(require_role("super_admin"))):
     auto = await db.bookings.find({"booking_source": "AUTO SALES"}).sort("created_at", -1).to_list(3000)
     logs = await db.n8n_api_logs.find({}).sort("timestamp", -1).to_list(500)
     cfg = await _n8n_cfg()
+    sysdoc = await db.system_settings.find_one({"key": "system"}) or {}
+    sla_min = int((sysdoc.get("settings") or {}).get("n8n_sla_minutes") or 15)
     reads = {r.get("key"): (r.get("last_read_at") or "") for r in await db.n8n_inbox_reads.find({}).to_list(5000)}
+    assigns = {a.get("key"): a for a in await db.n8n_inbox_assignments.find({}).to_list(5000)}
     bycust = {}
     for c in sorted(convs, key=lambda x: x.get("timestamp") or x.get("created_at") or ""):
         k = c.get("customer_id") or c.get("whatsapp") or "?"
@@ -4254,13 +4257,28 @@ async def n8n_monitor(user: dict = Depends(require_role("super_admin"))):
         e = bycust.get(k) or {"_inbound_ts": []}
         e.update({"customer_id": c.get("customer_id"), "customer_name": c.get("customer_name") or e.get("customer_name"),
                   "whatsapp": c.get("whatsapp"), "last_message": c.get("message"),
-                  "ai_status": c.get("ai_or_human"), "status": c.get("status"), "last_activity": c.get("timestamp")})
+                  "ai_status": c.get("ai_or_human"), "status": c.get("status"), "last_activity": c.get("timestamp"),
+                  "last_direction": c.get("direction")})
         if c.get("direction") == "INBOUND":
             e.setdefault("_inbound_ts", []).append(ts)
         bycust[k] = e
+    now_dt = datetime.now(timezone.utc)
     for e in bycust.values():
-        lr = reads.get(_inbox_key(e.get("customer_id"), e.get("whatsapp"))) or ""
+        key = _inbox_key(e.get("customer_id"), e.get("whatsapp"))
+        lr = reads.get(key) or ""
         e["unread_count"] = sum(1 for t in e.pop("_inbound_ts", []) if t and t > lr)
+        a = assigns.get(key) or {}
+        e["assigned_to_id"] = a.get("assigned_to_id")
+        e["assigned_to_name"] = a.get("assigned_to_name")
+        wait = 0
+        if e.get("last_direction") == "INBOUND" and e.get("last_activity"):
+            try:
+                wait = max(0, int((now_dt - datetime.fromisoformat(e["last_activity"])).total_seconds() // 60))
+            except Exception:
+                wait = 0
+        e.pop("last_direction", None)
+        e["waiting_minutes"] = wait
+        e["sla_overdue"] = bool(e.get("status") == "REQUIRES_HUMAN" and wait > sla_min)
     conversations = sorted(bycust.values(), key=lambda x: x.get("last_activity") or "", reverse=True)[:100]
     orders = [{"order_id": b.get("booking_number"), "customer": b.get("customer_name"), "package": b.get("package_name"),
                "departure": b.get("departure_date"), "pax": b.get("pax"), "order_date": (b.get("created_at") or "")[:10],
@@ -4276,7 +4294,8 @@ async def n8n_monitor(user: dict = Depends(require_role("super_admin"))):
                       "orders_today": sum(1 for b in auto if (b.get("created_at") or "")[:10] == today),
                       "auto_sales_orders": len(auto),
                       "failed_requests": sum(1 for l in logs if not l.get("ok")),
-                      "api_errors": sum(1 for l in logs if (l.get("code") or 200) >= 500)},
+                      "api_errors": sum(1 for l in logs if (l.get("code") or 200) >= 500),
+                      "sla_minutes": sla_min, "sla_overdue": sum(1 for c in conversations if c.get("sla_overdue"))},
             "conversations": conversations, "orders": orders, "sync_logs": sync_logs}
 
 
@@ -4337,6 +4356,18 @@ async def n8n_conv_read(body: dict, user: dict = Depends(require_role("super_adm
     key = _inbox_key(body.get("customer_id"), body.get("whatsapp"))
     await db.n8n_inbox_reads.update_one({"key": key}, {"$set": {"key": key, "last_read_at": now_iso()}}, upsert=True)
     return {"success": True}
+
+
+@api_router.post("/integrations/n8n/conversations/assign")
+async def n8n_conv_assign(body: dict, user: dict = Depends(require_role("super_admin"))):
+    key = _inbox_key(body.get("customer_id"), body.get("whatsapp"))
+    if body.get("release"):
+        await db.n8n_inbox_assignments.delete_one({"key": key})
+        return {"success": True, "assigned_to_name": None, "assigned_to_id": None}
+    uid = user.get("id") or str(user.get("_id", ""))
+    await db.n8n_inbox_assignments.update_one({"key": key},
+        {"$set": {"key": key, "assigned_to_id": uid, "assigned_to_name": user["name"], "assigned_at": now_iso()}}, upsert=True)
+    return {"success": True, "assigned_to_name": user["name"], "assigned_to_id": uid}
 
 
 # ---------- Phase 8I: Availability, Conversation Log, Human Handover ----------

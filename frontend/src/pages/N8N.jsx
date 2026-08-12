@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
-import { Loader2, Zap, RefreshCw, PlugZap, Send, MessageSquare, RotateCcw, Search } from "lucide-react";
+import { Loader2, Zap, RefreshCw, PlugZap, Send, MessageSquare, RotateCcw, Search, UserCheck } from "lucide-react";
 
 const stColor = (s) => s === "SUCCESS" || s === "CONNECTED" ? "bg-emerald-50 text-emerald-700 border-emerald-200"
   : s === "FAILED" || s === "REJECTED" ? "bg-red-50 text-red-700 border-red-200"
@@ -53,7 +53,7 @@ export default function N8N() {
   if (d === null) return <div className="p-12 flex justify-center"><Loader2 className="h-6 w-6 animate-spin text-blue-600" /></div>;
   if (d === false) return <div className="p-8 text-slate-400">Gagal memuat data N8N.</div>;
   const S = d.stats;
-  const kpis = [["Messages Today", S.total_today], ["Incoming", S.inbound], ["Outgoing", S.outbound], ["AI Responses", S.ai_responses], ["Human Handover", S.human_handover], ["Orders Today", S.orders_today], ["AUTO SALES Orders", S.auto_sales_orders], ["Failed Requests", S.failed_requests], ["API Errors", S.api_errors]];
+  const kpis = [["Messages Today", S.total_today], ["Incoming", S.inbound], ["Outgoing", S.outbound], ["AI Responses", S.ai_responses], ["Human Handover", S.human_handover], ["SLA Overdue", S.sla_overdue ?? 0], ["Orders Today", S.orders_today], ["AUTO SALES Orders", S.auto_sales_orders], ["Failed Requests", S.failed_requests], ["API Errors", S.api_errors]];
   const unreadTotal = (d.conversations || []).reduce((a, c) => a + (c.unread_count || 0), 0);
 
   return (
@@ -94,7 +94,7 @@ export default function N8N() {
           </div>
         </TabsContent>
         <TabsContent value="inbox">
-          <Inbox conversations={d.conversations} refresh={load} templates={templates} />
+          <Inbox conversations={d.conversations} refresh={load} templates={templates} me={user} slaMinutes={S.sla_minutes ?? 15} />
         </TabsContent>
         <TabsContent value="conversations">
           <Tbl testid="n8n-conv-table" cols={["Customer", "WhatsApp", "Last Message", "AI", "Status", "Last Activity"]} rows={d.conversations}
@@ -125,12 +125,13 @@ const DEFAULT_TEMPLATES = [
   { label: "Info Pembayaran", text: "Untuk melanjutkan pemesanan, silakan lakukan pembayaran DP. Detail rekening & invoice akan kami kirimkan. Ada yang bisa kami bantu lagi?" },
 ];
 
-function Inbox({ conversations, refresh, templates }) {
+function Inbox({ conversations, refresh, templates, me, slaMinutes }) {
   const [active, setActive] = useState(null);
   const [thread, setThread] = useState([]);
   const [loading, setLoading] = useState(false);
   const [reply, setReply] = useState("");
   const [sending, setSending] = useState(false);
+  const [assigning, setAssigning] = useState(false);
   const [q, setQ] = useState("");
   const [flt, setFlt] = useState("all");
 
@@ -166,6 +167,8 @@ function Inbox({ conversations, refresh, templates }) {
   const send = async (preset) => {
     const msg = (typeof preset === "string" ? preset : reply).trim();
     if (!msg || !active) return;
+    if (active.assigned_to_name && me?.name && active.assigned_to_name !== me.name
+        && !window.confirm(`Percakapan ini sedang ditangani oleh ${active.assigned_to_name}. Tetap kirim balasan?`)) return;
     setSending(true);
     try {
       await api.post("/integrations/n8n/conversations/reply", { customer_id: active.customer_id, whatsapp: active.whatsapp, message: msg });
@@ -175,6 +178,18 @@ function Inbox({ conversations, refresh, templates }) {
       refresh && refresh();
     } catch { toast.error("Gagal mengirim balasan"); }
     finally { setSending(false); }
+  };
+
+  const assign = async (release) => {
+    if (!active) return;
+    setAssigning(true);
+    try {
+      const r = await api.post("/integrations/n8n/conversations/assign", { customer_id: active.customer_id, whatsapp: active.whatsapp, release });
+      setActive({ ...active, assigned_to_name: r.data.assigned_to_name, assigned_to_id: r.data.assigned_to_id });
+      toast.success(release ? "Percakapan dilepas" : "Anda menangani percakapan ini");
+      refresh && refresh();
+    } catch { toast.error("Gagal memperbarui penanganan"); }
+    finally { setAssigning(false); }
   };
 
   return (
@@ -211,12 +226,16 @@ function Inbox({ conversations, refresh, templates }) {
                         {c.customer_name || c.whatsapp || "Unknown"}
                       </span>
                       <div className="flex items-center gap-1.5 shrink-0">
+                        {c.sla_overdue && <Badge className="bg-red-100 text-red-700 border-red-200 text-[10px]" data-testid={`n8n-sla-badge-${i}`}>SLA {c.waiting_minutes}m</Badge>}
                         {c.status === "REQUIRES_HUMAN" && <Badge className="bg-amber-50 text-amber-700 border-amber-200 text-[10px]">HANDOVER</Badge>}
                         {unread && <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] font-semibold" data-testid={`n8n-inbox-unread-${i}`}>{c.unread_count}</span>}
                       </div>
                     </div>
                     <p className={`text-xs truncate mt-0.5 ${unread ? "text-slate-700 font-medium" : "text-slate-500"}`}>{c.last_message || "—"}</p>
-                    <p className="text-[10px] text-slate-400 mt-0.5">{fmt(c.last_activity)}</p>
+                    <div className="flex items-center justify-between mt-0.5">
+                      <p className="text-[10px] text-slate-400">{fmt(c.last_activity)}</p>
+                      {c.assigned_to_name && <span className="text-[10px] text-emerald-600 font-medium truncate max-w-[120px]" data-testid={`n8n-assigned-${i}`}>● {c.assigned_to_name}</span>}
+                    </div>
                   </button>
                 );
               })}
@@ -230,9 +249,25 @@ function Inbox({ conversations, refresh, templates }) {
             </div>
           ) : (
             <>
-              <div className="px-4 py-3 border-b border-slate-200 bg-slate-50">
-                <p className="font-semibold text-slate-800 text-sm">{active.customer_name || "Unknown"}</p>
-                <p className="text-xs text-slate-500">{active.whatsapp || "—"}</p>
+              <div className="px-4 py-3 border-b border-slate-200 bg-slate-50 flex items-center justify-between gap-2">
+                <div className="min-w-0">
+                  <p className="font-semibold text-slate-800 text-sm truncate">{active.customer_name || "Unknown"}</p>
+                  <p className="text-xs text-slate-500">{active.whatsapp || "—"}</p>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  {active.assigned_to_name ? (
+                    <>
+                      <Badge className="bg-emerald-50 text-emerald-700 border-emerald-200 text-[11px]" data-testid="n8n-assignee-badge">Ditangani: {active.assigned_to_name}</Badge>
+                      <Button size="sm" variant="outline" disabled={assigning} onClick={() => assign(true)} data-testid="n8n-release-btn">
+                        {assigning ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Lepas"}
+                      </Button>
+                    </>
+                  ) : (
+                    <Button size="sm" disabled={assigning} onClick={() => assign(false)} data-testid="n8n-assign-btn">
+                      {assigning ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <><UserCheck className="h-3.5 w-3.5 mr-1" />Tangani</>}
+                    </Button>
+                  )}
+                </div>
               </div>
               <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-slate-50/40" data-testid="n8n-inbox-thread">
                 {loading ? <div className="flex justify-center pt-8"><Loader2 className="h-5 w-5 animate-spin text-blue-600" /></div>

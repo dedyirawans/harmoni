@@ -191,6 +191,13 @@ export default function Settings() {
                   <Switch checked={!!system.n8n?.enabled} disabled={!canManage}
                     onCheckedChange={(v) => setSystem({ ...system, n8n: { ...system.n8n, enabled: v } })} data-testid="n8n-switch" />
                 </div>
+                <div className="space-y-2">
+                  <Label>SLA Handover (menit)</Label>
+                  <Input type="number" min="1" value={system.n8n_sla_minutes ?? 15} disabled={!canManage}
+                    onChange={(e) => setSystem({ ...system, n8n_sla_minutes: Number(e.target.value) })}
+                    data-testid="n8n-sla-input" />
+                  <p className="text-xs text-slate-400">Percakapan "Perlu CS" yang belum dibalas melebihi menit ini ditandai SLA overdue di N8N Inbox.</p>
+                </div>
                 <div className="flex items-center justify-between">
                   <Label>Email notifications</Label>
                   <Switch checked={!!system.notification?.email_enabled} disabled={!canManage}
