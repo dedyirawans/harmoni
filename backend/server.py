@@ -4286,7 +4286,7 @@ async def n8n_monitor(user: dict = Depends(require_role("super_admin"))):
     sync_logs = [{"request_id": str(l.get("_id")), "event": l.get("endpoint"), "method": l.get("method"), "direction": "INBOUND",
                   "timestamp": l.get("timestamp"), "status": "SUCCESS" if l.get("ok") else "FAILED",
                   "response": l.get("code"), "error": l.get("error", ""), "retry_count": l.get("retry_count", 0)} for l in logs[:200]]
-    return {"connection": {"status": "CONNECTED" if cfg.get("base_url") else "NOT_CONFIGURED", "base_url": cfg.get("base_url", ""), "last_sync": (logs[0]["timestamp"] if logs else None)},
+    return {"connection": {"status": "CONNECTED" if (cfg.get("enabled") and cfg.get("webhook_url")) else ("DISABLED" if cfg.get("webhook_url") else "NOT_CONFIGURED"), "base_url": cfg.get("webhook_url", ""), "last_sync": (logs[0]["timestamp"] if logs else None)},
             "stats": {"total_today": len(tc), "inbound": sum(1 for c in tc if c.get("direction") == "INBOUND"),
                       "outbound": sum(1 for c in tc if c.get("direction") == "OUTBOUND"),
                       "ai_responses": sum(1 for c in tc if c.get("sender_type") == "AI"),
@@ -4305,15 +4305,13 @@ async def n8n_retry(log_id: str, user: dict = Depends(require_role("super_admin"
     if not l:
         raise HTTPException(status_code=404, detail="Log not found")
     cfg = await _n8n_cfg()
-    ok = False
-    if cfg.get("base_url"):
-        try:
-            await _deliver_n8n("retry", {"endpoint": l.get("endpoint"), "method": l.get("method"),
-                                         "external_id": l.get("external_id"), "retried_by": user["name"]})
-            ok = True
-        except Exception:
-            ok = False
-    status = "SUCCESS" if ok else ("FAILED" if cfg.get("base_url") else "REJECTED")
+    configured = bool(cfg.get("enabled") and cfg.get("webhook_url"))
+    delivered = None
+    if configured:
+        delivered = await _deliver_n8n("retry", {"endpoint": l.get("endpoint"), "method": l.get("method"),
+                                                 "external_id": l.get("external_id"), "retried_by": user["name"]})
+    ok = bool(delivered and delivered.get("ok"))
+    status = "SUCCESS" if ok else ("FAILED" if configured else "REJECTED")
     await db.n8n_api_logs.update_one({"_id": l["_id"]}, {"$set": {"ok": ok, "status": status}, "$inc": {"retry_count": 1}})
     return {"success": ok, "status": status}
 

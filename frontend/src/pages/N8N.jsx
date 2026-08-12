@@ -73,7 +73,7 @@ export default function N8N() {
       <Card className="border-slate-200 shadow-sm" data-testid="n8n-connection">
         <CardContent className="p-4 flex flex-wrap items-center gap-3">
           <Badge className={stColor(d.connection.status)}>{d.connection.status}</Badge>
-          <span className="text-sm text-slate-500">Base URL: {d.connection.base_url || "—"}</span>
+          <span className="text-sm text-slate-500">Webhook: {d.connection.base_url || "—"}</span>
           <span className="text-sm text-slate-400 ml-auto">Last Sync: {fmt(d.connection.last_sync)}</span>
         </CardContent>
       </Card>
