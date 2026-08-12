@@ -1,5 +1,20 @@
 # Safar Travel CRM — Product Requirements (Living Doc)
 
+## Phase 8G — Financial & Management Reports (2026-06) — DONE
+- **Menu Reports** (`/reports` → `Reports.jsx`, sebelumnya Placeholder) dengan 8 laporan dari data transaksi aktual (tanpa dummy):
+  1. **Laba Rugi**: Pendapatan (Tour/Umrah/Lainnya), HPP (Flight/Hotel/Visa/Transport/Supplier/Other dari package_costs×pax), Gross Profit, Operating Expense (Salary/Marketing/Office/Transportation/Commission/Bank Fee/Other), Net Profit — nominal + persentase + margin.
+  2. **Neraca**: Asset/Liability/Equity; retained_earnings = balancing figure → selalu balance (warning bila selisih).
+  3. **Arus Kas**: Operating/Investing/Financing + Opening/Cash In/Out/Net/Ending.
+  4. **Penjualan**: per-booking + summary (booking/pax/gross/net/paid/outstanding).
+  5. **Kinerja Tim**: metrik per sales (leads/qualified/quotations/converted/bookings/pax/value/conversion/follow-up/overdue/commission) + ranking (revenue/pax/conversion/booking).
+  6. **Rekap Pajak**: PPN (taxable/DPP/output/input/payable) pakai tarif Tax Configuration (bukan hardcode); PPh21/PPh23 struktur (kosong, no dummy).
+  7. **Utang Usaha (AP)**: vendor + aging.
+  8. **Piutang Usaha (AR)**: invoice + aging + sales.
+- **Endpoints**: `/api/mgmt-reports/*` (prefix terpisah agar tak ke-shadow `/reports/{name}`). Filter: preset tanggal (daily/weekly/monthly/quarterly/yearly/custom) + product_type/package/sales/destination/status/vendor/customer/month/year/tax_type. Summary cards + tabel di setiap laporan.
+- **RBAC**: Finance reports (P&L/Neraca/Arus Kas/Rekap Pajak/AP) = require_role(accounting, super_admin) → **Sales 403**. Sales-facing (Penjualan/Kinerja Tim/Piutang) own-scoped (sales lihat data sendiri). ROUTE_PERMS `/reports`=null (enforcement per-endpoint). Menu Reports ditambahkan ke Sales.
+- **Catatan data**: tidak ada koleksi fixed asset/kapital/pinjaman/vendor-bill/employee → baris terkait bernilai 0 (data nyata, bukan dummy).
+- **Tests**: iteration_24.json — backend 10/10 (RBAC + math P&L/Neraca/Arus Kas + tax config rate + scoping) + frontend 100% (8 tab render, role-filter, balance OK tanpa NaN, tab-switch race fixed). File: test_phase8g_mgmt_reports.py.
+
 ## Phase 8F — Tax Configuration & Tax Management (2026-06) — DONE
 - **Tax menu** (`/tax`, sebelumnya Placeholder) → halaman baru `Tax.jsx` dengan 5 tab: Dashboard, Tax Transactions, Tax Master, PPN Configuration, Tax Reports. Diakses Accounting & Super Admin (RBAC tax.view/tax.manage); Sales tidak punya menu & di-block 403.
 - **PPN Configuration (versioned)**: koleksi `ppn_configurations` — field config_name, tax_type, tax_rate, dpp_percentage, effective_from/until, status, description. CRUD (POST/PUT/DELETE-deactivate). **Versioning**: perubahan tarif = buat konfigurasi baru; `resolve_ppn_config(date)` memilih config ACTIVE yg range-nya mencakup tanggal (effective_from desc → yg terbaru menang).

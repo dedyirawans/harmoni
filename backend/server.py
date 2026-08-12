@@ -2874,6 +2874,395 @@ async def export_report(name: str, format: str = "xlsx", frm: Optional[str] = No
     return export_response(fmt, rep["title"], rep["columns"], rep["rows"])
 
 
+# ================= PHASE 8G — Financial & Management Reports =================
+async def _pkg_maps():
+    pkgs = await db.packages.find({}).to_list(5000)
+    pmap = {str(p["_id"]): {"product_type": norm_type(p.get("product_type") or ""),
+            "name": p.get("name") or p.get("package_name") or "",
+            "destination": p.get("destination") or p.get("destination_name") or ""} for p in pkgs}
+    costs = await db.package_costs.find({}).to_list(5000)
+    cmap = {str(c.get("package_id")): c for c in costs}
+    return pmap, cmap
+
+
+def _pct(part, whole):
+    return round(part / whole * 100, 1) if whole else 0
+
+
+@api_router.get("/mgmt-reports/filters")
+async def rpt_filters(user: dict = Depends(get_current_user)):
+    pmap, _ = await _pkg_maps()
+    packages = [{"id": k, "name": v["name"], "product_type": v["product_type"], "destination": v.get("destination", "")} for k, v in pmap.items()]
+    sales = []
+    if user["role"] in ("accounting", "super_admin"):
+        sales = [{"id": str(u["_id"]), "name": u.get("name")} for u in await db.users.find({"role": "sales"}).to_list(500)]
+    dests = sorted({v.get("destination", "") for v in pmap.values() if v.get("destination")})
+    return {"packages": packages, "sales": sales, "product_types": ["TOUR", "UMROH", "UMROH_PLUS"], "destinations": dests, "tax_types": TAX_TYPES}
+
+
+@api_router.get("/mgmt-reports/profit-loss")
+async def rpt_profit_loss(frm: Optional[str] = None, to: Optional[str] = None, product_type: Optional[str] = None,
+                          package_id: Optional[str] = None, destination: Optional[str] = None,
+                          user: dict = Depends(require_role("accounting", "super_admin"))):
+    pmap, cmap = await _pkg_maps()
+    bmap = {str(b["_id"]): b for b in await db.bookings.find({}).to_list(20000)}
+    invs = [i for i in await db.invoices.find({}).to_list(20000) if _in_range(i.get("created_at"), frm, to)]
+
+    def inv_pid(i):
+        b = bmap.get(str(i.get("booking_id") or ""))
+        return str((b or {}).get("package_id") or i.get("package_id") or "")
+
+    def keep(pid):
+        if package_id and pid != package_id:
+            return False
+        if product_type and pmap.get(pid, {}).get("product_type", "") != product_type.upper():
+            return False
+        if destination and (pmap.get(pid, {}).get("destination", "") or "").lower() != destination.lower():
+            return False
+        return True
+    invs = [i for i in invs if keep(inv_pid(i))]
+    tour_rev = sum(float(i.get("total") or 0) for i in invs if pmap.get(inv_pid(i), {}).get("product_type") == "TOUR")
+    umrah_rev = sum(float(i.get("total") or 0) for i in invs if pmap.get(inv_pid(i), {}).get("product_type") in ("UMROH", "UMROH_PLUS"))
+    total_rev_all = sum(float(i.get("total") or 0) for i in invs)
+    other_rev = total_rev_all - tour_rev - umrah_rev
+    revenue = total_rev_all
+    hpp = {"flight": 0, "hotel": 0, "visa": 0, "transport": 0, "supplier": 0, "other": 0}
+    for b in bmap.values():
+        if b.get("status") == "CANCELLED" or not _in_range(b.get("created_at"), frm, to):
+            continue
+        pid = str(b.get("package_id") or "")
+        if not keep(pid):
+            continue
+        c = cmap.get(pid)
+        if not c:
+            continue
+        pax = int(b.get("pax") or 0)
+        comps = c.get("components") or {}
+        per_pax_total = float(c.get("total_cost") or c.get("cost_per_pax") or 0)
+        used = 0
+        for key in ("flight", "hotel", "visa", "transport"):
+            v = float(comps.get(key) or 0) * pax
+            hpp[key] += v
+            used += v
+        hpp["supplier"] += max(per_pax_total * pax - used, 0)
+    hpp_total = sum(hpp.values())
+    gross_profit = revenue - hpp_total
+    exps = [e for e in await db.expenses.find({}).to_list(20000) if _in_range(e.get("date") or e.get("created_at"), frm, to)]
+    opex = {"salary": 0, "marketing": 0, "office": 0, "transportation": 0, "commission": 0, "bank_fee": 0, "other": 0}
+    for e in exps:
+        cat = (e.get("category") or "").lower()
+        amt = float(e.get("amount") or 0)
+        if "market" in cat:
+            opex["marketing"] += amt
+        elif "operational" in cat or "office" in cat:
+            opex["office"] += amt
+        elif "transport" in cat:
+            opex["transportation"] += amt
+        elif "salary" in cat:
+            opex["salary"] += amt
+        elif "bank" in cat:
+            opex["bank_fee"] += amt
+        elif cat in ("flight", "hotel", "visa", "guide") or "commission" in cat or "refund" in cat:
+            continue
+        else:
+            opex["other"] += amt
+    comm = 0
+    for ln in await db.commission_lines.find({}).to_list(20000):
+        p = ln.get("period") or ""
+        d = (p + "-01") if len(p) == 7 else p
+        if _in_range(d, frm, to):
+            comm += float(ln.get("final_commission") or 0)
+    opex["commission"] = comm
+    opex_total = sum(opex.values())
+    net_profit = gross_profit - opex_total
+
+    def L(label, amount):
+        return {"label": label, "amount": amount, "percent": _pct(amount, revenue)}
+    return {"title": "Laporan Laba Rugi", "period": {"from": frm, "to": to},
+            "revenue": {"tour": L("Penjualan Tour", tour_rev), "umrah": L("Penjualan Umrah", umrah_rev), "other": L("Pendapatan Lainnya", other_rev), "total": L("Total Pendapatan", revenue)},
+            "hpp": {"flight": L("Flight", hpp["flight"]), "hotel": L("Hotel", hpp["hotel"]), "visa": L("Visa", hpp["visa"]), "transport": L("Transport", hpp["transport"]), "supplier": L("Supplier Cost", hpp["supplier"]), "other": L("Other Direct Cost", hpp["other"]), "total": L("Total HPP", hpp_total)},
+            "gross_profit": L("Gross Profit", gross_profit),
+            "opex": {"salary": L("Salary", opex["salary"]), "marketing": L("Marketing", opex["marketing"]), "office": L("Office", opex["office"]), "transportation": L("Transportation", opex["transportation"]), "commission": L("Commission", opex["commission"]), "bank_fee": L("Bank Fee", opex["bank_fee"]), "other": L("Other Expense", opex["other"]), "total": L("Total Operating Expense", opex_total)},
+            "net_profit": L("Net Profit", net_profit),
+            "summary": {"revenue": revenue, "hpp": hpp_total, "gross_profit": gross_profit, "opex": opex_total, "net_profit": net_profit, "gross_margin": _pct(gross_profit, revenue), "net_margin": _pct(net_profit, revenue)}}
+
+
+@api_router.get("/mgmt-reports/balance-sheet")
+async def rpt_balance_sheet(as_of: Optional[str] = None, user: dict = Depends(require_role("accounting", "super_admin"))):
+    ason = (as_of or today_str())[:10]
+
+    def le(dt):
+        return (dt or "")[:10] <= ason
+    payments = [p for p in await db.payments.find({}).to_list(40000) if le(p.get("payment_date"))]
+    expenses = [e for e in await db.expenses.find({}).to_list(20000) if le(e.get("date") or e.get("created_at"))]
+    refunds = await db.refund_requests.find({}).to_list(10000)
+    invoices = [i for i in await db.invoices.find({}).to_list(20000) if le(i.get("created_at"))]
+    cash = sum(float(p.get("amount") or 0) for p in payments) - sum(float(e.get("amount") or 0) for e in expenses) - sum(float(r.get("refunded_amount") or 0) for r in refunds)
+    ar = sum(float(i.get("outstanding") or 0) for i in invoices if float(i.get("outstanding") or 0) > 0)
+    customer_deposit = sum(float(i.get("paid_amount") or 0) for i in invoices if i.get("status") != "Paid" and float(i.get("outstanding") or 0) > 0)
+    tax_payable = sum(float(i.get("tax_amount") or 0) for i in invoices if float(i.get("outstanding") or 0) > 0)
+    commission_payable = sum(float(c.get("final_commission") or 0) for c in await db.commission_lines.find({}).to_list(20000) if c.get("payment_status") != "PAID")
+    pl = await rpt_profit_loss(frm=f"{ason[:4]}-01-01", to=ason, user=user)
+    current_pl = pl["summary"]["net_profit"]
+    assets_current = {"cash": cash, "bank": 0, "accounts_receivable": ar, "prepaid_expense": 0, "other_current": 0}
+    assets_noncurrent = {"fixed_asset": 0, "accumulated_depreciation": 0, "other_asset": 0}
+    total_assets = sum(assets_current.values()) + sum(assets_noncurrent.values())
+    liabilities = {"accounts_payable": 0, "customer_deposit": customer_deposit, "tax_payable": tax_payable, "commission_payable": commission_payable, "other_payable": 0}
+    total_liabilities = sum(liabilities.values())
+    retained = total_assets - total_liabilities - current_pl
+    equity = {"paid_in_capital": 0, "retained_earnings": retained, "current_year_pl": current_pl, "other_equity": 0}
+    total_equity = sum(equity.values())
+    diff = round(total_assets - (total_liabilities + total_equity))
+    return {"title": "Neraca / Posisi Keuangan", "as_of": ason, "assets_current": assets_current,
+            "assets_noncurrent": assets_noncurrent, "total_assets": total_assets, "liabilities": liabilities,
+            "total_liabilities": total_liabilities, "equity": equity, "total_equity": total_equity,
+            "balanced": abs(diff) < 1, "difference": diff}
+
+
+@api_router.get("/mgmt-reports/cash-flow")
+async def rpt_cash_flow(frm: Optional[str] = None, to: Optional[str] = None, user: dict = Depends(require_role("accounting", "super_admin"))):
+    payments = await db.payments.find({}).to_list(40000)
+    expenses = await db.expenses.find({}).to_list(20000)
+    refunds = await db.refund_requests.find({}).to_list(10000)
+
+    def pd(p):
+        return (p.get("payment_date") or "")[:10]
+
+    def ed(e):
+        return (e.get("date") or e.get("created_at") or "")[:10]
+    opening = 0
+    if frm:
+        opening = sum(float(p.get("amount") or 0) for p in payments if pd(p) < frm) - sum(float(e.get("amount") or 0) for e in expenses if ed(e) < frm)
+    in_pay = sum(float(p.get("amount") or 0) for p in payments if _in_range(p.get("payment_date"), frm, to))
+    pe = [e for e in expenses if _in_range(e.get("date") or e.get("created_at"), frm, to)]
+    supplier = sum(float(e.get("amount") or 0) for e in pe if (e.get("category") or "").lower() in ("flight", "hotel", "visa", "transport", "guide"))
+    tax = sum(float(e.get("amount") or 0) for e in pe if "tax" in (e.get("category") or "").lower())
+    commp = sum(float(e.get("amount") or 0) for e in pe if "commission" in (e.get("category") or "").lower())
+    opex = sum(float(e.get("amount") or 0) for e in pe) - supplier - tax - commp
+    refund_out = sum(float(r.get("refunded_amount") or 0) for r in refunds if _in_range(r.get("refunded_at") or r.get("updated_at"), frm, to))
+    cash_in = in_pay
+    cash_out = supplier + opex + tax + commp + refund_out
+    net = cash_in - cash_out
+    return {"title": "Laporan Arus Kas", "period": {"from": frm, "to": to}, "opening_cash": opening,
+            "operating": {"customer_payment": in_pay, "supplier_payment": -supplier, "operational_expense": -opex, "tax_payment": -tax, "commission_payment": -commp, "refund": -refund_out},
+            "investing": {"asset_purchase": 0, "asset_sale": 0},
+            "financing": {"capital_injection": 0, "loan": 0, "loan_repayment": 0, "other_financing": 0},
+            "cash_in": cash_in, "cash_out": cash_out, "net_cash_flow": net, "ending_cash": opening + net}
+
+
+@api_router.get("/mgmt-reports/sales-detail")
+async def rpt_sales_detail(frm: Optional[str] = None, to: Optional[str] = None, product_type: Optional[str] = None,
+                           package_id: Optional[str] = None, sales_id: Optional[str] = None, status: Optional[str] = None,
+                           user: dict = Depends(get_current_user)):
+    q = {}
+    if user["role"] == "sales":
+        q["sales_pic_id"] = user["_id"]
+    elif sales_id and user["role"] == "super_admin":
+        q["sales_pic_id"] = sales_id
+    bks = [b for b in await db.bookings.find(q).sort("created_at", -1).to_list(20000) if _in_range(b.get("created_at"), frm, to)]
+    pmap, _ = await _pkg_maps()
+    invagg = {}
+    for i in await db.invoices.find({}).to_list(20000):
+        k = str(i.get("booking_id") or "")
+        a = invagg.setdefault(k, {"paid": 0, "out": 0})
+        a["paid"] += float(i.get("paid_amount") or 0)
+        a["out"] += float(i.get("outstanding") or 0)
+    rows = []
+    tot = {"pax": 0, "gross": 0, "disc": 0, "net": 0, "paid": 0, "out": 0}
+    for b in bks:
+        pid = str(b.get("package_id") or "")
+        pt = pmap.get(pid, {}).get("product_type", "")
+        if product_type and pt != product_type.upper():
+            continue
+        if package_id and pid != package_id:
+            continue
+        if status and (b.get("status") or "") != status:
+            continue
+        gross = float(b.get("subtotal") or b.get("total") or 0)
+        disc = float(b.get("discount") or b.get("discount_amount") or 0)
+        net = float(b.get("total") or 0)
+        inv = invagg.get(str(b["_id"]), {"paid": 0, "out": 0})
+        rows.append({"booking_number": b.get("booking_number"), "date": (b.get("created_at") or "")[:10],
+                     "customer": b.get("customer_name"), "sales": b.get("sales_pic_name"), "package": b.get("package_name"),
+                     "product_type": pt, "destination": pmap.get(pid, {}).get("destination", ""), "departure": b.get("departure_date") or "",
+                     "pax": int(b.get("pax") or 0), "selling_price": gross, "discount": disc, "net_sales": net,
+                     "payment": inv["paid"], "outstanding": inv["out"], "status": b.get("status")})
+        tot["pax"] += int(b.get("pax") or 0); tot["gross"] += gross; tot["disc"] += disc; tot["net"] += net; tot["paid"] += inv["paid"]; tot["out"] += inv["out"]
+    return {"title": "Laporan Penjualan", "rows": rows, "summary": {"total_booking": len(rows), "total_pax": tot["pax"], "gross_sales": tot["gross"], "discount": tot["disc"], "net_sales": tot["net"], "paid": tot["paid"], "outstanding": tot["out"]}}
+
+
+@api_router.get("/mgmt-reports/team-performance")
+async def rpt_team_performance(frm: Optional[str] = None, to: Optional[str] = None, sales_id: Optional[str] = None,
+                               user: dict = Depends(get_current_user)):
+    susers = await db.users.find({"role": "sales"}).to_list(500)
+    if user["role"] == "sales":
+        susers = [u for u in susers if str(u["_id"]) == user["_id"]]
+    elif sales_id and user["role"] == "super_admin":
+        susers = [u for u in susers if str(u["_id"]) == sales_id]
+    leads = await db.leads.find({}).to_list(20000)
+    quotes = await db.quotations.find({}).to_list(20000)
+    bks = [b for b in await db.bookings.find({}).to_list(20000) if b.get("status") != "CANCELLED" and _in_range(b.get("created_at"), frm, to)]
+    fus = await db.follow_ups.find({}).to_list(20000)
+    lines = await db.commission_lines.find({}).to_list(20000)
+    today = today_str()
+    rows = []
+    for u in susers:
+        sid = str(u["_id"])
+        ul = [l for l in leads if l.get("sales_pic_id") == sid and _in_range(l.get("created_at"), frm, to)]
+        uq = [x for x in quotes if x.get("sales_pic_id") == sid and _in_range(x.get("created_at"), frm, to)]
+        conv = [x for x in uq if x.get("status") == "ACCEPTED" or x.get("converted_booking_id")]
+        ub = [b for b in bks if b.get("sales_pic_id") == sid]
+        ufu = [f for f in fus if f.get("sales_pic_id") == sid]
+        overdue = [f for f in ufu if (f.get("status") not in ("DONE", "COMPLETED")) and f.get("due_date") and (f.get("due_date") or "")[:10] < today]
+        rows.append({"sales_id": sid, "sales": u.get("name"), "leads": len(ul),
+                     "qualified": len([l for l in ul if l.get("status") == "QUALIFIED"]), "quotations": len(uq),
+                     "converted": len(conv), "bookings": len(ub), "pax": sum(int(b.get("pax") or 0) for b in ub),
+                     "sales_value": sum(float(b.get("total") or 0) for b in ub), "conversion_rate": _pct(len(conv), len(uq)),
+                     "follow_up": len(ufu), "overdue_follow_up": len(overdue),
+                     "commission": sum(float(c.get("final_commission") or 0) for c in lines if c.get("sales_pic_id") == sid)})
+
+    def top(k):
+        return sorted(rows, key=lambda r: -r[k])[:5]
+    return {"title": "Laporan Kinerja Tim Sales", "rows": rows,
+            "rankings": {"by_revenue": top("sales_value"), "by_pax": top("pax"), "by_conversion": top("conversion_rate"), "by_booking": top("bookings")}}
+
+
+@api_router.get("/mgmt-reports/tax-recap")
+async def rpt_tax_recap(month: Optional[str] = None, year: Optional[str] = None, tax_type: str = "PPN",
+                        user: dict = Depends(require_role("accounting", "super_admin"))):
+    if year and month:
+        prefix = f"{int(year):04d}-{int(month):02d}"
+    elif year:
+        prefix = f"{int(year):04d}"
+    else:
+        prefix = now_iso()[:7]
+    invs = [i for i in await db.invoices.find({}).to_list(20000) if (i.get("created_at") or "").startswith(prefix)]
+    res = {"title": "Rekapitulasi Pajak Bulanan", "period": prefix, "tax_type": tax_type}
+    if tax_type == "PPN":
+        taxable = sum(float(i.get("amount") or 0) for i in invs if float(i.get("tax_amount") or 0) > 0)
+        dpp = sum(float(i.get("dpp_amount") if i.get("dpp_amount") is not None else i.get("amount") or 0) for i in invs if float(i.get("tax_amount") or 0) > 0)
+        output = sum(float(i.get("tax_amount") or 0) for i in invs)
+        res["ppn"] = {"taxable_sales": taxable, "dpp": dpp, "ppn_output": output, "ppn_input": 0, "ppn_payable": output, "tax_adjustment": 0}
+        res["columns"] = ["Invoice", "Customer", "DPP", "Rate %", "PPN", "Config"]
+        res["rows"] = [[i.get("invoice_number"), i.get("customer_name"),
+                        float(i.get("dpp_amount") if i.get("dpp_amount") is not None else i.get("amount") or 0),
+                        float(i.get("tax_rate") if i.get("tax_rate") is not None else i.get("tax_percent") or 0),
+                        float(i.get("tax_amount") or 0), i.get("tax_config_version") or "-"] for i in invs]
+        res["summary"] = {"taxable_sales": taxable, "dpp": dpp, "ppn_output": output, "ppn_payable": output}
+    elif tax_type == "PPh21":
+        res["columns"] = ["Employee", "Tax Base", "Tax Amount", "Withholding Date", "Status"]
+        res["rows"] = []
+        res["summary"] = {"tax_amount": 0}
+    elif tax_type == "PPh23":
+        res["columns"] = ["Vendor", "Transaction", "DPP", "Rate %", "Tax Amount", "Withholding Date", "Status"]
+        res["rows"] = []
+        res["summary"] = {"tax_amount": 0}
+    else:
+        res["columns"] = ["Description", "Amount"]
+        res["rows"] = []
+        res["summary"] = {"tax_amount": 0}
+    return res
+
+
+@api_router.get("/mgmt-reports/payable")
+async def rpt_payable(frm: Optional[str] = None, to: Optional[str] = None, vendor: Optional[str] = None, status: Optional[str] = None,
+                      user: dict = Depends(require_role("accounting", "super_admin"))):
+    from datetime import date
+    exps = [e for e in await db.expenses.find({}).sort("date", -1).to_list(20000) if _in_range(e.get("date") or e.get("created_at"), frm, to)]
+    today = today_str()
+    rows = []
+    buckets = {"current": 0, "d1_30": 0, "d31_60": 0, "d61_90": 0, "d90": 0}
+    tot_out = 0
+    tot_amt = 0
+    for e in exps:
+        v = e.get("vendor") or "-"
+        if vendor and vendor.lower() not in v.lower():
+            continue
+        amt = float(e.get("amount") or 0)
+        paid = float(e.get("paid_amount") if e.get("paid_amount") is not None else amt)
+        out = amt - paid
+        st = "PAID" if out <= 0 else ("OVERDUE" if (e.get("due_date") or "")[:10] < today and e.get("due_date") else "UNPAID")
+        if status and st != status:
+            continue
+        edt = (e.get("date") or e.get("created_at") or "")[:10]
+        due = (e.get("due_date") or edt)[:10]
+        try:
+            days = (date.fromisoformat(today) - date.fromisoformat(due)).days if due else 0
+        except Exception:
+            days = 0
+        if out > 0:
+            if days <= 0:
+                buckets["current"] += out
+            elif days <= 30:
+                buckets["d1_30"] += out
+            elif days <= 60:
+                buckets["d31_60"] += out
+            elif days <= 90:
+                buckets["d61_90"] += out
+            else:
+                buckets["d90"] += out
+        aging = "Current" if days <= 0 else ("1-30" if days <= 30 else ("31-60" if days <= 60 else ("61-90" if days <= 90 else ">90")))
+        rows.append({"vendor": v, "invoice": e.get("reference") or e.get("description") or "-", "invoice_date": edt,
+                     "due_date": due, "amount": amt, "paid": paid, "outstanding": out, "aging": aging, "status": st})
+        tot_out += out
+        tot_amt += amt
+    return {"title": "Laporan Utang Usaha", "rows": rows, "summary": {"total_payable": tot_amt, "total_outstanding": tot_out, **buckets}}
+
+
+@api_router.get("/mgmt-reports/receivable-aging")
+async def rpt_receivable_aging(frm: Optional[str] = None, to: Optional[str] = None, customer: Optional[str] = None,
+                               sales_id: Optional[str] = None, status: Optional[str] = None, user: dict = Depends(get_current_user)):
+    from datetime import date
+    invs = await db.invoices.find({}).to_list(20000)
+    bmap = {str(b["_id"]): b for b in await db.bookings.find({}).to_list(20000)}
+    today = today_str()
+    rows = []
+    buckets = {"current": 0, "d1_30": 0, "d31_60": 0, "d61_90": 0, "d90": 0}
+    tot_out = 0
+    overdue = 0
+    for i in invs:
+        if not _in_range(i.get("created_at"), frm, to):
+            continue
+        out = float(i.get("outstanding") or 0)
+        if out <= 0:
+            continue
+        b = bmap.get(str(i.get("booking_id") or ""))
+        sid = (b or {}).get("sales_pic_id")
+        sname = (b or {}).get("sales_pic_name")
+        if user["role"] == "sales" and sid != user["_id"]:
+            continue
+        if sales_id and user["role"] == "super_admin" and sid != sales_id:
+            continue
+        if customer and customer.lower() not in (i.get("customer_name") or "").lower():
+            continue
+        due = (i.get("due_date") or (i.get("created_at") or "")[:10])[:10]
+        try:
+            days = (date.fromisoformat(today) - date.fromisoformat(due)).days if due else 0
+        except Exception:
+            days = 0
+        if days <= 0:
+            buckets["current"] += out
+        elif days <= 30:
+            buckets["d1_30"] += out
+        elif days <= 60:
+            buckets["d31_60"] += out
+        elif days <= 90:
+            buckets["d61_90"] += out
+        else:
+            buckets["d90"] += out
+        if days > 0:
+            overdue += out
+        aging = "Current" if days <= 0 else ("1-30" if days <= 30 else ("31-60" if days <= 60 else ("61-90" if days <= 90 else ">90")))
+        st = i.get("status") or "Unpaid"
+        if status and st != status:
+            continue
+        rows.append({"customer": i.get("customer_name"), "invoice": i.get("invoice_number"), "invoice_date": (i.get("created_at") or "")[:10],
+                     "due_date": due, "total_invoice": float(i.get("total") or 0), "paid": float(i.get("paid_amount") or 0),
+                     "outstanding": out, "aging": aging, "status": st, "sales": sname})
+        tot_out += out
+    return {"title": "Laporan Piutang Usaha", "rows": rows, "summary": {"total_receivable": tot_out, "overdue": overdue, **buckets}}
+
+
 # ---------- Commission & n8n settings (Accounting must be 403) ----------
 @api_router.get("/commission-settings")
 async def get_commission_settings(user: dict = Depends(require_permission("commission.manage"))):

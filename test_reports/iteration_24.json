@@ -1,0 +1,37 @@
+{
+  "summary": "Phase 8G Financial & Management Reports — tested 8 endpoints + frontend /reports page. All 10 backend tests PASS (RBAC + math + schema). Frontend loads all tabs correctly for each role, Balance Sheet is balanced (OK card, no NaN), rapid tab-switching race is fixed. No blocking issues found.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "/reports (all tabs)", "issues": ["Recharts console warning: 'width(-1) and height(-1) of chart should be greater than 0' — cosmetic, likely a hidden/zero-sized ResponsiveContainer on some cards; does not affect rendering but pollutes console."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_phase8g_mgmt_reports.py",
+    "/app/test_reports/pytest/phase8g_results.xml"
+  ],
+  "action_items": [
+    "(Optional) Investigate Recharts ResponsiveContainer warnings on Reports page — check for chart wrappers with 0 height/width in Reports.jsx.",
+    "(Optional) Neraca tab 3rd screenshot from first sweep showed 'Gagal memuat laporan' with 401 — could NOT reproduce on direct navigation nor rapid tab-switch after fresh login; likely a test-side artifact from mid-test localStorage clearing, not a product bug."
+  ],
+  "critical_code_review_comments": [
+    "server.py is now >5400 lines; consider splitting mgmt-reports into a router module.",
+    "Payable/Receivable aging bucket key '>90 days' uses 'd90' (no 'p' suffix) — consistent across code but slightly inconsistent with common d90p naming; not a bug, just a note.",
+    "PPh21/PPh23 tax-recap intentionally returns empty structures — good (real data, no dummy). PPN uses tax config rate correctly (verified 3.85% in payable) rather than hardcoded 11%."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_phase8g_mgmt_reports.py (new)"
+  ],
+  "success_rate": {"backend": "100% (10/10)", "frontend": "100% RBAC + core rendering"},
+  "test_credentials": "super_admin dedyirawan18@gmail.com/Admin@123, accounting accounting@safarcrm.com/Account@123, sales sales@safarcrm.com/Sales@123",
+  "seed_data_creation": "None — used existing seeded data.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Backend Phase 8G endpoints all return schema-consistent data; aging bucket keys are current/d1_30/d31_60/d61_90/d90 (no 'p' suffix). Balance sheet uses retained_earnings as balancing figure so 'balanced':true always. Frontend Reports page role-filters tabs correctly: sales sees only sales-detail/team-performance/receivable-aging.",
+  "rca of the issue": "No critical issues to RCA. Verified: P&L math (gross=rev-hpp, net=gross-opex), balance sheet balanced (477.87M = 1.06M + 476.81M), cash-flow math (net=in-out, ending=opening+net), tax-recap uses configured PPN rate, sales user gets 403 on finance reports, sales user sees only own row in team-performance and own bookings in sales-detail."
+}
