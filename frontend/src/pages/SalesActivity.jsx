@@ -12,7 +12,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogTrigger } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Activity, Plus, Loader2, Phone, MessageCircle, Mail, Users, ClipboardList, FileText, CalendarCheck, Trophy, Target, Pencil } from "lucide-react";
+import { Activity, Plus, Loader2, Phone, MessageCircle, Mail, Users, ClipboardList, FileText, CalendarCheck, Trophy, Target, Pencil, CalendarRange } from "lucide-react";
 import { toast } from "sonner";
 
 const MANUAL_TYPES = ["Call", "WhatsApp", "Email", "Meeting"];
@@ -160,11 +160,13 @@ function Bar({ pct, color }) {
 }
 
 function TargetsCard({ rows, month, isAdmin, onSaved }) {
-  const [edit, setEdit] = useState(null); // row being edited
+  const [edit, setEdit] = useState(null); // row for single-month edit
+  const [yearly, setYearly] = useState(null); // row for yearly bulk edit
   return (
     <Card className="border-slate-200" data-testid="targets-card">
       <CardHeader className="pb-2 flex flex-row items-center justify-between">
         <CardTitle className="font-display text-lg flex items-center gap-2"><Target className="h-4 w-4 text-blue-600" />Target Bulanan {month && `· ${month}`}</CardTitle>
+        {isAdmin && <span className="text-xs text-slate-400">Hanya Super Admin yang dapat mengatur target</span>}
       </CardHeader>
       <CardContent className="space-y-4">
         {!month ? <p className="text-sm text-slate-400" data-testid="targets-hint">Pilih bulan di atas untuk melihat{isAdmin ? " & menetapkan" : ""} target revenue/pax.</p>
@@ -172,9 +174,14 @@ function TargetsCard({ rows, month, isAdmin, onSaved }) {
             const hasT = r.revenue_target > 0 || r.pax_target > 0;
             return (
               <div key={r.sales_id} className="space-y-2 border-b border-slate-100 pb-3 last:border-0 last:pb-0" data-testid={`target-${r.sales_id}`}>
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between gap-2">
                   <span className="text-sm font-medium text-slate-800">{r.sales}</span>
-                  {isAdmin && <Button size="sm" variant="ghost" onClick={() => setEdit(r)} data-testid={`edit-target-${r.sales_id}`}><Pencil className="h-3.5 w-3.5 mr-1" />Set Target</Button>}
+                  {isAdmin && (
+                    <div className="flex items-center gap-1">
+                      <Button size="sm" variant="ghost" onClick={() => setEdit(r)} data-testid={`edit-target-${r.sales_id}`}><Pencil className="h-3.5 w-3.5 mr-1" />Edit Bulan Ini</Button>
+                      <Button size="sm" variant="outline" onClick={() => setYearly(r)} data-testid={`yearly-target-${r.sales_id}`}><CalendarRange className="h-3.5 w-3.5 mr-1" />Set 1 Tahun</Button>
+                    </div>
+                  )}
                 </div>
                 {!hasT ? <p className="text-xs text-slate-400" data-testid={`no-target-${r.sales_id}`}>Belum ada target.</p>
                   : (
@@ -194,6 +201,7 @@ function TargetsCard({ rows, month, isAdmin, onSaved }) {
           })}
       </CardContent>
       {edit && <SetTargetDialog row={edit} month={month} onClose={() => setEdit(null)} onSaved={() => { setEdit(null); onSaved(); }} />}
+      {yearly && <YearlyTargetDialog row={yearly} startMonth={month} onClose={() => setYearly(null)} onSaved={() => { setYearly(null); onSaved(); }} />}
     </Card>
   );
 }
@@ -212,12 +220,76 @@ function SetTargetDialog({ row, month, onClose, onSaved }) {
   return (
     <Dialog open onOpenChange={onClose}>
       <DialogContent className="bg-white max-w-sm" data-testid="set-target-dialog">
-        <DialogHeader><DialogTitle className="font-display">Target {row.sales} · {month}</DialogTitle></DialogHeader>
+        <DialogHeader><DialogTitle className="font-display">Edit Target · {row.sales} · {month}</DialogTitle></DialogHeader>
         <div className="space-y-3 py-2">
           <div className="space-y-1"><Label className="text-xs">Target Revenue (Rp)</Label><Input type="number" value={rev} onChange={(e) => setRev(e.target.value)} data-testid="target-revenue" /></div>
           <div className="space-y-1"><Label className="text-xs">Target Pax</Label><Input type="number" value={pax} onChange={(e) => setPax(e.target.value)} data-testid="target-pax" /></div>
         </div>
         <DialogFooter><Button onClick={save} disabled={saving} className="bg-blue-600 hover:bg-blue-700" data-testid="target-save">{saving ? "..." : "Simpan"}</Button></DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function monthLabel(period) {
+  const [y, m] = period.split("-").map(Number);
+  return new Date(y, m - 1, 1).toLocaleDateString("id-ID", { month: "long", year: "numeric" });
+}
+
+function YearlyTargetDialog({ row, startMonth, onClose, onSaved }) {
+  const now = new Date();
+  const start = startMonth || `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  const [sy, sm] = start.split("-").map(Number);
+  const periods = Array.from({ length: 12 }, (_, i) => {
+    const d = new Date(sy, sm - 1 + i, 1);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  });
+  const [items, setItems] = useState(periods.map((p) => ({ period: p, revenue_target: "", pax_target: "" })));
+  const [baseRev, setBaseRev] = useState("");
+  const [basePax, setBasePax] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    api.get("/sales/targets", { params: { sales_id: row.sales_id } }).then((r) => {
+      const map = {};
+      (r.data || []).forEach((t) => { map[t.period] = t; });
+      setItems(periods.map((p) => ({ period: p, revenue_target: map[p]?.revenue_target || "", pax_target: map[p]?.pax_target || "" })));
+    }).catch(() => {}).finally(() => setLoading(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const setItem = (i, k, v) => setItems((arr) => arr.map((it, idx) => (idx === i ? { ...it, [k]: v } : it)));
+  const applyAll = () => setItems((arr) => arr.map((it) => ({ ...it, revenue_target: baseRev !== "" ? baseRev : it.revenue_target, pax_target: basePax !== "" ? basePax : it.pax_target })));
+  const save = async () => {
+    setSaving(true);
+    try {
+      const targets = items.map((it) => ({ period: it.period, revenue_target: Number(it.revenue_target || 0), pax_target: Number(it.pax_target || 0) }));
+      const res = await api.put("/sales/targets/bulk", { sales_id: row.sales_id, targets });
+      toast.success(`Target ${res.data?.count || targets.length} bulan disimpan`); onSaved();
+    } catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); } finally { setSaving(false); }
+  };
+
+  return (
+    <Dialog open onOpenChange={onClose}>
+      <DialogContent className="bg-white max-w-lg max-h-[88vh] overflow-hidden flex flex-col" data-testid="yearly-target-dialog">
+        <DialogHeader><DialogTitle className="font-display">Set Target 1 Tahun · {row.sales}</DialogTitle></DialogHeader>
+        <div className="rounded-md bg-slate-50 border border-slate-100 p-3 grid grid-cols-[1fr_1fr_auto] gap-2 items-end">
+          <div className="space-y-1"><Label className="text-xs">Isi cepat · Revenue</Label><Input type="number" value={baseRev} onChange={(e) => setBaseRev(e.target.value)} placeholder="mis. 2000000000" data-testid="yt-base-revenue" /></div>
+          <div className="space-y-1"><Label className="text-xs">Isi cepat · Pax</Label><Input type="number" value={basePax} onChange={(e) => setBasePax(e.target.value)} placeholder="mis. 50" data-testid="yt-base-pax" /></div>
+          <Button variant="outline" onClick={applyAll} data-testid="yt-apply-all">Terapkan ke semua</Button>
+        </div>
+        <div className="flex-1 overflow-y-auto -mx-1 px-1 mt-2 space-y-2">
+          {loading ? <div className="p-6 flex justify-center"><Loader2 className="h-5 w-5 animate-spin text-blue-600" /></div>
+            : items.map((it, i) => (
+              <div key={it.period} className="grid grid-cols-[130px_1fr_90px] gap-2 items-center" data-testid={`yt-row-${it.period}`}>
+                <span className="text-sm text-slate-600 capitalize">{monthLabel(it.period)}</span>
+                <Input type="number" value={it.revenue_target} onChange={(e) => setItem(i, "revenue_target", e.target.value)} placeholder="Revenue (Rp)" data-testid={`yt-rev-${it.period}`} />
+                <Input type="number" value={it.pax_target} onChange={(e) => setItem(i, "pax_target", e.target.value)} placeholder="Pax" data-testid={`yt-pax-${it.period}`} />
+              </div>
+            ))}
+        </div>
+        <DialogFooter className="mt-2"><Button onClick={save} disabled={saving || loading} className="bg-blue-600 hover:bg-blue-700" data-testid="yt-save">{saving ? "Menyimpan..." : "Simpan 12 Bulan"}</Button></DialogFooter>
       </DialogContent>
     </Dialog>
   );

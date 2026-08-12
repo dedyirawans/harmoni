@@ -1,5 +1,10 @@
 # Safar Travel CRM — Product Requirements (Living Doc)
 
+## PHASE 9K.3 — Target 1 Tahun + Edit (2026-06) — DONE (Verified curl + screenshot)
+- Target **hanya Super Admin** yang bisa set (backend `require_role("super_admin")`, frontend `isAdmin`; sales PUT single & bulk → 403 terverifikasi).
+- **Set Target 1 Tahun sekaligus**: `PUT /api/sales/targets/bulk` {sales_id, targets:[{period,revenue_target,pax_target}×12]}. Dialog "Set 1 Tahun" menampilkan 12 bulan ke depan (mulai bulan terpilih), prefill target existing, isi-cepat + "Terapkan ke semua", "Simpan 12 Bulan".
+- **Edit revisi**: tombol "Edit Bulan Ini" (single-month upsert) tetap ada per sales. `GET /api/sales/targets` kini mendukung `sales_id` untuk prefill.
+
 ## PHASE 9K.2 — Menu tweaks + Target default (2026-06) — DONE
 - Menu **Approval** & **Approval Center** digabung jadi satu "Approval" → `/approval-center` (hub terpadu; rute `/approvals` tetap untuk aksi review/link "Open"). Berlaku di menu super_admin & accounting.
 - Menu & judul halaman **N8N** diganti jadi **AI Automation** (icon Bot).

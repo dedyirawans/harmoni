@@ -1887,12 +1887,15 @@ class SalesTargetInput(BaseModel):
 
 
 @api_router.get("/sales/targets")
-async def list_sales_targets(period: Optional[str] = None, user: dict = Depends(require_permission("sales.view"))):
+async def list_sales_targets(period: Optional[str] = None, sales_id: Optional[str] = None,
+                             user: dict = Depends(require_permission("sales.view"))):
     q = {}
     if period:
         q["period"] = period
     if user["role"] == "sales":
         q["sales_id"] = user["_id"]
+    elif sales_id:
+        q["sales_id"] = sales_id
     docs = await db.sales_targets.find(q).to_list(2000)
     return [serialize(d) for d in docs]
 
@@ -1911,6 +1914,37 @@ async def upsert_sales_target(body: SalesTargetInput, request: Request, user: di
     await log_audit(user, "sales_target", "upsert", request, record_id=f"{body.sales_id}:{body.period}",
                     new={"revenue_target": doc["revenue_target"], "pax_target": doc["pax_target"]})
     return {"success": True, **doc}
+
+
+class SalesTargetBulkItem(BaseModel):
+    period: str
+    revenue_target: float = 0
+    pax_target: int = 0
+
+
+class SalesTargetBulkInput(BaseModel):
+    sales_id: str
+    targets: List[SalesTargetBulkItem]
+
+
+@api_router.put("/sales/targets/bulk")
+async def bulk_upsert_sales_targets(body: SalesTargetBulkInput, request: Request, user: dict = Depends(require_role("super_admin"))):
+    if not ObjectId.is_valid(body.sales_id):
+        raise HTTPException(status_code=400, detail="sales_id tidak valid")
+    su = await db.users.find_one({"_id": ObjectId(body.sales_id), "role": "sales"})
+    if not su:
+        raise HTTPException(status_code=404, detail="Sales tidak ditemukan")
+    count = 0
+    for t in body.targets:
+        if not t.period:
+            continue
+        doc = {"sales_id": body.sales_id, "sales_name": su.get("name"), "period": t.period,
+               "revenue_target": float(t.revenue_target or 0), "pax_target": int(t.pax_target or 0),
+               "updated_at": now_iso(), "updated_by": user["name"]}
+        await db.sales_targets.update_one({"sales_id": body.sales_id, "period": t.period}, {"$set": doc}, upsert=True)
+        count += 1
+    await log_audit(user, "sales_target", "bulk_upsert", request, record_id=body.sales_id, new={"months": count})
+    return {"success": True, "count": count}
 
 
 # ---------- Global Search ----------
