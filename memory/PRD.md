@@ -1,5 +1,12 @@
 # Safar Travel CRM — Product Requirements (Living Doc)
 
+## Phase 8A — New Lead & Package Integration (2026-06) — DONE
+- **My Sales → New Lead**: field "Interested Package" kini **searchable dropdown** (PackageCombobox) dari Package Master, hanya status **ACTIVE** (Tour + Umrah). Cari by package name/code/type/destination; opsi menampilkan name, code, type, destination, duration, departure terdekat, selling price, available seat.
+- **Auto Destination**: dipilih package → Destination terisi otomatis & **READ-ONLY** (tidak bisa diketik); ganti package → destination ikut berubah.
+- **Relasi**: lead menyimpan package_id, package_type, package_name, destination_id, destination_name (di-enrich backend dari package_id — FK ke Package Master; tidak sekadar text). Validasi: package wajib dipilih.
+- Backend: GET /api/lead-packages (sales.view, ACTIVE only + seat/departure), POST /api/leads enrich dari package_id. Model LeadCreate/LeadUpdate diperluas.
+- **Tests**: iteration_18.json (frontend 6/6) + curl backend (ACTIVE-only, persist package_id/destination_id). Phase 1–8/4B tetap berfungsi.
+
 ## Phase 4B — Refund Deduction & Non-Refundable Cost (2026-06) — DONE
 - **Formula**: Final Refund = Total Paid − Total Deduction + Refund Adjustment, di-clamp ke ≥ Rp0. Total Deduction tidak boleh melebihi Total Paid (warning + clamp).
 - **Deduction Type master** (collection deduction_types, 15 default: Cancellation Fee/Flight/Hotel/Visa/Transport/Handling/Muthawwif/Guide/Insurance/Meal/Airport Tax/Supplier Cost/Administration Fee/Bank Fee/Other). SA dapat tambah/hapus (system types tidak bisa dihapus).

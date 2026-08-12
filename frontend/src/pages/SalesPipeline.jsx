@@ -22,7 +22,8 @@ export default function SalesPipeline() {
   const [leads, setLeads] = useState(null);
   const [customers, setCustomers] = useState([]);
   const [open, setOpen] = useState(false);
-  const [form, setForm] = useState({ customer_id: "", source: "WhatsApp", interested_package: "", destination: "", pax: 1, budget: 0, departure_date: "", status: "NEW", notes: "" });
+  const [packages, setPackages] = useState([]);
+  const [form, setForm] = useState({ customer_id: "", source: "WhatsApp", interested_package: "", package_id: "", package_type: "", package_name: "", destination_id: "", destination_name: "", destination: "", pax: 1, budget: 0, departure_date: "", status: "NEW", notes: "" });
   const [saving, setSaving] = useState(false);
   const [draggedId, setDraggedId] = useState(null);
   const [dropCol, setDropCol] = useState(null);
@@ -30,12 +31,12 @@ export default function SalesPipeline() {
   const canMove = (lead) => user.role === "super_admin" || lead.sales_pic_id === user._id;
 
   const load = () => { setLeads(null); api.get("/leads").then((r) => setLeads(r.data)).catch(() => setLeads([])); };
-  useEffect(() => { load(); api.get("/customers").then((r) => setCustomers(r.data)).catch(() => {}); }, []);
+  useEffect(() => { load(); api.get("/customers").then((r) => setCustomers(r.data)).catch(() => {}); api.get("/lead-packages").then((r) => setPackages(r.data || [])).catch(() => {}); }, []);
 
   const set = (k) => (v) => setForm((f) => ({ ...f, [k]: v }));
 
   const create = async () => {
-    if (!form.interested_package.trim()) return toast.error("Package/interest is required");
+    if (!form.package_id) return toast.error("Interested Package wajib dipilih");
     setSaving(true);
     try {
       await api.post("/leads", { ...form, pax: Number(form.pax), budget: Number(form.budget) });
@@ -79,8 +80,10 @@ export default function SalesPipeline() {
                   <SelectTrigger data-testid="lead-customer-select"><SelectValue placeholder="Select customer (optional)" /></SelectTrigger>
                   <SelectContent className="bg-white">{customers.map((c) => <SelectItem key={c._id} value={c._id}>{c.full_name}</SelectItem>)}</SelectContent>
                 </Select></div>
-              <div className="space-y-2 col-span-2"><Label>Interested Package *</Label><Input value={form.interested_package} onChange={(e) => set("interested_package")(e.target.value)} data-testid="lead-package-input" /></div>
-              <div className="space-y-2 col-span-2 sm:col-span-1"><Label>Destination</Label><Input value={form.destination} onChange={(e) => set("destination")(e.target.value)} /></div>
+              <div className="space-y-2 col-span-2"><Label>Interested Package *</Label>
+                <PackageCombobox packages={packages} value={form.package_id}
+                  onSelect={(p) => setForm((f) => ({ ...f, package_id: p.id, package_type: p.product_type, package_name: p.package_name, destination_id: p.id, destination_name: p.destination || "", interested_package: p.package_name, destination: p.destination || "" }))} /></div>
+              <div className="space-y-2 col-span-2 sm:col-span-1"><Label>Destination (auto)</Label><Input value={form.destination_name || ""} readOnly disabled placeholder="Otomatis dari package" data-testid="lead-destination-input" /></div>
               <div className="space-y-2 col-span-2 sm:col-span-1"><Label>Source</Label>
                 <Select value={form.source} onValueChange={set("source")}><SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent className="bg-white">{LEAD_SOURCES.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent></Select></div>
@@ -151,6 +154,35 @@ export default function SalesPipeline() {
               </div>
             </div>
           ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PackageCombobox({ packages, value, onSelect }) {
+  const [q, setQ] = useState("");
+  const [open, setOpen] = useState(false);
+  const sel = packages.find((p) => p.id === value);
+  const s = (q || "").toLowerCase();
+  const filtered = packages.filter((p) => !s || ["package_name", "package_code", "product_type", "destination"].some((k) => (p[k] || "").toLowerCase().includes(s)));
+  return (
+    <div className="relative">
+      <Input placeholder="Cari nama / kode / tipe / destinasi..."
+        value={open ? q : (sel ? `${sel.package_name} (${sel.package_code})` : q)}
+        onChange={(e) => { setQ(e.target.value); setOpen(true); }}
+        onFocus={() => setOpen(true)}
+        data-testid="lead-package-input" />
+      {open && (
+        <div className="absolute z-50 mt-1 w-full bg-white border border-slate-200 rounded-lg shadow-lg max-h-64 overflow-y-auto" data-testid="lead-package-dropdown">
+          {filtered.length === 0 ? <div className="px-3 py-2 text-sm text-slate-400">Tidak ada package ACTIVE.</div> :
+            filtered.map((p) => (
+              <button key={p.id} type="button" onClick={() => { onSelect(p); setOpen(false); setQ(""); }}
+                className="w-full text-left px-3 py-2 hover:bg-blue-50 border-b border-slate-50" data-testid={`lead-package-option-${p.id}`}>
+                <div className="flex justify-between gap-2"><span className="font-medium text-sm">{p.package_name}</span><span className="text-xs text-slate-400">{p.package_code}</span></div>
+                <div className="text-xs text-slate-500">{p.product_type} · {p.destination || "-"} · {p.duration || "-"} · {p.departure_date || "TBA"} · Rp {(p.selling_price || 0).toLocaleString("id-ID")} · Seat {p.available_seat}</div>
+              </button>
+            ))}
         </div>
       )}
     </div>

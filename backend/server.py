@@ -758,6 +758,11 @@ class LeadCreate(BaseModel):
     customer_id: Optional[str] = None
     source: Optional[str] = ""
     interested_package: Optional[str] = ""
+    package_id: Optional[str] = ""
+    package_type: Optional[str] = ""
+    package_name: Optional[str] = ""
+    destination_id: Optional[str] = ""
+    destination_name: Optional[str] = ""
     destination: Optional[str] = ""
     pax: Optional[int] = 0
     budget: Optional[float] = 0
@@ -772,6 +777,11 @@ class LeadUpdate(BaseModel):
     customer_id: Optional[str] = None
     source: Optional[str] = None
     interested_package: Optional[str] = None
+    package_id: Optional[str] = None
+    package_type: Optional[str] = None
+    package_name: Optional[str] = None
+    destination_id: Optional[str] = None
+    destination_name: Optional[str] = None
     destination: Optional[str] = None
     pax: Optional[int] = None
     budget: Optional[float] = None
@@ -952,6 +962,16 @@ async def create_lead(body: LeadCreate, request: Request, user: dict = Depends(r
     stage = body.status if body.status in LEAD_STAGES + [LEAD_LOST] else "NEW"
     doc = body.model_dump()
     doc.pop("sales_pic_id", None)
+    if body.package_id and ObjectId.is_valid(body.package_id):
+        p = await db.packages.find_one({"_id": ObjectId(body.package_id)})
+        if p:
+            doc["package_id"] = str(p["_id"])
+            doc["package_type"] = p.get("product_type", "")
+            doc["package_name"] = p.get("package_name", "")
+            doc["destination_id"] = str(p["_id"])
+            doc["destination_name"] = p.get("destination", "")
+            doc["interested_package"] = p.get("package_name", "")
+            doc["destination"] = p.get("destination", "")
     doc.update({
         "lead_code": f"LEAD-{count + 1:05d}", "status": stage,
         "customer_name": customer_name, "sales_pic_id": pic_id, "sales_pic_name": pic_name,
@@ -963,6 +983,29 @@ async def create_lead(body: LeadCreate, request: Request, user: dict = Depends(r
                        f"{body.interested_package or 'New lead'} — stage {stage}", user)
     await log_audit(user, "lead", "create_lead", request, record_id=lead["_id"], new={"stage": stage})
     return lead
+
+
+@api_router.get("/lead-packages")
+async def lead_packages(q: Optional[str] = None, user: dict = Depends(require_permission("sales.view"))):
+    docs = await db.packages.find({"status": "ACTIVE"}).to_list(500)
+    today = today_str()
+    out = []
+    for p in docs:
+        deps = await db.departures.find({"package_id": str(p["_id"])}).sort("departure_date", 1).to_list(50)
+        seat = 0
+        nearest = ""
+        for dd in deps:
+            seat += max(0, int(dd.get("quota") or 0) - int(dd.get("confirmed_pax") or 0))
+            if not nearest and (dd.get("departure_date", "") >= today):
+                nearest = dd.get("departure_date", "")
+        out.append({"id": str(p["_id"]), "package_code": p.get("package_code", ""), "package_name": p.get("package_name", ""),
+                    "product_type": p.get("product_type", ""), "destination": p.get("destination", ""),
+                    "duration": p.get("duration", ""), "selling_price": p.get("selling_price", 0),
+                    "departure_date": nearest, "available_seat": seat})
+    if q:
+        ql = q.lower()
+        out = [o for o in out if any(ql in (o[k] or "").lower() for k in ("package_name", "package_code", "product_type", "destination"))]
+    return out
 
 
 @api_router.get("/leads/{lid}")

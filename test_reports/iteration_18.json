@@ -1,0 +1,30 @@
+{
+  "summary": "Frontend testing for Phase 8A: New Lead + Package integration in Sales Pipeline. All 6 acceptance criteria PASSED.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "detailed_results": {
+    "1_dialog_opens_with_package_input": "PASS - add-lead-button opens lead-dialog with lead-package-input visible",
+    "2_dropdown_lists_active_packages": "PASS - focusing input opens lead-package-dropdown with 5 ACTIVE options (Umrah Reguler 9 Hari, Turkey Tour 8 Hari, Umroh Private Test, Tour Open Trip Test, SIC Test). Each option shows name, code, product_type, destination, duration, departure_date, price, seat. Typing 'Umrah' filters to 1 option; 'Turkey' filters to 1 option.",
+    "3_destination_autofills_readonly": "PASS - selecting Umrah Reguler 9 Hari sets destination to 'Makkah & Madinah'. Input has both disabled=true and readOnly=true. Attempted keyboard typing did not alter value.",
+    "4_destination_updates_on_package_change": "PASS - switching to Turkey Tour 8 Hari updates destination to 'Istanbul & Cappadocia'.",
+    "5_save_success_and_validation": "PASS - Save with pax=2, budget=50000000 succeeded; toast 'Lead created' shown; dialog closed; new lead card appeared in NEW column showing 'Turkey Tour 8 Hari'. Save without package selection shows sonner toast 'Interested Package wajib dipilih' and dialog stays open.",
+    "6_regression": "PASS - Kanban board renders all stage columns; existing lead cards (Ahmad Fauzi/Umrah Reguler 9 Hari, Siti Rahma/Umrah Plus Turki 12 Hari, Alex Jordan, Budi Santoso, etc.) render correctly. Stage move Select is present on cards (data-testid=move-stage-*)."
+  },
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "SalesPipeline.jsx uses id from lead-packages as destination_id (same as package.id). Backend acceptance says destination_id/destination_name are FK to Package Master destinations - if there is a separate Destination collection with its own IDs, the frontend is passing the package id, not a real destination_id. Verify with main agent whether backend expects destination FK from a Destinations table or is fine with package.id (per playbook it appears backend re-enriches from package_id server-side so this is likely acceptable, but noted)."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "skipped", "frontend": "100%"},
+  "test_credentials": "Sales: sales@safarcrm.com / Sales@123",
+  "seed_data_creation": "Created 1 test lead during testing, deleted via DELETE /api/leads/{id} after verification (status=200).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "All Phase 8A acceptance criteria verified end-to-end in Sales UI. PackageCombobox works as spec'd. Note: destination_id passed from frontend equals package.id (see code line 85) - backend enriches destination_id/destination_name from package_id so this is fine per the reviewer note that backend was curl-verified.",
+  "rca of the issue": "N/A - no issues found"
+}
