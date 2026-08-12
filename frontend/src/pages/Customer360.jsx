@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import api, { formatApiErrorDetail } from "@/lib/api";
+import api, { API, formatApiErrorDetail } from "@/lib/api";
 import { fmtIDR, fmtDate, fmtDateTime, STAGE_COLORS, FOLLOWUP_ACTIVITIES } from "@/config/crm";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -13,7 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import {
   ArrowLeft, Loader2, Phone, Mail, MapPin, StickyNote, MessageSquare, CalendarClock,
-  Briefcase, Clock, User as UserIcon,
+  Briefcase, Clock, User as UserIcon, Upload, Eye, Trash2, RefreshCw,
 } from "lucide-react";
 import { toast } from "sonner";
 import { expiryTone, daysUntil } from "@/components/ExpiringDocsWidget";
@@ -238,19 +238,7 @@ export default function Customer360() {
             </TabsContent>
 
             <TabsContent value="documents">
-              <Rows testid="c360-documents" items={data.documents} empty="No documents." row={(d) => {
-                const tone = ["PASSPORT", "VISA"].includes(d.doc_type) ? expiryTone(daysUntil(d.expiry_date)) : null;
-                return (
-                <>
-                  <div><p className="font-medium text-slate-900">{d.doc_type}{d.document_number ? ` · ${d.document_number}` : ""}</p>
-                    <p className="text-xs text-slate-500">{bmap[d.booking_id] || d.booking_id || "—"}{d.expiry_date ? ` · Exp ${(d.expiry_date || "").slice(0, 10)}` : ""}</p></div>
-                  <div className="flex items-center gap-2">
-                    {tone && <Badge variant="outline" className={`${tone.cls} text-[10px]`}>{tone.label}</Badge>}
-                    <Badge variant="outline" className="bg-slate-100 text-slate-700">{d.status}</Badge>
-                  </div>
-                </>
-                );
-              }} />
+              <DocumentsTab customerId={id} docs={data.documents} bmap={bmap} onChange={load} />
             </TabsContent>
 
             <TabsContent value="timeline">
@@ -359,8 +347,7 @@ function QuickDialog({ dialog, setDialog, customer, onDone }) {
   );
 }
 
-function ChatHistory({ customerId }) {
-  const [msgs, setMsgs] = useState(null);
+function ChatHistory({ customerId }) {  const [msgs, setMsgs] = useState(null);
   useEffect(() => {
     api.get(`/customers/${customerId}/conversations`).then((r) => setMsgs(r.data || [])).catch(() => setMsgs([]));
   }, [customerId]);
@@ -389,5 +376,119 @@ function ChatHistory({ customerId }) {
         )}
       </CardContent>
     </Card>
+  );
+}
+
+
+const DOC_TYPES = ["KTP", "PASSPORT", "PHOTO", "VISA", "MARRIAGE_BOOK", "OTHER"];
+const META_TYPES = ["PASSPORT", "VISA"];
+
+function DocumentsTab({ customerId, docs, bmap, onChange }) {
+  const [upOpen, setUpOpen] = useState(false);
+  const [replaceDoc, setReplaceDoc] = useState(null);
+  const view = (d) => window.open(`${API}/documents/${d.id || d._id}/download?auth=${localStorage.getItem("token")}`, "_blank");
+  const del = async (d) => {
+    if (!window.confirm(`Hapus dokumen ${d.doc_type}?`)) return;
+    try { await api.delete(`/documents/${d.id || d._id}`); toast.success("Dokumen dihapus"); onChange(); }
+    catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); }
+  };
+  return (
+    <Card className="border-slate-200 shadow-sm"><CardContent className="p-4 space-y-2" data-testid="c360-documents">
+      <div className="flex justify-end">
+        <Button size="sm" className="bg-blue-600 hover:bg-blue-700" onClick={() => setUpOpen(true)} data-testid="c360-upload-doc-btn"><Upload className="h-4 w-4 mr-1" aria-hidden="true" />Upload Dokumen</Button>
+      </div>
+      {(!docs || docs.length === 0) ? <p className="text-sm text-slate-400 text-center py-6">No documents.</p> :
+        docs.map((d) => {
+          const tone = META_TYPES.includes(d.doc_type) ? expiryTone(daysUntil(d.expiry_date)) : null;
+          return (
+            <div key={d.id || d._id} className="flex items-center justify-between border border-slate-100 rounded-md p-3" data-testid={`c360-doc-${d.id || d._id}`}>
+              <div className="min-w-0">
+                <p className="font-medium text-slate-900 truncate">{d.doc_type}{d.document_number ? ` · ${d.document_number}` : ""}</p>
+                <p className="text-xs text-slate-500">{d.customer_id ? "Customer" : (bmap[d.booking_id] || d.booking_id || "—")}{d.expiry_date ? ` · Exp ${(d.expiry_date || "").slice(0, 10)}` : ""}</p>
+              </div>
+              <div className="flex items-center gap-2">
+                {tone && <Badge variant="outline" className={`${tone.cls} text-[10px]`}>{tone.label}</Badge>}
+                <Badge variant="outline" className="bg-slate-100 text-slate-700">{d.status}</Badge>
+                <Button size="icon" variant="ghost" className="h-7 w-7 text-slate-600" title="Lihat" onClick={() => view(d)} data-testid={`c360-doc-view-${d.id || d._id}`}><Eye className="h-4 w-4" /></Button>
+                <Button size="icon" variant="ghost" className="h-7 w-7 text-blue-600" title="Ganti" onClick={() => setReplaceDoc(d)} data-testid={`c360-doc-replace-${d.id || d._id}`}><RefreshCw className="h-4 w-4" /></Button>
+                <Button size="icon" variant="ghost" className="h-7 w-7 text-red-600" title="Hapus" onClick={() => del(d)} data-testid={`c360-doc-delete-${d.id || d._id}`}><Trash2 className="h-4 w-4" /></Button>
+              </div>
+            </div>
+          );
+        })}
+      {upOpen && <DocUploadDialog customerId={customerId} onClose={() => setUpOpen(false)} onDone={() => { setUpOpen(false); onChange(); }} />}
+      {replaceDoc && <DocReplaceDialog doc={replaceDoc} onClose={() => setReplaceDoc(null)} onDone={() => { setReplaceDoc(null); onChange(); }} />}
+    </CardContent></Card>
+  );
+}
+
+function DocUploadDialog({ customerId, onClose, onDone }) {
+  const [f, setF] = useState({ doc_type: "KTP", document_number: "", issue_date: "", expiry_date: "" });
+  const [file, setFile] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const isMeta = META_TYPES.includes(f.doc_type);
+  const submit = async () => {
+    if (!file) return toast.error("Pilih file dokumen dulu");
+    if (isMeta && !f.expiry_date) return toast.error("Tanggal kedaluwarsa wajib untuk Passport/Visa");
+    setSaving(true);
+    const fd = new FormData();
+    fd.append("doc_type", f.doc_type); fd.append("file", file);
+    fd.append("document_number", f.document_number); fd.append("issue_date", f.issue_date); fd.append("expiry_date", f.expiry_date);
+    try { await api.post(`/customers/${customerId}/documents`, fd, { headers: { "Content-Type": "multipart/form-data" } }); toast.success("Dokumen diupload"); onDone(); }
+    catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); } finally { setSaving(false); }
+  };
+  return (
+    <Dialog open onOpenChange={onClose}>
+      <DialogContent className="bg-white max-w-md" data-testid="c360-doc-upload-dialog">
+        <DialogHeader><DialogTitle className="font-display">Upload Dokumen Customer</DialogTitle></DialogHeader>
+        <div className="space-y-3 py-2">
+          <div className="space-y-1"><Label className="text-xs">Jenis Dokumen</Label>
+            <Select value={f.doc_type} onValueChange={(v) => setF({ ...f, doc_type: v })}><SelectTrigger data-testid="c360-doc-type"><SelectValue /></SelectTrigger>
+              <SelectContent className="bg-white">{DOC_TYPES.map((t) => <SelectItem key={t} value={t}>{t}</SelectItem>)}</SelectContent></Select></div>
+          {isMeta && (<>
+            <div className="space-y-1"><Label className="text-xs">Nomor Dokumen</Label><Input value={f.document_number} onChange={(e) => setF({ ...f, document_number: e.target.value })} data-testid="c360-doc-number" /></div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1"><Label className="text-xs">Tanggal Terbit</Label><Input type="date" value={f.issue_date} onChange={(e) => setF({ ...f, issue_date: e.target.value })} data-testid="c360-doc-issue" /></div>
+              <div className="space-y-1"><Label className="text-xs">Tanggal Kedaluwarsa</Label><Input type="date" value={f.expiry_date} onChange={(e) => setF({ ...f, expiry_date: e.target.value })} data-testid="c360-doc-expiry" /></div>
+            </div>
+          </>)}
+          <div className="space-y-1"><Label className="text-xs">File Dokumen</Label><Input type="file" onChange={(e) => setFile(e.target.files[0] || null)} data-testid="c360-doc-file" /></div>
+        </div>
+        <DialogFooter><Button onClick={submit} disabled={saving} className="bg-blue-600 hover:bg-blue-700" data-testid="c360-doc-upload-save">{saving ? "Uploading..." : "Upload"}</Button></DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function DocReplaceDialog({ doc, onClose, onDone }) {
+  const isMeta = META_TYPES.includes(doc.doc_type);
+  const [f, setF] = useState({ document_number: doc.document_number || "", issue_date: (doc.issue_date || "").slice(0, 10), expiry_date: (doc.expiry_date || "").slice(0, 10) });
+  const [file, setFile] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const submit = async () => {
+    if (!file) return toast.error("Pilih file pengganti dulu");
+    setSaving(true);
+    const fd = new FormData(); fd.append("file", file);
+    if (isMeta) { fd.append("document_number", f.document_number); fd.append("issue_date", f.issue_date); fd.append("expiry_date", f.expiry_date); }
+    try { await api.post(`/documents/${doc.id || doc._id}/replace`, fd, { headers: { "Content-Type": "multipart/form-data" } }); toast.success("Dokumen diganti"); onDone(); }
+    catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); } finally { setSaving(false); }
+  };
+  return (
+    <Dialog open onOpenChange={onClose}>
+      <DialogContent className="bg-white max-w-md" data-testid="c360-doc-replace-dialog">
+        <DialogHeader><DialogTitle className="font-display">Ganti Dokumen — {doc.doc_type}</DialogTitle></DialogHeader>
+        <div className="space-y-3 py-2">
+          {isMeta && (<>
+            <div className="space-y-1"><Label className="text-xs">Nomor Dokumen</Label><Input value={f.document_number} onChange={(e) => setF({ ...f, document_number: e.target.value })} data-testid="c360-replace-number" /></div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1"><Label className="text-xs">Tanggal Terbit</Label><Input type="date" value={f.issue_date} onChange={(e) => setF({ ...f, issue_date: e.target.value })} data-testid="c360-replace-issue" /></div>
+              <div className="space-y-1"><Label className="text-xs">Tanggal Kedaluwarsa</Label><Input type="date" value={f.expiry_date} onChange={(e) => setF({ ...f, expiry_date: e.target.value })} data-testid="c360-replace-expiry" /></div>
+            </div>
+          </>)}
+          <div className="space-y-1"><Label className="text-xs">File Pengganti</Label><Input type="file" onChange={(e) => setFile(e.target.files[0] || null)} data-testid="c360-doc-replace-file" /></div>
+        </div>
+        <DialogFooter><Button onClick={submit} disabled={saving} className="bg-blue-600 hover:bg-blue-700" data-testid="c360-doc-replace-save">{saving ? "Uploading..." : "Ganti"}</Button></DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

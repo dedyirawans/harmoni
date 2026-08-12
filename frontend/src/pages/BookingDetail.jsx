@@ -12,7 +12,7 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
-import { ArrowLeft, Loader2, Plus, Trash2, Upload, FileText, Users, CreditCard, Ban, GitBranch } from "lucide-react";
+import { ArrowLeft, Loader2, Plus, Trash2, Upload, FileText, Users, CreditCard, Ban, GitBranch, Eye } from "lucide-react";
 import { expiryTone, daysUntil } from "@/components/ExpiringDocsWidget";
 import { toast } from "sonner";
 
@@ -213,11 +213,17 @@ function TravelerCard({ t, docs, canDoc, canTravel, onChange }) {
   const uploaded = {};
   docs.forEach((d) => { uploaded[d.doc_type] = d; });
   const upload = async (docType, file, meta) => {
-    const fd = new FormData(); fd.append("doc_type", docType); fd.append("file", file);
+    const existing = uploaded[docType];
+    const fd = new FormData();
+    if (!existing) fd.append("doc_type", docType);
+    fd.append("file", file);
     if (meta) { fd.append("document_number", meta.document_number || ""); fd.append("issue_date", meta.issue_date || ""); fd.append("expiry_date", meta.expiry_date || ""); }
-    try { await api.post(`/travelers/${t._id}/documents`, fd, { headers: { "Content-Type": "multipart/form-data" } }); toast.success(`${docType} diupload`); onChange(); }
+    const url = existing ? `/documents/${existing.id || existing._id}/replace` : `/travelers/${t._id}/documents`;
+    try { await api.post(url, fd, { headers: { "Content-Type": "multipart/form-data" } }); toast.success(`${docType} ${existing ? "diganti" : "diupload"}`); onChange(); }
     catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); }
   };
+  const viewDoc = (d) => window.open(`${API}/documents/${d.id || d._id}/download?auth=${localStorage.getItem("token")}`, "_blank");
+  const delDoc = async (d) => { if (!window.confirm(`Hapus dokumen ${d.doc_type}?`)) return; try { await api.delete(`/documents/${d.id || d._id}`); toast.success("Dokumen dihapus"); onChange(); } catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); } };
   const setStatus = async (docId, status) => { try { await api.patch(`/documents/${docId}/status`, { status }); onChange(); } catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); } };
   const del = async () => { if (!window.confirm(`Hapus jamaah ${t.full_name}?`)) return; try { await api.delete(`/travelers/${t._id}`); toast.success("Jamaah dihapus"); onChange(); } catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); } };
   return (
@@ -242,17 +248,19 @@ function TravelerCard({ t, docs, canDoc, canTravel, onChange }) {
               </div>
               {canDoc && (
                 <div className="flex items-center gap-1">
+                  {d && <button type="button" className="text-slate-600 hover:text-slate-900" title="Lihat" onClick={() => viewDoc(d)} data-testid={`doc-view-${t._id}-${dt}`}><Eye className="h-4 w-4" /></button>}
                   {d && <Select value={d.status} onValueChange={(v) => setStatus(d.id, v)}><SelectTrigger className="h-7 w-7 p-0 border-0" data-testid={`doc-status-${t._id}-${dt}`}><span className="sr-only">status</span></SelectTrigger><SelectContent className="bg-white"><SelectItem value="Verified">Verify</SelectItem><SelectItem value="Rejected">Reject</SelectItem><SelectItem value="Uploaded">Reset</SelectItem></SelectContent></Select>}
                   {isMeta ? (
-                    <button type="button" className="cursor-pointer text-blue-600" data-testid={`doc-upload-${t._id}-${dt}`} onClick={() => setMetaFor(dt)}>
+                    <button type="button" className="cursor-pointer text-blue-600" title={d ? "Ganti" : "Upload"} data-testid={`doc-upload-${t._id}-${dt}`} onClick={() => setMetaFor(dt)}>
                       <Upload className="h-4 w-4" />
                     </button>
                   ) : (
-                    <label className="cursor-pointer text-blue-600" data-testid={`doc-upload-${t._id}-${dt}`}>
+                    <label className="cursor-pointer text-blue-600" title={d ? "Ganti" : "Upload"} data-testid={`doc-upload-${t._id}-${dt}`}>
                       <Upload className="h-4 w-4" />
                       <input type="file" className="hidden" onChange={(e) => e.target.files[0] && upload(dt, e.target.files[0])} />
                     </label>
                   )}
+                  {d && <button type="button" className="text-red-600 hover:text-red-700" title="Hapus" onClick={() => delDoc(d)} data-testid={`doc-delete-${t._id}-${dt}`}><Trash2 className="h-4 w-4" /></button>}
                 </div>
               )}
             </div>

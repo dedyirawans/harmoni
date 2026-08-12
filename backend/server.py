@@ -1334,7 +1334,7 @@ async def customer_360(cid: str, user: dict = Depends(require_permission("crm.vi
     refunds = [serialize(d) for d in await db.refund_requests.find({"$or": [{"customer_id": cid}, {"booking_id": {"$in": booking_ids}}]}).sort("created_at", -1).to_list(500)]
     commissions = [serialize(d) for d in await db.commission_items.find({"booking_id": {"$in": booking_ids}}).to_list(2000)]
     conversations = [serialize(d) for d in await db.conversations.find({"customer_id": cid}).sort("timestamp", 1).to_list(2000)]
-    documents = [serialize(d) for d in await db.documents.find({"booking_id": {"$in": booking_ids}, "is_deleted": False}).to_list(2000)]
+    documents = [serialize(d) for d in await db.documents.find({"$or": [{"booking_id": {"$in": booking_ids}}, {"customer_id": cid}], "is_deleted": False}).to_list(2000)]
 
     timeline = []
     for a in acts:
@@ -2980,13 +2980,113 @@ async def upload_document(tid: str, doc_type: str = Form(...), file: UploadFile 
     return {k: v for k, v in rec.items() if k != "_id"}
 
 
+async def _doc_scope_ok(user, d):
+    if user["role"] == "super_admin":
+        return True
+    if user["role"] == "accounting":
+        return d.get("doc_type") in FINANCIAL_DOC_TYPES
+    if user["role"] == "sales":
+        if d.get("booking_id") and ObjectId.is_valid(d["booking_id"]):
+            bk = await db.bookings.find_one({"_id": ObjectId(d["booking_id"])})
+            return bool(bk and bk.get("sales_pic_id") == user["_id"])
+        if d.get("customer_id") and ObjectId.is_valid(d["customer_id"]):
+            cust = await db.customers.find_one({"_id": ObjectId(d["customer_id"])})
+            return bool(cust and can_access_record(user, cust))
+        return False
+    return True
+
+
+async def _find_doc(doc_id):
+    d = await db.documents.find_one({"id": doc_id, "is_deleted": False})
+    if not d and ObjectId.is_valid(doc_id):
+        d = await db.documents.find_one({"_id": ObjectId(doc_id), "is_deleted": False})
+    return d
+
+
+@api_router.post("/customers/{cid}/documents")
+async def upload_customer_document(cid: str, doc_type: str = Form(...), file: UploadFile = File(...),
+                                   document_number: str = Form(""), issue_date: str = Form(""), expiry_date: str = Form(""),
+                                   user: dict = Depends(require_permission("document.manage"))):
+    try:
+        oid = ObjectId(cid)
+    except Exception:
+        raise HTTPException(status_code=404, detail="Customer not found")
+    customer = await db.customers.find_one({"_id": oid})
+    if not customer:
+        raise HTTPException(status_code=404, detail="Customer not found")
+    if not can_access_record(user, customer):
+        raise HTTPException(status_code=403, detail="403 Forbidden: not your customer")
+    ext = file.filename.split(".")[-1].lower() if "." in file.filename else "bin"
+    doc_id = str(_uuid.uuid4())
+    path = f"{_APP_NAME}/documents/customer/{cid}/{doc_id}.{ext}"
+    data = await file.read()
+    result = put_object(path, data, file.content_type or "application/octet-stream")
+    rec = {"id": doc_id, "traveler_id": None, "booking_id": None, "customer_id": cid, "doc_type": doc_type,
+           "document_number": document_number, "issue_date": issue_date, "expiry_date": expiry_date,
+           "storage_path": result["path"], "original_filename": file.filename, "content_type": file.content_type,
+           "size": result.get("size", len(data)), "status": "Uploaded", "is_deleted": False,
+           "uploaded_by": user["name"], "created_at": now_iso()}
+    await db.documents.insert_one(rec)
+    return {k: v for k, v in rec.items() if k != "_id"}
+
+
+@api_router.delete("/documents/{doc_id}")
+async def delete_document(doc_id: str, user: dict = Depends(require_permission("document.manage"))):
+    d = await _find_doc(doc_id)
+    if not d:
+        raise HTTPException(status_code=404, detail="Document not found")
+    if not await _doc_scope_ok(user, d):
+        raise HTTPException(status_code=403, detail="403 Forbidden")
+    await db.documents.update_one({"_id": d["_id"]}, {"$set": {"is_deleted": True, "deleted_by": user["name"], "deleted_at": now_iso()}})
+    return {"success": True}
+
+
+@api_router.post("/documents/{doc_id}/replace")
+async def replace_document(doc_id: str, file: UploadFile = File(...),
+                           document_number: str = Form(None), issue_date: str = Form(None), expiry_date: str = Form(None),
+                           user: dict = Depends(require_permission("document.manage"))):
+    d = await _find_doc(doc_id)
+    if not d:
+        raise HTTPException(status_code=404, detail="Document not found")
+    if not await _doc_scope_ok(user, d):
+        raise HTTPException(status_code=403, detail="403 Forbidden")
+    ext = file.filename.split(".")[-1].lower() if "." in file.filename else "bin"
+    key = d.get("id") or str(d["_id"])
+    scope = d.get("traveler_id") or (f"customer/{d['customer_id']}" if d.get("customer_id") else "misc")
+    path = f"{_APP_NAME}/documents/{scope}/{key}.{ext}"
+    data = await file.read()
+    result = put_object(path, data, file.content_type or "application/octet-stream")
+    upd = {"storage_path": result["path"], "original_filename": file.filename, "content_type": file.content_type,
+           "size": result.get("size", len(data)), "status": "Uploaded", "uploaded_by": user["name"], "updated_at": now_iso()}
+    if document_number is not None:
+        upd["document_number"] = document_number
+    if issue_date is not None:
+        upd["issue_date"] = issue_date
+    if expiry_date is not None:
+        upd["expiry_date"] = expiry_date
+    await db.documents.update_one({"_id": d["_id"]}, {"$set": upd})
+    if d.get("doc_type") in ("PASSPORT", "Passport") and d.get("traveler_id"):
+        tset = {}
+        if upd.get("document_number"):
+            tset["passport_number"] = upd["document_number"]
+        if upd.get("expiry_date"):
+            tset["passport_expiry"] = upd["expiry_date"]
+        if tset:
+            await db.travelers.update_one({"_id": ObjectId(d["traveler_id"])}, {"$set": tset})
+    nd = await db.documents.find_one({"_id": d["_id"]})
+    return {k: v for k, v in serialize(nd).items() if k != "_id"}
+
+
 @api_router.patch("/documents/{doc_id}/status")
 async def set_document_status(doc_id: str, body: dict, user: dict = Depends(require_permission("document.manage"))):
     status = body.get("status")
     if status not in DOC_STATUSES:
         raise HTTPException(status_code=400, detail="Invalid status")
-    await db.documents.update_one({"id": doc_id}, {"$set": {"status": status, "verified_by": user["name"]}})
-    d = await db.documents.find_one({"id": doc_id})
+    d = await _find_doc(doc_id)
+    if not d:
+        raise HTTPException(status_code=404, detail="Document not found")
+    await db.documents.update_one({"_id": d["_id"]}, {"$set": {"status": status, "verified_by": user["name"]}})
+    d = await db.documents.find_one({"_id": d["_id"]})
     return {k: v for k, v in serialize(d).items() if k != "_id"} if d else {}
 
 
@@ -2996,15 +3096,11 @@ async def download_document(doc_id: str, authorization: str = Header(None), auth
     user = await user_from_token(token) if token else None
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
-    d = await db.documents.find_one({"id": doc_id, "is_deleted": False})
+    d = await _find_doc(doc_id)
     if not d:
         raise HTTPException(status_code=404, detail="Document not found")
-    if user["role"] == "accounting" and d.get("doc_type") not in FINANCIAL_DOC_TYPES:
+    if not await _doc_scope_ok(user, d):
         raise HTTPException(status_code=403, detail="403 Forbidden")
-    if user["role"] == "sales":
-        bk = await db.bookings.find_one({"_id": ObjectId(d["booking_id"])}) if d.get("booking_id") and ObjectId.is_valid(d["booking_id"]) else None
-        if not bk or bk.get("sales_pic_id") != user["_id"]:
-            raise HTTPException(status_code=403, detail="403 Forbidden")
     data, ct = get_object(d["storage_path"])
     return Response(content=data, media_type=d.get("content_type") or ct)
 
@@ -3023,8 +3119,14 @@ async def documents_expiring(within: int = 90, user: dict = Depends(get_current_
         if days > within:
             continue
         if user["role"] == "sales":
-            bk = await db.bookings.find_one({"_id": ObjectId(d["booking_id"])}) if d.get("booking_id") and ObjectId.is_valid(d["booking_id"]) else None
-            if not bk or bk.get("sales_pic_id") != user["_id"]:
+            ok = False
+            if d.get("booking_id") and ObjectId.is_valid(d["booking_id"]):
+                bk = await db.bookings.find_one({"_id": ObjectId(d["booking_id"])})
+                ok = bool(bk and bk.get("sales_pic_id") == user["_id"])
+            elif d.get("customer_id") and ObjectId.is_valid(d["customer_id"]):
+                cust = await db.customers.find_one({"_id": ObjectId(d["customer_id"])})
+                ok = bool(cust and can_access_record(user, cust))
+            if not ok:
                 continue
         d = serialize(d)
         d["days_left"] = days

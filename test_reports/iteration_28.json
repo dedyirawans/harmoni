@@ -1,0 +1,26 @@
+{
+  "summary": "Frontend end-to-end verification of the Document CRUD buttons (Upload / View / Replace / Delete) on Customer 360 and BookingDetail Jamaah tab, plus Sales RBAC. All 7 acceptance criteria pass. Customer 360 (/crm/6a7c6910f21f8ffb9cb4908f) Documents tab: 'Upload Dokumen' opens c360-doc-upload-dialog; selecting KTP hides metadata fields (c360-doc-number invisible), selecting PASSPORT shows c360-doc-number/issue/expiry. Upload KTP and PASSPORT both succeed with toast 'Dokumen diupload' and rows appear with label 'Customer'. Per-row buttons c360-doc-view-<id>/replace-<id>/delete-<id> all functional: View invokes window.open with URL '/documents/<id>/download?auth=...'; Replace opens c360-doc-replace-dialog and after file selection + c360-doc-replace-save yields toast 'Dokumen diganti'; Delete confirms then produces toast 'Dokumen dihapus' and the row is removed from DOM. BookingDetail (/booking/6a7c6911f21f8ffb9cb49099) Jamaah tab for traveler 6a7c8da00bdc45255f0ea4c4 (Test Jamaah 9F): PASSPORT row shows doc-view/doc-upload/doc-delete testids; View opens /documents/<id>/download URL; clicking doc-upload on an EXISTING PASSPORT opens doc-meta-dialog and saving with a new file performs a REPLACE (traveler still has exactly 1 PASSPORT upload button after save - no duplicate); doc-delete removes the passport, buttons view/delete disappear, and the row shows 'Missing' status. KTP (non-meta type) upload button is present and does not open doc-meta-dialog. Sales RBAC: after login as sales@safarcrm.com, navigating to foreign customer /crm/6a7c6910f21f8ffb9cb4908f returns 'Customer not available (403 / not found).' with toast 'You cannot view this customer'; c360-upload-doc-btn is not rendered.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Dev-only React error overlay", "issues": ["Benign 'ResizeObserver loop completed with undelivered notifications' overlay occasionally intercepts clicks during automation. Not a real bug (dev-mode overlay), but consider suppressing this specific ResizeObserver warning in CRA dev overlay config so it does not confuse manual testers."]}
+    ]
+  },
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Customer360 view() and BookingDetail viewDoc() both put the auth token in a query string (?auth=<jwt>) to enable opening downloads in a new tab. Tokens in URL can leak into referrer headers / server logs / browser history. Consider using a short-lived signed download URL or a cookie-based auth path instead.",
+    "Both c360 and booking pages use `d.id || d._id` as identifier, which is defensive but hints that serializer occasionally returns the raw Mongo _id instead of the uuid 'id'. Worth normalising on the backend to always expose 'id' only (and never emit '_id') so the frontend does not have to fall back.",
+    "Dialog components in Customer360 (upload/replace) emit console warnings 'Missing Description or aria-describedby' - add DialogDescription (or aria-describedby) for a11y compliance."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "n/a (skipped per request)", "frontend": "100% (all acceptance checks pass)"},
+  "test_credentials": "Super Admin dedyirawan18@gmail.com/Admin@123 ; Sales sales@safarcrm.com/Sales@123",
+  "seed_data_creation": "Uploaded transient test docs on customer 6a7c6910f21f8ffb9cb4908f (TEST-PP-001, TEST-PP-002, KTP) and deleted them at end of run. On booking BKG-00016 traveler 6a7c8da00bdc45255f0ea4c4 the PASSPORT was replaced, deleted, and then re-uploaded with meta A1234567 / Exp 2026-09-06 to restore original seed state.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Testids verified: c360-upload-doc-btn, c360-doc-upload-dialog, c360-doc-type, c360-doc-number, c360-doc-issue, c360-doc-expiry, c360-doc-file, c360-doc-upload-save, c360-doc-view-<id>, c360-doc-replace-<id>, c360-doc-delete-<id>, c360-doc-replace-dialog, c360-doc-replace-file, c360-doc-replace-save. On booking: doc-view-<tid>-<TYPE>, doc-upload-<tid>-<TYPE>, doc-delete-<tid>-<TYPE>, doc-meta-dialog + doc-meta-{number,issue,expiry,file,save}. Row-id regex used: ^c360-doc-[a-f0-9]{16,}$ because docs are indexed by ObjectId string returned by backend (serialize() overwrites 'id' with '_id'). To programmatically capture window.open in tests, stub window.open before clicking view. Confirm dialogs (native window.confirm) are used for deletes - register page.on('dialog', d.accept()) before clicking delete.",
+  "rca of the issue": "n/a - no functional issues found."
+}
