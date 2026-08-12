@@ -1,5 +1,16 @@
 # Safar Travel CRM — Product Requirements (Living Doc)
 
+## Phase 8F — Tax Configuration & Tax Management (2026-06) — DONE
+- **Tax menu** (`/tax`, sebelumnya Placeholder) → halaman baru `Tax.jsx` dengan 5 tab: Dashboard, Tax Transactions, Tax Master, PPN Configuration, Tax Reports. Diakses Accounting & Super Admin (RBAC tax.view/tax.manage); Sales tidak punya menu & di-block 403.
+- **PPN Configuration (versioned)**: koleksi `ppn_configurations` — field config_name, tax_type, tax_rate, dpp_percentage, effective_from/until, status, description. CRUD (POST/PUT/DELETE-deactivate). **Versioning**: perubahan tarif = buat konfigurasi baru; `resolve_ppn_config(date)` memilih config ACTIVE yg range-nya mencakup tanggal (effective_from desc → yg terbaru menang).
+- **Snapshot non-destruktif** (pilihan user = a): setiap invoice BARU menyimpan snapshot `tax_type, tax_config_version, tax_rate, dpp_percentage, dpp_amount` via `tax_snapshot()` (disuntik di create_invoice & AUTO SALES). Perhitungan nominal PPN TETAP pakai engine kategori (tanpa regresi harga). Transaksi lama tidak berubah.
+- **Tax Transactions**: GET /tax-transactions (filter tanggal) → per-invoice (Invoice, Date, Customer, Tax Type, Rate%, DPP, Tax Amount, Config Version).
+- **Tax Dashboard**: GET /tax-dashboard → active_config banner, total_dpp/ppn, taxable/non-taxable, transaction_count, by_type, by_month (6 bln) + 2 chart.
+- **Tax Master**: mendukung PPN/PPh21/PPh23/OTHER (TAX_TYPES diperluas; tax_type configurable). CRUD via /tax-masters yg sudah ada.
+- **Tax Reports**: GET /tax-reports (wrap report_tax) → summary + rows dengan filter tanggal.
+- **Audit + Reason**: perubahan PPN config (rate/DPP/effective/type) tercatat di audit_log dengan old/new + **reason wajib** (di-enforce backend 400 & frontend). Seed default config "PPN Besaran Tertentu 1.1% (V1)".
+- **Tests**: iteration_23.json — backend 15/15 + regresi 22/22 (8D/8E) pass; frontend 100% (5 tab render, PPN new/edit dgn reason, Sales 403). File: test_phase8f_tax_config.py.
+
 ## Phase 8E — Commission by Package & Monthly Payout (2026-06) — DONE
 - **Commission Master** (tab rename dari "Commission Scheme"): commission dapat di-assign ke **Package spesifik** via **searchable dropdown** (GET /api/commissions/master-packages, super_admin). Field: Commission Name, Product Type, Package, Method (PER_PAX), Calculation Basis, Effective/End Date, Status, Tier (Min Pax → Amount/Pax), Notes. Model CommissionScheme diperluas: commission_method, notes.
 - **Priority**: Package-specific > Product-specific > Default (via _scheme_rank yg sudah ada). Tier per-pax dipilih dari TOTAL eligible pax per scheme group.

@@ -30,6 +30,7 @@ import Accounting from "@/pages/Accounting";
 import Integration from "@/pages/Integration";
 import Commission from "@/pages/Commission";
 import Approvals from "@/pages/Approvals";
+import Tax from "@/pages/Tax";
 
 const PAGES = {
   "/dashboard": Dashboard,
@@ -49,6 +50,7 @@ const PAGES = {
   "/integration": Integration,
   "/commission": Commission,
   "/approvals": Approvals,
+  "/tax": Tax,
 };
 
 function App() {

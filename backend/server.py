@@ -1234,6 +1234,32 @@ def resolve_category_tax(pkg, settings):
     return pct, round(base * pct / 100)
 
 
+async def resolve_ppn_config(date_str, tax_type="PPN"):
+    """Return the ACTIVE PPN configuration version that applies on a given date (versioned by effective range)."""
+    d = (date_str or now_iso())[:10]
+    cfgs = await db.ppn_configurations.find({"status": "ACTIVE", "tax_type": tax_type}).sort("effective_from", -1).to_list(200)
+    for c in cfgs:
+        ef = (c.get("effective_from") or "")[:10]
+        eu = (c.get("effective_until") or "")[:10]
+        if ef and d < ef:
+            continue
+        if eu and d > eu:
+            continue
+        return c
+    return None
+
+
+async def tax_snapshot(date_str, dpp_base):
+    """Snapshot the applicable PPN config version onto a transaction (non-destructive; does not alter monetary tax)."""
+    c = await resolve_ppn_config(date_str)
+    if not c:
+        return {}
+    dppp = float(c.get("dpp_percentage") or 100)
+    return {"tax_type": c.get("tax_type", "PPN"), "tax_config_id": str(c["_id"]),
+            "tax_config_version": c.get("config_name"), "tax_rate": float(c.get("tax_rate") or 0),
+            "dpp_percentage": dppp, "dpp_amount": round(float(dpp_base or 0) * dppp / 100)}
+
+
 def strip_hpp(pkg: dict, can_hpp: bool) -> dict:
     d = serialize(dict(pkg))
     if not can_hpp:
@@ -2264,6 +2290,7 @@ async def create_invoice(bid: str, body: dict, request: Request, user: dict = De
            "sales_pic_id": b.get("sales_pic_id"), "sales_pic_name": b.get("sales_pic_name"), "branch": b.get("branch", ""),
            "terms": (await db.packages.find_one({"_id": ObjectId(b["package_id"])}) or {}).get("terms", ""),
            "created_at": now_iso(), "created_by": user["name"]}
+    doc.update(await tax_snapshot(now_iso()[:10], amount))
     res = await db.invoices.insert_one(doc)
     await _recompute_invoice_status(str(res.inserted_id))
     await log_audit(user, "invoice", "create", request, record_id=str(res.inserted_id), new={"number": number})
@@ -2406,7 +2433,7 @@ from io import StringIO
 from openpyxl import Workbook
 
 EXPENSE_CATEGORIES = ["Flight", "Hotel", "Visa", "Transport", "Guide", "Marketing", "Commission", "Operational", "Refund", "Other"]
-TAX_TYPES = ["PPN", "PPh", "OTHER"]
+TAX_TYPES = ["PPN", "PPh21", "PPh23", "OTHER"]
 TAX_TREATMENTS = ["NON_TAXABLE", "PPN_TERTENTU", "PPN_STANDARD", "CUSTOM_TAX", "UMRAH_MURNI", "UMRAH_PLUS"]
 
 
@@ -2468,6 +2495,113 @@ async def delete_tax_master(tid: str, request: Request, user: dict = Depends(req
 @api_router.get("/tax-config")
 async def tax_config(user: dict = Depends(require_permission("tax.view"))):
     return {"tax_types": TAX_TYPES, "treatments": TAX_TREATMENTS, "tax_bases": ["SELLING_PRICE", "TOUR_PORTION", "DPP", "CUSTOM"]}
+
+
+# ---------- PPN Configuration (versioned) ----------
+class PPNConfigModel(BaseModel):
+    config_name: str
+    tax_type: str = "PPN"
+    tax_rate: float = 0
+    dpp_percentage: float = 100
+    effective_from: str = ""
+    effective_until: Optional[str] = ""
+    status: str = "ACTIVE"
+    description: Optional[str] = ""
+
+
+@api_router.get("/ppn-configurations")
+async def list_ppn_configs(user: dict = Depends(require_permission("tax.view"))):
+    docs = await db.ppn_configurations.find({}).sort("effective_from", -1).to_list(500)
+    return [serialize(d) for d in docs]
+
+
+@api_router.post("/ppn-configurations")
+async def create_ppn_config(body: PPNConfigModel, request: Request, user: dict = Depends(require_permission("tax.manage"))):
+    doc = {**body.model_dump(), "created_at": now_iso(), "created_by": user["name"]}
+    res = await db.ppn_configurations.insert_one(doc)
+    await log_audit(user, "tax", "create_ppn_config", request, record_id=str(res.inserted_id), new={**body.model_dump()})
+    return serialize(await db.ppn_configurations.find_one({"_id": res.inserted_id}))
+
+
+@api_router.put("/ppn-configurations/{cid}")
+async def update_ppn_config(cid: str, body: dict, request: Request, user: dict = Depends(require_permission("tax.manage"))):
+    old = await db.ppn_configurations.find_one({"_id": ObjectId(cid)})
+    if not old:
+        raise HTTPException(status_code=404, detail="PPN configuration not found")
+    reason = (body or {}).get("reason", "")
+    if not reason:
+        raise HTTPException(status_code=400, detail="Reason wajib diisi untuk perubahan konfigurasi pajak (audit).")
+    fields = {k: body[k] for k in ["config_name", "tax_type", "tax_rate", "dpp_percentage", "effective_from", "effective_until", "status", "description"] if k in (body or {})}
+    await db.ppn_configurations.update_one({"_id": ObjectId(cid)}, {"$set": fields})
+    await log_audit(user, "tax", "update_ppn_config", request, record_id=cid, old=serialize(old), new={**fields, "reason": reason})
+    return serialize(await db.ppn_configurations.find_one({"_id": ObjectId(cid)}))
+
+
+@api_router.delete("/ppn-configurations/{cid}")
+async def deactivate_ppn_config(cid: str, request: Request, user: dict = Depends(require_permission("tax.manage"))):
+    old = await db.ppn_configurations.find_one({"_id": ObjectId(cid)})
+    if not old:
+        raise HTTPException(status_code=404, detail="PPN configuration not found")
+    await db.ppn_configurations.update_one({"_id": ObjectId(cid)}, {"$set": {"status": "INACTIVE"}})
+    await log_audit(user, "tax", "deactivate_ppn_config", request, record_id=cid, old=serialize(old), new={"status": "INACTIVE", "reason": "deactivated"})
+    return {"ok": True}
+
+
+@api_router.get("/tax-transactions")
+async def tax_transactions(frm: Optional[str] = None, to: Optional[str] = None, user: dict = Depends(require_permission("tax.view"))):
+    invs = await db.invoices.find({}).to_list(20000)
+    rows = []
+    for i in invs:
+        if not _in_range(i.get("created_at"), frm, to):
+            continue
+        rate = i.get("tax_rate") if i.get("tax_rate") is not None else i.get("tax_percent")
+        dpp = i.get("dpp_amount") if i.get("dpp_amount") is not None else i.get("amount")
+        rows.append({"id": str(i["_id"]), "invoice_number": i.get("invoice_number"),
+                     "transaction_date": (i.get("created_at") or "")[:10],
+                     "customer_name": i.get("customer_name"), "package_name": i.get("package_name"),
+                     "tax_type": i.get("tax_type") or "PPN", "tax_rate": float(rate or 0),
+                     "dpp": float(dpp or 0), "tax_amount": float(i.get("tax_amount") or 0),
+                     "total": float(i.get("total") or 0), "tax_config_version": i.get("tax_config_version") or "-"})
+    rows.sort(key=lambda r: r["transaction_date"], reverse=True)
+    return rows
+
+
+@api_router.get("/tax-dashboard")
+async def tax_dashboard(user: dict = Depends(require_permission("tax.view"))):
+    from datetime import date
+    invs = await db.invoices.find({}).to_list(20000)
+    total_dpp = sum(float(i.get("dpp_amount") if i.get("dpp_amount") is not None else i.get("amount") or 0) for i in invs)
+    total_ppn = sum(float(i.get("tax_amount") or 0) for i in invs)
+    taxable = sum(float(i.get("amount") or 0) for i in invs if float(i.get("tax_amount") or 0) > 0)
+    non_taxable = sum(float(i.get("amount") or 0) for i in invs if float(i.get("tax_amount") or 0) <= 0)
+    by_type = {}
+    for i in invs:
+        t = i.get("tax_type") or "PPN"
+        by_type[t] = by_type.get(t, 0) + float(i.get("tax_amount") or 0)
+    td = date.fromisoformat(today_str())
+    months = []
+    y, m = td.year, td.month
+    for k in range(5, -1, -1):
+        mm, yy = m - k, y
+        while mm <= 0:
+            mm += 12
+            yy -= 1
+        months.append(f"{yy:04d}-{mm:02d}")
+    by_month = [{"month": mo, "value": sum(float(i.get("tax_amount") or 0) for i in invs if (i.get("created_at") or "")[:7] == mo)} for mo in months]
+    ac = await resolve_ppn_config(now_iso()[:10])
+    active_config = None
+    if ac:
+        active_config = {"config_name": ac.get("config_name"), "tax_type": ac.get("tax_type"),
+                         "tax_rate": ac.get("tax_rate"), "dpp_percentage": ac.get("dpp_percentage"),
+                         "effective_from": ac.get("effective_from"), "effective_until": ac.get("effective_until")}
+    return {"active_config": active_config, "total_dpp": total_dpp, "total_ppn": total_ppn,
+            "taxable": taxable, "non_taxable": non_taxable, "transaction_count": len(invs),
+            "by_type": [{"type": k, "value": v} for k, v in by_type.items()], "by_month": by_month}
+
+
+@api_router.get("/tax-reports")
+async def tax_reports(frm: Optional[str] = None, to: Optional[str] = None, user: dict = Depends(require_permission("tax.view"))):
+    return await report_tax(frm, to)
 
 
 # ---------- Expense ----------
@@ -3611,7 +3745,8 @@ async def v1_create_booking(payload: dict = Body(default={}), request: Request =
     if did:
         await db.departures.update_one({"_id": ObjectId(did)}, {"$inc": {"confirmed_pax": pax}})
     inv_number = await next_number((settings.get("numbering") or {}).get("invoice_prefix", "INV"), db.invoices, "invoice_number")
-    await db.invoices.insert_one({"invoice_number": inv_number, "booking_id": bid, "booking_number": number,
+    _inv_snap = await tax_snapshot(now_iso()[:10], subtotal)
+    await db.invoices.insert_one({**_inv_snap, "invoice_number": inv_number, "booking_id": bid, "booking_number": number,
         "customer_id": cid, "customer_name": cust.get("full_name"), "package_id": pid, "package_name": pkg.get("package_name"),
         "pax": pax, "amount": subtotal, "discount_amount": 0, "discount_percent": 0, "tax_percent": pct,
         "tax_amount": tax_amount, "total": total, "paid_amount": 0, "outstanding": total,
@@ -4874,6 +5009,11 @@ async def seed():
              "effective_from": "2024-01-01", "effective_until": "", "treatment": "UMRAH_PLUS", "tax_account": "2100",
              "description": "Umrah plus - porsi tour", "active": True, "created_at": now_iso(), "created_by": "system"},
         ])
+    if await db.ppn_configurations.count_documents({}) == 0:
+        await db.ppn_configurations.insert_one({
+            "config_name": "PPN Besaran Tertentu 1.1% (V1)", "tax_type": "PPN", "tax_rate": 1.1, "dpp_percentage": 100,
+            "effective_from": "2024-01-01", "effective_until": "", "status": "ACTIVE",
+            "description": "Konfigurasi PPN default (besaran tertentu 1.1%).", "created_at": now_iso(), "created_by": "system"})
     if await db.packages.count_documents({}) == 0:
         umrah = {
             "package_code": "UMR-0001", "package_name": "Umrah Reguler 9 Hari", "product_type": "UMRAH",

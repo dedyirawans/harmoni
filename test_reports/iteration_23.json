@@ -1,0 +1,35 @@
+{
+  "summary": "Phase 8F — Tax Configuration & Tax Management tested end-to-end (backend + frontend). Backend: 15/15 pytest tests pass covering RBAC (sales 403 on all 6 tax endpoints; accounting & super_admin 200), Tax Master CRUD, PPN Configuration CRUD with reason+audit, versioned resolve_ppn_config (future V2 does NOT become active today), tax_snapshot on new invoices (tax_config_version, tax_rate, dpp_percentage, dpp_amount, tax_type), Tax Dashboard shape (active_config + 6-month by_month), Tax Transactions rows shape, Tax Reports. Phase 8D & 8E regression: 22/22 pass. Frontend (Playwright): Accounting /tax renders all 5 tabs (tab-tax-dashboard/transactions/master/ppn-config/tax-reports) with proper data-testids, active-config-banner visible, PPN new/edit dialog works (edit blocked when reason empty and succeeds with reason), tables ppn-config-table/tax-master-table/tax-transactions-table/tax-report-table all render. Sales sidebar has no /tax link and direct /tax navigation renders 403 Forbidden page. Test data cleaned up.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Tax Dashboard charts", "issues": ["Recharts logs benign 'width(-1) height(-1)' warnings on initial mount before ResponsiveContainer sizes (cosmetic, charts render correctly). Consider setting minWidth/minHeight or aspect on ResponsiveContainer to silence."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_phase8f_tax_config.py",
+    "/app/test_reports/pytest/phase8f_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py is 5084 lines — exceeds 700-line guideline; consider splitting into routers (tax, invoices, bookings, commission, etc.) for maintainability.",
+    "PUT /api/ppn-configurations/{cid} does not enforce a non-empty 'reason' at API layer (only frontend enforces). For stronger audit integrity, backend should reject updates with empty/missing reason with 400.",
+    "tax_dashboard total_dpp/total_ppn/taxable/non_taxable iterate all invoices unbounded (limit 20000). For scale, add index on invoices.created_at and paginate/aggregate via Mongo pipeline.",
+    "resolve_ppn_config filters status=ACTIVE only; deactivating the sole active config leaves tax_snapshot empty ({}) so new invoices will lack version fields — consider fallback or dashboard warning."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_phase8f_tax_config.py"
+  ],
+  "success_rate": {"backend": "100% (15/15 phase 8F + 22/22 regression)", "frontend": "100% (all critical flows)"},
+  "test_credentials": "Super Admin dedyirawan18@gmail.com/Admin@123; Accounting accounting@safarcrm.com/Account@123; Sales sales@safarcrm.com/Sales@123",
+  "seed_data_creation": "Created TEST_PPN 1.2% (V2) with future effective_from=2099-01-01 during pytest run and cleaned up via DELETE (soft deactivate). Created UI_TEST_PPN 1.5% V-UI during playwright, deactivated during cleanup. Created TEST_PPh21_Karyawan tax_master and cleaned up. One new invoice was created during snapshot test on the first eligible booking (persists — expected, contains proper snapshot fields).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Phase 8F verified. If retesting, note that during test one new invoice snapshot was persisted linking to whichever booking accepted the POST. To re-test versioning, use future effective_from (>=2099) so the seeded V1 (rate 1.1) remains active today. Backend does NOT enforce non-empty reason on PUT /ppn-configurations — only frontend does. server.py total lines: 5084 (approaching module-split threshold).",
+  "rca of the issue": "N/A — no issues found in Phase 8F."
+}
