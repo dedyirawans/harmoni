@@ -5,6 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Loader2, ArrowDownCircle, ArrowUpCircle, Receipt, Wallet, Bell, TrendingUp } from "lucide-react";
 import { ResponsiveContainer, LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid, Cell } from "recharts";
+import DepartureAlertsWidget from "@/components/DepartureAlertsWidget";
 
 const rp = (v) => "Rp " + (Number(v || 0)).toLocaleString("id-ID");
 const short = (v) => "Rp " + (Number(v || 0) / 1e6).toFixed(1) + "jt";
@@ -117,6 +118,8 @@ export default function AccountingDashboard() {
           <BarChart data={d.expense_breakdown}><CartesianGrid strokeDasharray="3 3" stroke="#eef2f7" /><XAxis dataKey="category" tick={{ fontSize: 10 }} /><YAxis tickFormatter={(v) => (v / 1e6).toFixed(0) + "jt"} tick={{ fontSize: 11 }} /><Tooltip formatter={(v) => rp(v)} /><Bar dataKey="value" radius={[4, 4, 0, 0]}>{d.expense_breakdown.map((e, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}</Bar></BarChart>
         </ChartCard>
       </div>
+
+      <DepartureAlertsWidget />
     </div>
   );
 }

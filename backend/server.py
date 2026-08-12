@@ -2256,6 +2256,122 @@ async def set_traveler_rooming(tid: str, body: dict, request: Request, user: dic
     return {"success": True, **upd}
 
 
+async def _op_departure_passengers(did):
+    dep = await db.departures.find_one({"_id": ObjectId(did)}) if ObjectId.is_valid(did) else None
+    if not dep:
+        return None, None, []
+    pkg = await db.packages.find_one({"_id": ObjectId(dep["package_id"])}) if ObjectId.is_valid(dep.get("package_id") or "") else None
+    required = _required_docs((pkg or {}).get("product_type", "TOUR"))
+    bookings = await db.bookings.find({"departure_id": did, "status": {"$ne": "CANCELLED"}}).to_list(1000)
+    bmap, _, _, _ = await _dep_payment_map(bookings)
+    bids = [str(b["_id"]) for b in bookings]
+    travelers = await db.travelers.find({"booking_id": {"$in": bids}}).to_list(2000)
+    dep_date = (dep.get("departure_date") or "")[:10]
+    out = []
+    for t in travelers:
+        tid = str(t["_id"])
+        tdocs = await db.documents.find({"traveler_id": tid, "is_deleted": {"$ne": True}}).to_list(50)
+        have = {d.get("doc_type") for d in tdocs}
+        missing = [r for r in required if r not in have]
+        b = next((x for x in bookings if str(x["_id"]) == t.get("booking_id")), None)
+        pinfo = bmap.get(t.get("booking_id"), {})
+        pexp = (t.get("passport_expiry") or "")[:10]
+        out.append({"full_name": t.get("full_name"), "customer_name": (b or {}).get("customer_name", ""),
+                    "gender": t.get("gender") or "", "passport_number": t.get("passport_number") or "",
+                    "passport_expiry": pexp, "passport_expired": bool(pexp and dep_date and pexp < dep_date),
+                    "room": t.get("room") or "", "group": t.get("group") or "", "bus": t.get("bus") or "",
+                    "room_type": t.get("room_type") or "", "payment_status": pinfo.get("payment_status", "UNPAID"),
+                    "document_status": "COMPLETE" if not missing else "INCOMPLETE"})
+    return dep, pkg, out
+
+
+@api_router.get("/operations/departures/{did}/manifest.pdf")
+async def departure_manifest_pdf(did: str, request: Request, auth: str = Query(None)):
+    auth_h = request.headers.get("authorization") or ""
+    token = auth_h[7:] if auth_h.startswith("Bearer ") else auth
+    user = await user_from_token(token) if token else None
+    if not user or user.get("role") not in ("super_admin", "accounting"):
+        raise HTTPException(status_code=403, detail="403 Forbidden")
+    dep, pkg, passengers = await _op_departure_passengers(did)
+    if not dep:
+        raise HTTPException(status_code=404, detail="Departure not found")
+    import io
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4, topMargin=16 * mm, bottomMargin=16 * mm, leftMargin=12 * mm, rightMargin=12 * mm)
+    styles = getSampleStyleSheet()
+    el = [Paragraph(f"Manifest Keberangkatan — {(pkg or {}).get('package_name', '')}", styles["Title"]),
+          Paragraph(f"Tanggal: {(dep.get('departure_date') or '')[:10]} s/d {(dep.get('return_date') or '')[:10]} | Flight: {dep.get('flight') or '-'} | Hotel: {dep.get('hotel') or '-'}", styles["Normal"]),
+          Spacer(1, 6 * mm)]
+    rows = [["No", "Nama", "L/P", "Paspor", "Room", "Group", "Bus", "Payment", "Docs"]]
+    for i, p in enumerate(passengers, 1):
+        rows.append([str(i), p["full_name"] or "", (p["gender"] or "")[:1],
+                     (p["passport_number"] or "") + (" (EXP)" if p["passport_expired"] else ""),
+                     p["room_type"] or p["room"], p["group"], p["bus"], p["payment_status"], p["document_status"]])
+    if len(rows) == 1:
+        rows.append(["-", "Tidak ada penumpang", "", "", "", "", "", "", ""])
+    tbl = Table(rows, repeatRows=1)
+    tbl.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2563eb")),
+                             ("TEXTCOLOR", (0, 0), (-1, 0), colors.white), ("FONTSIZE", (0, 0), (-1, -1), 8),
+                             ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#cbd5e1")),
+                             ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                             ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f8fafc")])]))
+    el.append(tbl)
+    doc.build(el)
+    return Response(content=buf.getvalue(), media_type="application/pdf",
+                    headers={"Content-Disposition": f"attachment; filename=manifest_{did}.pdf"})
+
+
+@api_router.get("/operations/alerts-summary")
+async def operations_alerts_summary(user: dict = Depends(require_role("super_admin", "accounting"))):
+    from datetime import date, timedelta
+    today = date.today()
+    end = (today + timedelta(days=30)).isoformat()
+    deps = await db.departures.find({"departure_date": {"$gte": today.isoformat(), "$lte": end}}).sort("departure_date", 1).to_list(200)
+    pkgs = {str(p["_id"]): p for p in await db.packages.find({}).to_list(1000)}
+    out = []
+    for d in deps:
+        did = str(d["_id"])
+        pkg = pkgs.get(d.get("package_id"))
+        required = _required_docs((pkg or {}).get("product_type", "TOUR"))
+        bookings = await db.bookings.find({"departure_id": did, "status": {"$ne": "CANCELLED"}}).to_list(1000)
+        booked = sum(int(b.get("pax") or 0) for b in bookings)
+        total_seat = int(d.get("quota") or 0)
+        available = max(total_seat - booked, 0)
+        _, paid, partial, unpaid = await _dep_payment_map(bookings)
+        bids = [str(b["_id"]) for b in bookings]
+        travelers = await db.travelers.find({"booking_id": {"$in": bids}}).to_list(2000)
+        dep_date = (d.get("departure_date") or "")[:10]
+        docs_missing = pexp_cnt = 0
+        for t in travelers:
+            tdocs = await db.documents.find({"traveler_id": str(t["_id"]), "is_deleted": {"$ne": True}}).to_list(50)
+            have = {x.get("doc_type") for x in tdocs}
+            if any(r not in have for r in required):
+                docs_missing += 1
+            pe = (t.get("passport_expiry") or "")[:10]
+            if pe and dep_date and pe < dep_date:
+                pexp_cnt += 1
+        try:
+            days_to = (date.fromisoformat(dep_date) - today).days
+        except Exception:
+            days_to = None
+        types = []
+        if total_seat and 0 < available <= max(1, round(total_seat * 0.1)):
+            types.append("SEAT_ALMOST_FULL")
+        if unpaid + partial > 0:
+            types.append("PAYMENT_DUE")
+        if pexp_cnt > 0:
+            types.append("PASSPORT_EXPIRED")
+        if docs_missing > 0:
+            types.append("DOCS_INCOMPLETE")
+        if days_to is not None and 0 <= days_to <= 7:
+            types.append("DEPARTURE_APPROACHING")
+        if types:
+            out.append({"id": did, "package_name": (pkg or {}).get("package_name", ""), "departure_date": dep_date,
+                        "days_to": days_to, "available": available, "total_seat": total_seat,
+                        "unpaid": unpaid + partial, "docs_missing": docs_missing, "passport_expired": pexp_cnt, "alerts": types})
+    return out
+
+
 # ---- Departures ----
 @api_router.get("/packages/{pid}/departures")
 async def package_departures(pid: str, user: dict = Depends(require_any_permission("product.view", "packages.view", "departures.view", "hpp.view"))):

@@ -1,6 +1,14 @@
 # Safar Travel CRM — Product Requirements (Living Doc)
 
-## PHASE 9I — Departure Management / Operations (2026-06) — DONE (Verified iteration_32, Frontend 100% + backend curl)
+## PHASE 9I Enhancements (2026-06) — DONE (Verified iteration_33 + re-fix)
+- **Room Type dropdown** (SINGLE/DOUBLE/TRIPLE/QUAD) di tab Rooming (Operations.jsx).
+- **Unduh Manifest PDF**: `GET /operations/departures/{did}/manifest.pdf` (reportlab; role super_admin/accounting; token via header/?auth) → tabel penumpang (nama, L/P, paspor±EXP, room/group/bus, payment, docs). Tombol `download-manifest-btn` di detail departure.
+- **Seat availability badge** menonjol di halaman Departures (hijau/amber/merah "Seat Habis").
+- **Global Departure Alerts widget**: `GET /operations/alerts-summary` (departure ≤30 hari dengan alert) → widget `DepartureAlertsWidget` di Dashboard Super Admin & Accounting; klik → /operations.
+- Catatan: 1 edit room_type→Select sempat hilang akibat race edit paralel same-file, sudah di-reapply. INGAT: edit server.py/berkas sama HARUS sekuensial.
+
+
+## PHASE 9I — Departure Management / Operations (2026-06) — DONE (Verified iteration_32/33, Frontend 100% + backend curl)
 - **Akses**: HANYA Super Admin + Accounting (`require_role("super_admin","accounting")`). Menu "Operations" muncul untuk 2 role tsb; Sales tidak melihatnya (API 403).
 - **Endpoint baru** (`server.py`): `GET /operations/departures?within=all|7|14|30|60` (list + Total/Booked/Available Seat + Status + filter Upcoming); `GET /operations/departures/{did}` (Dashboard: total/booked/available, paid/partial/unpaid, documents_complete/missing, required_docs; Passenger List: customer, gender, passport(+expired), payment/document/booking status; Alerts); `PATCH /operations/travelers/{tid}/rooming` (room/group/bus/room_type per jamaah).
 - **Booked seat** dihitung dari sum(pax) booking non-CANCELLED. **Alerts**: SEAT_ALMOST_FULL/SEAT_FULL, PAYMENT_DUE, PASSPORT_EXPIRED, DOCS_INCOMPLETE, DEPARTURE_APPROACHING(≤14 hari).

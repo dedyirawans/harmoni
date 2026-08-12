@@ -38,7 +38,9 @@ export default function Departures() {
                   <p>Return: {fmtDate(d.return_date)}</p>
                 </div>
                 <div className="flex items-center justify-between mt-3">
-                  <span className="text-sm flex items-center gap-1 text-slate-600"><Users className="h-4 w-4" aria-hidden="true" />{d.available_seat} / {d.quota} seats</span>
+                  <Badge variant="outline" data-testid={`seat-badge-${d._id}`} className={`text-sm font-semibold ${d.available_seat <= 0 ? "bg-red-100 text-red-700 border-red-300" : d.available_seat <= Math.max(1, Math.round(d.quota * 0.1)) ? "bg-amber-100 text-amber-700 border-amber-300" : "bg-emerald-100 text-emerald-700 border-emerald-300"}`}>
+                    <Users className="h-4 w-4 mr-1" aria-hidden="true" />{d.available_seat <= 0 ? "Seat Habis" : `${d.available_seat} / ${d.quota} kursi`}
+                  </Badge>
                   <span className="font-display font-bold text-slate-900">{fmtIDR(d.price)}</span>
                 </div>
               </CardContent>

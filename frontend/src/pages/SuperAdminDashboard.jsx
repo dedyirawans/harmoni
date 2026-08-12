@@ -8,6 +8,7 @@ import {
   Loader2, TrendingUp, DollarSign, PieChart as PieIcon, Percent, Receipt, Bell, Users2,
 } from "lucide-react";
 import ExpiringDocsWidget from "@/components/ExpiringDocsWidget";
+import DepartureAlertsWidget from "@/components/DepartureAlertsWidget";
 import {
   ResponsiveContainer, ComposedChart, LineChart, Line, BarChart, Bar, Area,
   XAxis, YAxis, Tooltip, CartesianGrid, Cell, Legend,
@@ -216,6 +217,7 @@ export default function SuperAdminDashboard() {
           </div>
 
           <ExpiringDocsWidget within={90} />
+      <DepartureAlertsWidget />
         </>
       )}
     </div>

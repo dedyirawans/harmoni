@@ -1,0 +1,35 @@
+{
+  "summary": "Frontend UI verification for Phase 9I enhancements. 3 of 4 features working; 1 critical mismatch: Rooming Room Type is still an <Input> text field, not a Select dropdown with SINGLE/DOUBLE/TRIPLE/QUAD as required.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "Operations.jsx -> RoomingTab",
+        "issue": "Room Type column is rendered with <Input className='h-8 w-28' /> instead of a Select dropdown. The required options SINGLE/DOUBLE/TRIPLE/QUAD are NOT presented as dropdown; user types free-text. Select is imported (line 9) but not used for room_type. On live test element info: {tag: 'INPUT', type: null, placeholder: null}. Screenshot confirms value 'QUAD' rendered inside a text box.",
+        "selector": "[data-testid=\"rooming-room_type-<traveler_id>\"]",
+        "priority": "HIGH"
+      }
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "SuperAdminDashboard", "issues": ["Recharts warnings 'width(-1) and height(-1)' on multiple chart containers; container mount race — should set explicit min height/width."]}
+    ]
+  },
+  "test_report_links": ["/app/test_reports/iteration_33.json"],
+  "action_items": [
+    "URGENT: Convert Room Type Input to shadcn Select with items SINGLE/DOUBLE/TRIPLE/QUAD in /app/frontend/src/pages/Operations.jsx around line 197. Keep data-testid=`rooming-room_type-${traveler_id}` on the SelectTrigger. Persist selected value into rowState.room_type on onValueChange.",
+    "(Optional) Add ContainerRef min-height to Recharts wrappers to remove -1/-1 width warnings."
+  ],
+  "critical_code_review_comments": [
+    "Operations.jsx line 197 still uses <Input> for room_type; requirement was dropdown. Import of Select on line 9 is unused for this field.",
+    "download-manifest-btn correctly opens a new tab (target=_blank via window.open in handler)."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "N/A (backend skipped as instructed)", "frontend": "80% (4/5 UI features pass; rooming dropdown fails)"},
+  "test_credentials": "Super Admin dedyirawan18@gmail.com / Admin@123; Accounting accounting@safarcrm.com / Account@123 — both worked.",
+  "seed_data_creation": "None (used existing departure 6a7a9abd743c2458fcee9eba with traveler 6a7c8da00bdc45255f0ea4c4).",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Verified via live UI: (a) SuperAdmin /dashboard renders data-testid=departure-alerts-widget with item departure-alert-6a7a9abd743c2458fcee9eba showing 'Belum lunas' + 'Dok. kurang' badges; clicking navigates to /operations. (b) Accounting dashboard shows same widget/item. (c) /departures renders 6 seat-badge cards (green/amber/red). (d) In Operations detail for departure 6a7a9abd..., download-manifest-btn is present, opens new popup (backend PDF returns 200 per E1). (e) tab-rooming loads Test Jamaah 9F row. FAIL: rooming-room_type-<tid> element is <INPUT> not a Select. The value shown ('QUAD') is displayed as editable text, so free-text entry is possible — violates spec. Departure card testid pattern is `departure-<id>` (NOT `departure-card-<id>` as some tasks assume).",
+  "rca of the issue": "Operations.jsx RoomingTab was updated but the room_type cell was not migrated to Select. Fix: replace the <Input> with <Select value={val(p,'room_type')} onValueChange={(v) => setVal(p.traveler_id,'room_type',v)}><SelectTrigger data-testid={`rooming-room_type-${p.traveler_id}`}><SelectValue placeholder='Pilih' /></SelectTrigger><SelectContent>{['SINGLE','DOUBLE','TRIPLE','QUAD'].map(x => <SelectItem key={x} value={x}>{x}</SelectItem>)}</SelectContent></Select>."
+}

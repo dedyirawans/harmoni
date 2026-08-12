@@ -1,12 +1,13 @@
 import { useEffect, useState } from "react";
-import api, { formatApiErrorDetail } from "@/lib/api";
+import api, { API, formatApiErrorDetail } from "@/lib/api";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
-import { Loader2, PlaneTakeoff, AlertTriangle, Users, LayoutDashboard, BedDouble } from "lucide-react";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Loader2, PlaneTakeoff, AlertTriangle, Users, LayoutDashboard, BedDouble, Download } from "lucide-react";
 import { toast } from "sonner";
 
 const WINDOWS = [["all", "Semua"], ["7", "7 Hari"], ["14", "14 Hari"], ["30", "30 Hari"], ["60", "60 Hari"]];
@@ -97,9 +98,15 @@ function DepartureDetail({ detail, onReload }) {
   const { departure: dep, dashboard: db, passengers, alerts } = detail;
   return (
     <Card className="border-slate-200 shadow-sm" data-testid="departure-detail">
-      <div className="p-4 border-b border-slate-100">
-        <h2 className="font-display text-xl font-bold text-slate-900">{dep.package_name}</h2>
-        <p className="text-sm text-slate-500">{(dep.departure_date || "").slice(0, 10)} → {(dep.return_date || "").slice(0, 10)} · {dep.product_type} · Flight {dep.flight || "—"} · Hotel {dep.hotel || "—"}</p>
+      <div className="p-4 border-b border-slate-100 flex items-start justify-between gap-3">
+        <div>
+          <h2 className="font-display text-xl font-bold text-slate-900">{dep.package_name}</h2>
+          <p className="text-sm text-slate-500">{(dep.departure_date || "").slice(0, 10)} → {(dep.return_date || "").slice(0, 10)} · {dep.product_type} · Flight {dep.flight || "—"} · Hotel {dep.hotel || "—"}</p>
+        </div>
+        <Button size="sm" variant="outline" data-testid="download-manifest-btn"
+          onClick={() => window.open(`${API}/operations/departures/${dep.id || dep._id}/manifest.pdf?auth=${localStorage.getItem("token")}`, "_blank")}>
+          <Download className="h-4 w-4 mr-1" />Unduh Manifest
+        </Button>
       </div>
 
       {alerts.length > 0 && (
@@ -187,7 +194,7 @@ function RoomingTab({ passengers, onReload }) {
           {passengers.map((p) => (
             <TableRow key={p.traveler_id} data-testid={`rooming-${p.traveler_id}`}>
               <TableCell className="font-medium text-slate-900">{p.full_name}</TableCell>
-              <TableCell><Input className="h-8 w-28" value={val(p, "room_type")} onChange={(e) => setVal(p.traveler_id, "room_type", e.target.value)} data-testid={`rooming-room_type-${p.traveler_id}`} /></TableCell>
+              <TableCell><Select value={val(p, "room_type") || undefined} onValueChange={(v) => setVal(p.traveler_id, "room_type", v)}><SelectTrigger className="h-8 w-28" data-testid={`rooming-room_type-${p.traveler_id}`}><SelectValue placeholder="Type" /></SelectTrigger><SelectContent className="bg-white">{["SINGLE", "DOUBLE", "TRIPLE", "QUAD"].map((rt) => <SelectItem key={rt} value={rt}>{rt}</SelectItem>)}</SelectContent></Select></TableCell>
               <TableCell><Input className="h-8 w-24" value={val(p, "room")} onChange={(e) => setVal(p.traveler_id, "room", e.target.value)} data-testid={`rooming-room-${p.traveler_id}`} /></TableCell>
               <TableCell><Input className="h-8 w-24" value={val(p, "group")} onChange={(e) => setVal(p.traveler_id, "group", e.target.value)} data-testid={`rooming-group-${p.traveler_id}`} /></TableCell>
               <TableCell><Input className="h-8 w-24" value={val(p, "bus")} onChange={(e) => setVal(p.traveler_id, "bus", e.target.value)} data-testid={`rooming-bus-${p.traveler_id}`} /></TableCell>
