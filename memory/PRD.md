@@ -1,5 +1,13 @@
 # Safar Travel CRM — Product Requirements (Living Doc)
 
+## Phase 8C — Accounting Dashboard (2026-06) — DONE
+- **Accounting Dashboard** di route `/` (Dashboard.jsx branch `role==='accounting'` → AccountingDashboard.jsx; Sales→SalesDashboard, Super Admin→dashboard lama tak diubah).
+- **KPI**: Money In (revenue/invoice/payment/DP/installment/final), Money Out (expense/supplier/refund/commission payable/operational), Receivable aging (total/current/1-30/31-60/61-90/>90), Refund (requested/pending/approved/paid/outstanding), Tax (DPP/PPN/PPh/tax payable).
+- **Charts**: Cash Flow (in vs out), Cash In Trend, Receivable Aging, Payment Status, Revenue by Package, Expense Breakdown.
+- **Accounting Outstanding**: tiles klik → /accounting, /approvals, /commission, /tax (unpaid/overdue invoice, receivable, pending refund, pending commission, tax payable).
+- Backend: GET /api/accounting-dashboard (require accounting.view; **Sales 403**). Data aktual dari invoices/payments/expenses/refund_requests/commission_lines.
+- **Tests**: iteration_20.json (frontend 100%: 30 testids real numbers, 6 charts, clickable outstanding; Sales blocked, Super Admin dashboard tak berubah). Backend curl-verified.
+
 ## Phase 8B — Sales Dashboard (2026-06) — DONE
 - **Sales Dashboard** di route `/` (Dashboard.jsx branch `role==='sales'` → SalesDashboard.jsx; Super Admin & Accounting tetap dashboard lama — tidak diubah).
 - **KPI** (owner-scoped): Lead (new/active/qualified/lost), Quotation (total/outstanding/converted/conversion rate), Booking (total/pax/sales/avg pax), Follow Up (due today/upcoming/overdue/completed), Commission bulan ini (pax/tier/estimated/approved/paid).

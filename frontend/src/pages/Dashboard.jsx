@@ -8,6 +8,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { TrendingUp } from "lucide-react";
 import SalesDashboard from "@/pages/SalesDashboard";
+import AccountingDashboard from "@/pages/AccountingDashboard";
 import {
   ResponsiveContainer, BarChart, Bar, AreaChart, Area, PieChart, Pie, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend,
@@ -31,6 +32,7 @@ export default function Dashboard() {
   }, [isSales]);
 
   if (user.role === "sales") return <SalesDashboard />;
+  if (user.role === "accounting") return <AccountingDashboard />;
 
   const salesCards = sales && [
     { label: "New Leads", value: sales.new_leads },

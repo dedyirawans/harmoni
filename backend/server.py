@@ -4223,6 +4223,125 @@ async def sales_dashboard_v2(sales_id: Optional[str] = None, user: dict = Depend
     }
 
 
+@api_router.get("/accounting-dashboard")
+async def accounting_dashboard(user: dict = Depends(require_permission("accounting.view"))):
+    from datetime import date
+    invoices = await db.invoices.find({}).to_list(10000)
+    payments = await db.payments.find({}).to_list(20000)
+    expenses = await db.expenses.find({}).to_list(10000)
+    refunds = await db.refund_requests.find({}).to_list(5000)
+    clines = await db.commission_lines.find({}).to_list(5000)
+    today = today_str()
+    td = date.fromisoformat(today)
+
+    revenue = sum(float(i.get("total") or 0) for i in invoices)
+    dpp = sum(float(i.get("amount") or 0) for i in invoices)
+    ppn = sum(float(i.get("tax_amount") or 0) for i in invoices)
+    payment_received = sum(float(p.get("amount") or 0) for p in payments)
+
+    def psum(t):
+        return sum(float(p.get("amount") or 0) for p in payments if (p.get("payment_type") or p.get("type") or "").upper().startswith(t))
+    dp_recv, inst_recv, final_recv = psum("DP"), psum("INSTALL"), psum("FINAL")
+
+    expense_total = sum(float(e.get("amount") or 0) for e in expenses)
+
+    def esum(cat):
+        return sum(float(e.get("amount") or 0) for e in expenses if cat.lower() in (e.get("category") or "").lower())
+    supplier_pay, operational = esum("supplier"), esum("operation")
+    refund_paid = sum(float(r.get("refunded_amount") or 0) for r in refunds)
+    commission_payable = sum(float(c.get("final_commission") or 0) for c in clines if c.get("payment_status") != "PAID")
+
+    # receivable aging
+    aging = {"current": 0.0, "d1_30": 0.0, "d31_60": 0.0, "d61_90": 0.0, "d90": 0.0}
+    total_receivable = 0.0
+    for i in invoices:
+        out = float(i.get("outstanding") or 0)
+        if out <= 0 or i.get("status") == "Paid":
+            continue
+        total_receivable += out
+        dd = (i.get("due_date") or "")[:10]
+        days = (td - date.fromisoformat(dd)).days if dd else 0
+        if days <= 0:
+            aging["current"] += out
+        elif days <= 30:
+            aging["d1_30"] += out
+        elif days <= 60:
+            aging["d31_60"] += out
+        elif days <= 90:
+            aging["d61_90"] += out
+        else:
+            aging["d90"] += out
+
+    def rsum(statuses):
+        return sum(float(r.get("proposed_refund") or 0) for r in refunds if r.get("status") in statuses)
+    refund_block = {
+        "requested": len(refunds),
+        "pending_approval": len([r for r in refunds if r.get("status") in ("CALCULATED", "ACCOUNTING_REVIEWED")]),
+        "approved": rsum(("APPROVED", "PROCESSING", "PARTIALLY_REFUNDED", "REFUNDED")),
+        "paid": refund_paid,
+        "outstanding": rsum(("APPROVED", "PROCESSING", "PARTIALLY_REFUNDED")) - refund_paid,
+    }
+
+    # payment status counts
+    ps = {"Paid": 0, "Partial": 0, "Unpaid": 0, "Overdue": 0}
+    for i in invoices:
+        st = i.get("status", "Unpaid")
+        dd = (i.get("due_date") or "")[:10]
+        if st != "Paid" and dd and dd < today:
+            ps["Overdue"] += 1
+        ps[st if st in ps else "Unpaid"] = ps.get(st if st in ps else "Unpaid", 0) + 1
+
+    # trends 6 months
+    months = []
+    y, m = td.year, td.month
+    for i in range(5, -1, -1):
+        mm, yy = m - i, y
+        while mm <= 0:
+            mm += 12
+            yy -= 1
+        months.append(f"{yy:04d}-{mm:02d}")
+    cash_in, cash_out = [], []
+    for mo in months:
+        ci = sum(float(p.get("amount") or 0) for p in payments if (p.get("payment_date") or "")[:7] == mo)
+        co = sum(float(e.get("amount") or 0) for e in expenses if (e.get("date") or e.get("created_at") or "")[:7] == mo)
+        cash_in.append({"month": mo, "value": ci})
+        cash_out.append({"month": mo, "value": co})
+
+    rev_pkg = {}
+    for i in invoices:
+        n = i.get("package_name") or "—"
+        rev_pkg[n] = rev_pkg.get(n, 0) + float(i.get("total") or 0)
+    revenue_by_package = sorted([{"package": k, "value": v} for k, v in rev_pkg.items()], key=lambda x: -x["value"])[:8]
+
+    exp_cat = {}
+    for e in expenses:
+        c = e.get("category") or "Other"
+        exp_cat[c] = exp_cat.get(c, 0) + float(e.get("amount") or 0)
+    expense_breakdown = [{"category": k, "value": v} for k, v in sorted(exp_cat.items(), key=lambda x: -x[1])]
+
+    return {
+        "money_in": {"revenue": revenue, "invoice": revenue, "payment_received": payment_received,
+                     "dp_received": dp_recv, "installment_received": inst_recv, "final_received": final_recv},
+        "money_out": {"expense": expense_total, "supplier_payment": supplier_pay, "refund": refund_paid,
+                      "commission_payable": commission_payable, "operational_expense": operational},
+        "receivable": {"total": total_receivable, **aging},
+        "refund": refund_block,
+        "tax": {"dpp": dpp, "ppn": ppn, "pph": 0, "tax_payable": ppn},
+        "trends": {"cash_in": cash_in, "cash_out": cash_out},
+        "payment_status": ps, "revenue_by_package": revenue_by_package, "expense_breakdown": expense_breakdown,
+        "outstanding": {
+            "unpaid_invoice": len([i for i in invoices if i.get("status") == "Unpaid"]),
+            "overdue_invoice": ps["Overdue"],
+            "outstanding_receivable": total_receivable,
+            "pending_refund": refund_block["pending_approval"],
+            "pending_commission": len([c for c in clines if c.get("payment_status") != "PAID"]),
+            "outstanding_supplier": supplier_pay,
+            "tax_payable": ppn,
+        },
+        "period": f"{td.year:04d}-{td.month:02d}",
+    }
+
+
 app.include_router(api_router)
 
 app.add_middleware(

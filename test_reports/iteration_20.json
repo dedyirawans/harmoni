@@ -1,0 +1,29 @@
+{
+  "summary": "PHASE 8C Accounting Dashboard frontend validation PASSED 100%. Accounting user (accounting@safarcrm.com) lands on /dashboard and sees data-testid=accounting-dashboard with title 'Accounting Dashboard' + period 2026-08. All 30 required data-testids present with real numbers (ki-revenue Rp 293.4jt, ki-payment Rp 293.4jt, ki-invoice Rp 293.4jt, tx-dpp Rp 300.5jt, tx-ppn Rp 0.9jt, tx-payable Rp 0.9jt, ao-commission=1, ao-tax Rp 0.9jt). All 6 recharts containers rendered (Cash Flow, Cash In Trend, Receivable Aging, Payment Status, Revenue by Package, Expense Breakdown). All 6 Accounting Outstanding tiles are clickable and navigate correctly: ao-unpaid/ao-overdue/ao-receivable -> /accounting, ao-refund -> /approvals, ao-commission -> /commission, ao-tax -> /tax. Regression: Sales user does NOT see accounting-dashboard and correctly sees sales-dashboard; Super Admin does NOT see accounting-dashboard and correctly sees the original dashboard-page.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Accounting Dashboard Money Out group", "issues": ["6th slot is a literal em dash (—) placeholder with empty value (cosmetic, same pattern as Sales dashboard Booking group flagged in iteration_19)"]}
+    ]
+  },
+  "test_report_links": ["/app/frontend/src/pages/AccountingDashboard.jsx", "/app/frontend/src/pages/Dashboard.jsx"],
+  "action_items": [
+    "Optional cosmetic: replace the empty '—' placeholder in the Money Out group of AccountingDashboard.jsx with a real KPI or remove the placeholder tile"
+  ],
+  "critical_code_review_comments": [
+    "AccountingDashboard.jsx uses hard-coded route strings (/accounting, /approvals, /commission, /tax) — all verified to match registered routes. Recommend centralising to route constants (config/nav.js) to avoid Phase 8B-style drift.",
+    "No null-guards on nested response fields (d.trends.cash_in, d.receivable.*, d.tax.*). If the API ever returns partial data, the map/spread will crash. Consider optional chaining + defaults.",
+    "Recharts responsive containers hard-code height 240 — chart aspect ratio may look cramped on mobile.",
+    "No loading skeleton per section — a single spinner blocks the entire page; consider partial skeletons like Dashboard.jsx.",
+    "Error path returns bare text 'Gagal memuat dashboard.' with no retry button."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "N/A (skipped per instructions)", "frontend": "100%"},
+  "test_credentials": "Accounting: accounting@safarcrm.com / Account@123, Sales: sales@safarcrm.com / Sales@123, Super Admin: dedyirawan18@gmail.com / Admin@123",
+  "seed_data_creation": "None",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "PHASE 8C Accounting Dashboard fully validated. All 30 data-testids present, real numbers rendering (revenue ~293jt, DPP ~300jt, PPN 880k matching backend curl expectations). 6 charts rendering, 6 outstanding tiles navigate correctly. Sales/Super Admin regression clean. No fixes were needed. Only cosmetic feedback about the empty em-dash placeholder in Money Out group."
+}
