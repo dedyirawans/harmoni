@@ -1,5 +1,20 @@
 # Safar Travel CRM — Product Requirements (Living Doc)
 
+## Phase 8E — Commission by Package & Monthly Payout (2026-06) — DONE
+- **Commission Master** (tab rename dari "Commission Scheme"): commission dapat di-assign ke **Package spesifik** via **searchable dropdown** (GET /api/commissions/master-packages, super_admin). Field: Commission Name, Product Type, Package, Method (PER_PAX), Calculation Basis, Effective/End Date, Status, Tier (Min Pax → Amount/Pax), Notes. Model CommissionScheme diperluas: commission_method, notes.
+- **Priority**: Package-specific > Product-specific > Default (via _scheme_rank yg sudah ada). Tier per-pax dipilih dari TOTAL eligible pax per scheme group.
+- **Eligibility**: hanya booking lunas penuh (PAID basis). DP/Partial/Outstanding → tidak dapat komisi (tidak muncul).
+- **Earning & Payout**: Commission earned pada Full Payment Date → Commission Month = bulan lunas; **Payout Month = bulan berikutnya** (helper _next_month). Closing menyimpan payout_month + sa_approval (PENDING default).
+- **Payout gating**: PATCH /commissions/closings/{p}/status status=PAID hanya bila status=CLOSED **DAN** sa_approval=APPROVED **DAN** current_month ≥ payout_month (else 400). Tombol "Process Payment" disabled hingga syarat terpenuhi.
+- **Lifecycle**: Calculate→REVIEW, Close (REVIEW→CLOSED), SA Approval terpisah, lalu Process Payment (→PAID). REOPEN super_admin.
+- **Super Admin Approval** di APPROVAL → tab "Sales Commission" (GET /commissions/pending-approval): Approve / Reject / Request Revision (reason wajib) via PATCH /commissions/closings/{p}/approval; **Adjust** per-line (reason wajib) diizinkan SA walau CLOSED (set_line_adjustment relax + recompute closing total).
+- **Statuses** per booking (_commission_status): NOT ELIGIBLE / ELIGIBLE / PENDING CLOSING / CLOSED / PENDING PAYOUT / APPROVED / PAID / REJECTED.
+- **Sales My Commission**: tabel per-booking (Booking, Customer, Package, Departure, Pax, Full Payment Date, Tier, Commission, Commission Month, Payout Month, Status). Sales tidak dapat ubah amount.
+- **Accounting Commission**: GET /commissions/accounting-summary → grup Current / Upcoming Payout / Pending Approval / Paid (Payout Overview tiles di /commission).
+- **RBAC**: master-packages/pending-approval/approval = super_admin only (sales+accounting 403); scheme create/edit = super_admin only; accounting-summary & closings = commission.manage; /commissions/my = commission.view. AUTO SALES exclude kecuali auto_sales_commission ON (tak berubah).
+- **Bug fix penting**: `serialize()` kini juga mengekspos `id` (selain `_id`) — memperbaiki key React & edit/delete Commission Master (sebelumnya `s.id` undefined). Backward-compatible (field tambahan).
+- **Tests**: iteration_22.json — backend 17/17 pytest (priority, tier, eligibility, payout gating, approval reason-required, SA adjust-on-CLOSED, RBAC, per-booking my) + frontend 100% (Commission Master + package combobox, Payout Overview, SA approval tab, Sales per-booking table). File: test_phase8e_commission.py.
+
 ## Phase 8D — Super Admin Executive Dashboard (2026-06) — DONE
 - **Executive Dashboard** menggantikan total dashboard SA lama (Dashboard.jsx: sales→SalesDashboard, accounting→AccountingDashboard, else→SuperAdminDashboard.jsx).
 - **Periode**: default bulan berjalan + filter `<input type=month>` (exec-period-filter). Metrik period-scoped (revenue invoice, cash in/out, booking/pax/HPP/gross profit periode) vs kumulatif (receivable, refund, commission payable, outstanding).

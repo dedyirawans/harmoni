@@ -198,6 +198,7 @@ async def log_audit(user, module, action, request: Request, record_id=None, old=
 def serialize(doc: dict) -> dict:
     if doc and "_id" in doc:
         doc["_id"] = str(doc["_id"])
+        doc["id"] = doc["_id"]
     doc.pop("password_hash", None)
     return doc
 
@@ -2831,12 +2832,14 @@ class CommissionScheme(BaseModel):
     scheme_name: str
     product_type: str = "ALL"
     package_id: Optional[str] = ""
+    commission_method: str = "PER_PAX"
     effective_from: Optional[str] = ""
     effective_until: Optional[str] = ""
     calculation_basis: str = "PAID"
     tiers: List[dict] = []
     auto_sales: bool = False
     status: str = "ACTIVE"
+    notes: Optional[str] = ""
 
 
 def _period_bounds(period: str):
@@ -2916,6 +2919,42 @@ async def _booking_eligibility(booking, basis):
     return False, None
 
 
+def _next_month(period: str):
+    y, m = int(period[:4]), int(period[5:7])
+    m += 1
+    if m > 12:
+        m = 1
+        y += 1
+    return f"{y:04d}-{m:02d}"
+
+
+def _current_month():
+    n = datetime.now(timezone.utc)
+    return f"{n.year:04d}-{n.month:02d}"
+
+
+def _commission_status(closing, line=None):
+    """Derive Phase 8E commission status for a line/booking given its closing."""
+    if line and (line.get("payment_status") == "PAID"):
+        return "PAID"
+    if not closing:
+        return "ELIGIBLE"
+    st = closing.get("status")
+    sa = closing.get("sa_approval", "PENDING")
+    if st == "PAID":
+        return "PAID"
+    if sa == "REJECTED":
+        return "REJECTED"
+    if st in ("OPEN", "CALCULATING", "REVIEW"):
+        return "PENDING CLOSING"
+    if st == "CLOSED":
+        if sa == "APPROVED":
+            payout = closing.get("payout_month") or _next_month(closing["period"])
+            return "PENDING PAYOUT" if _current_month() >= payout else "APPROVED"
+        return "CLOSED"
+    return "ELIGIBLE"
+
+
 async def _compute_period(period, only_sales_id=None):
     settings = await get_settings_dict()
     auto_on = bool((settings.get("commission") or {}).get("auto_sales_commission", False))
@@ -2927,6 +2966,7 @@ async def _compute_period(period, only_sales_id=None):
     q = {} if not only_sales_id else {"sales_pic_id": only_sales_id}
     bookings = await db.bookings.find(q).to_list(5000)
     sales_map = {}
+    dep_cache = {}
     for b in bookings:
         if b.get("status") == "CANCELLED":
             continue
@@ -2958,6 +2998,13 @@ async def _compute_period(period, only_sales_id=None):
         else:
             n = int(b.get("pax") or 0)
             tlist = [(f"{bid}#pax{i + 1}", f"Pax {i + 1}") for i in range(n)]
+        dep_date = b.get("departure_date") or ""
+        depid = str(b.get("departure_id") or "")
+        if not dep_date and depid and ObjectId.is_valid(depid):
+            if depid not in dep_cache:
+                dep = await db.departures.find_one({"_id": ObjectId(depid)})
+                dep_cache[depid] = (dep or {}).get("departure_date") or (dep or {}).get("date") or ""
+            dep_date = dep_cache[depid]
         sid, sname = b.get("sales_pic_id"), b.get("sales_pic_name", "")
         for tid, tname in tlist:
             if (bid, tid) in claimed:
@@ -2965,9 +3012,10 @@ async def _compute_period(period, only_sales_id=None):
             grp = sales_map.setdefault(sid, {"name": sname, "groups": {}})
             g = grp["groups"].setdefault(chosen["_id"], {"scheme": chosen, "items": []})
             g["items"].append({"booking_id": bid, "booking_number": b.get("booking_number"),
-                "traveler_id": tid, "traveler_name": tname, "package_name": b.get("package_name"),
-                "product_type": product_type, "departure_date": b.get("departure_date") or "",
-                "basis_date": bdate, "scheme_id": chosen["_id"], "scheme_name": chosen.get("scheme_name"),
+                "customer_name": b.get("customer_name") or "", "traveler_id": tid, "traveler_name": tname,
+                "package_name": b.get("package_name"), "product_type": product_type,
+                "departure_date": dep_date, "basis_date": bdate, "full_payment_date": bdate,
+                "scheme_id": chosen["_id"], "scheme_name": chosen.get("scheme_name"),
                 "calculation_basis": chosen.get("calculation_basis")})
     lines, items = [], []
     for sid, data in sales_map.items():
@@ -2981,7 +3029,8 @@ async def _compute_period(period, only_sales_id=None):
             single_label, single_rate = label, rate
             for it in g["items"]:
                 items.append({**it, "period": period, "sales_pic_id": sid, "sales_pic_name": data["name"],
-                              "commission_rate": rate, "tier": label})
+                              "commission_rate": rate, "commission_amount": rate, "tier": label,
+                              "commission_month": period, "payout_month": _next_month(period)})
         tier = single_label if ngroups == 1 else "Multiple"
         rate_disp = single_rate if ngroups == 1 else (round(total_comm / total_pax) if total_pax else 0)
         lines.append({"period": period, "sales_pic_id": sid, "sales_pic_name": data["name"],
@@ -3065,6 +3114,7 @@ async def create_closing(body: dict, request: Request, user: dict = Depends(requ
     if existing:
         return serialize(existing)
     doc = {"period": period, "status": "OPEN", "total_pax": 0, "total_commission": 0,
+           "payout_month": _next_month(period), "sa_approval": "PENDING", "sa_approval_reason": "",
            "created_at": now_iso(), "created_by": user["name"]}
     res = await db.commission_closings.insert_one(doc)
     await log_audit(user, "commission", "create_closing", request, record_id=period, new={"period": period})
@@ -3095,6 +3145,7 @@ async def calculate_closing(period: str, request: Request, user: dict = Depends(
         await db.commission_items.insert_many([dict(x) for x in items])
     await db.commission_closings.update_one({"period": period},
         {"$set": {"status": "REVIEW", "total_pax": total_pax, "total_commission": total_comm,
+                  "payout_month": _next_month(period), "sa_approval": "PENDING", "sa_approval_reason": "",
                   "calculated_at": now_iso(), "calculated_by": user["name"]}})
     await log_audit(user, "commission", "calculate", request, record_id=period,
                     new={"lines": len(lines), "pax": total_pax})
@@ -3124,6 +3175,14 @@ async def set_closing_status(period: str, body: dict, request: Request, user: di
         raise HTTPException(status_code=400, detail="Invalid status")
     if c.get("status") in ("CLOSED", "PAID") and new_status not in ("PAID",):
         raise HTTPException(status_code=400, detail="Closing terkunci. Gunakan REOPEN (Super Admin).")
+    if new_status == "PAID":
+        if c.get("status") != "CLOSED":
+            raise HTTPException(status_code=400, detail="Payout hanya dapat diproses saat closing berstatus CLOSED.")
+        if c.get("sa_approval") != "APPROVED":
+            raise HTTPException(status_code=400, detail="Payout membutuhkan approval Super Admin (APPROVED).")
+        payout = c.get("payout_month") or _next_month(period)
+        if _current_month() < payout:
+            raise HTTPException(status_code=400, detail=f"Payout baru dapat diproses pada {payout} (bulan setelah pembayaran lunas).")
     await db.commission_closings.update_one({"period": period}, {"$set": {"status": new_status}})
     if new_status == "PAID":
         await db.commission_lines.update_many({"period": period}, {"$set": {"payment_status": "PAID"}})
@@ -3147,12 +3206,16 @@ async def set_line_adjustment(line_id: str, body: dict, request: Request, user: 
     if not ln:
         raise HTTPException(status_code=404, detail="Line not found")
     c = await _get_closing(ln["period"])
-    if c and c.get("status") in ("CLOSED", "PAID"):
-        raise HTTPException(status_code=400, detail="Closing terkunci, adjustment tidak diizinkan.")
+    if c and c.get("status") == "PAID":
+        raise HTTPException(status_code=400, detail="Closing sudah PAID, adjustment tidak diizinkan.")
+    if c and c.get("status") == "CLOSED" and user["role"] != "super_admin":
+        raise HTTPException(status_code=400, detail="Closing terkunci. Adjustment hanya oleh Super Admin saat approval.")
     adj = float((body or {}).get("adjustment", 0) or 0)
     final = float(ln.get("total_commission") or 0) + adj
     await db.commission_lines.update_one({"_id": ObjectId(line_id)},
         {"$set": {"adjustment": adj, "adjustment_notes": (body or {}).get("notes", ""), "final_commission": final}})
+    tot = sum(float(x.get("final_commission") or 0) for x in await db.commission_lines.find({"period": ln["period"]}).to_list(2000))
+    await db.commission_closings.update_one({"period": ln["period"]}, {"$set": {"total_commission": tot}})
     await log_audit(user, "commission", "adjustment", request, record_id=line_id, new={"adjustment": adj})
     return serialize(await db.commission_lines.find_one({"_id": ObjectId(line_id)}))
 
@@ -3173,15 +3236,107 @@ async def set_line_payment(line_id: str, body: dict, request: Request, user: dic
 async def my_commission(user: dict = Depends(require_permission("commission.view"))):
     now = datetime.now(timezone.utc)
     period = f"{now.year:04d}-{now.month:02d}"
-    lines, _ = await _compute_period(period, only_sales_id=user["_id"])
+    lines, live_items = await _compute_period(period, only_sales_id=user["_id"])
     current = lines[0] if lines else {"period": period, "total_pax": 0, "tier": "-",
                                       "commission_rate": 0, "total_commission": 0}
+    closings = {c["period"]: c for c in await db.commission_closings.find({}).to_list(300)}
+    stored = await db.commission_items.find({"sales_pic_id": user["_id"]}).to_list(5000)
+    if period not in closings:
+        stored = [it for it in stored if it.get("period") != period] + live_items
+    by_booking = {}
+    for it in stored:
+        p = it.get("period")
+        key = (p, it.get("booking_id"))
+        row = by_booking.setdefault(key, {
+            "period": p, "booking_id": it.get("booking_id"), "booking_number": it.get("booking_number"),
+            "customer_name": it.get("customer_name") or "", "package_name": it.get("package_name"),
+            "departure_date": it.get("departure_date") or "",
+            "full_payment_date": it.get("full_payment_date") or it.get("basis_date") or "",
+            "tier": it.get("tier"),
+            "commission_rate": it.get("commission_rate") or it.get("commission_amount") or 0,
+            "commission_month": it.get("commission_month") or p,
+            "payout_month": it.get("payout_month") or _next_month(p), "pax": 0})
+        row["pax"] += 1
+    bookings = []
+    for (p, _bid), row in by_booking.items():
+        row["commission_amount"] = float(row["commission_rate"] or 0) * row["pax"]
+        row["status"] = _commission_status(closings.get(p), None)
+        bookings.append(row)
+    bookings.sort(key=lambda r: (r["payout_month"], r["booking_number"] or ""), reverse=True)
     prev = []
     for ln in await db.commission_lines.find({"sales_pic_id": user["_id"]}).sort("period", -1).to_list(200):
-        c = await _get_closing(ln["period"])
+        c = closings.get(ln["period"])
         if c and c.get("status") in ("APPROVED", "CLOSED", "PAID"):
             prev.append({**serialize(ln), "closing_status": c.get("status")})
-    return {"current": current, "period": period, "previous": prev}
+    return {"current": current, "period": period, "bookings": bookings, "previous": prev}
+
+
+@api_router.get("/commissions/master-packages")
+async def commission_master_packages(user: dict = Depends(require_role("super_admin"))):
+    pkgs = await db.packages.find({}).sort("name", 1).to_list(2000)
+    out = []
+    for p in pkgs:
+        out.append({"id": str(p["_id"]),
+                    "name": p.get("name") or p.get("package_name") or p.get("code") or "(untitled)",
+                    "code": p.get("code") or p.get("package_code") or "",
+                    "product_type": norm_type(p.get("product_type") or ""),
+                    "status": p.get("status")})
+    return out
+
+
+@api_router.get("/commissions/pending-approval")
+async def commission_pending_approval(user: dict = Depends(require_role("super_admin"))):
+    docs = await db.commission_closings.find({"status": {"$in": ["REVIEW", "CLOSED"]}}).sort("period", -1).to_list(200)
+    out = []
+    for c in docs:
+        lines = [serialize(x) for x in await db.commission_lines.find({"period": c["period"]}).sort("total_commission", -1).to_list(1000)]
+        out.append({"closing": serialize(c), "lines": lines})
+    return out
+
+
+@api_router.get("/commissions/accounting-summary")
+async def commission_accounting_summary(user: dict = Depends(require_permission("commission.manage"))):
+    cm = _current_month()
+    closings = await db.commission_closings.find({}).sort("period", -1).to_list(300)
+    groups = {"current": [], "upcoming_payout": [], "pending_approval": [], "paid": []}
+    for c in closings:
+        period = c["period"]
+        payout = c.get("payout_month") or _next_month(period)
+        lines = await db.commission_lines.find({"period": period}).to_list(1000)
+        total = sum(float(l.get("final_commission") or 0) for l in lines)
+        row = {"period": period, "payout_month": payout, "status": c.get("status"),
+               "sa_approval": c.get("sa_approval", "PENDING"), "total_commission": total,
+               "total_pax": c.get("total_pax", 0), "lines": len(lines)}
+        st = c.get("status")
+        if st == "PAID":
+            groups["paid"].append(row)
+        elif st == "CLOSED" and c.get("sa_approval") != "APPROVED":
+            groups["pending_approval"].append(row)
+        elif st == "CLOSED" and c.get("sa_approval") == "APPROVED":
+            groups["upcoming_payout"].append({**row, "payable_now": cm >= payout})
+        else:
+            groups["current"].append(row)
+    return groups
+
+
+@api_router.patch("/commissions/closings/{period}/approval")
+async def set_closing_approval(period: str, body: dict, request: Request, user: dict = Depends(require_role("super_admin"))):
+    c = await _get_closing(period)
+    if not c:
+        raise HTTPException(status_code=404, detail="Closing not found")
+    decision = (body or {}).get("decision")
+    reason = (body or {}).get("reason", "")
+    if decision not in ("APPROVED", "REJECTED", "REVISION"):
+        raise HTTPException(status_code=400, detail="decision must be APPROVED/REJECTED/REVISION")
+    if decision in ("REJECTED", "REVISION") and not reason:
+        raise HTTPException(status_code=400, detail="Reason wajib untuk Reject / Request Revision")
+    if c.get("status") not in ("REVIEW", "CLOSED"):
+        raise HTTPException(status_code=400, detail="Approval hanya untuk closing REVIEW/CLOSED")
+    await db.commission_closings.update_one({"period": period}, {"$set": {
+        "sa_approval": decision, "sa_approval_reason": reason,
+        "sa_approval_by": user["name"], "sa_approval_at": now_iso()}})
+    await log_audit(user, "commission", "sa_approval", request, record_id=period, new={"decision": decision, "reason": reason})
+    return serialize(await _get_closing(period))
 
 
 

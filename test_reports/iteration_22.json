@@ -1,0 +1,31 @@
+{
+  "summary": "Phase 8E — Commission by Package & Monthly Payout tested end-to-end. Backend: 17/17 pytest cases pass covering (a) master-packages endpoint returns {id,name,product_type,code,status} and enforces super_admin RBAC (sales+accounting 403), (b) calculate on a fresh period auto-populates payout_month=next_month & sa_approval=PENDING and moves to REVIEW, (c) commission priority Package > ProductType > Default correctly picks the pkg-A tiered scheme (12 pax @ Rp300k tier) while pkg-B falls back to UMROH default (Rp100k) and DEFAULT ALL scheme is overridden, (d) tiered PER_PAX: rate chosen from tier by TOTAL pax per scheme group (5+4+3=12 -> 10-19 tier), (e) eligibility: PARTIAL/DP booking excluded (0 items generated), (f) PATCH /closings/{p}/status status=PAID gated with 400 when: not-CLOSED, sa_approval!=APPROVED, and current_month<payout_month (2027-03 payout=2027-04 gated), (g) PATCH /closings/{p}/approval requires reason for REJECTED and REVISION (400) but not APPROVED, and rejects invalid decisions, (h) Super Admin can adjust a line even when closing is CLOSED, (i) GET /pending-approval super_admin only, (j) GET /accounting-summary groups CLOSED+APPROVED with future payout into upcoming_payout; sales gets 403 (no commission.manage), (k) scheme create RBAC blocks accounting (super_admin only), (l) sales /commissions/my returns bookings[] with commission_month/payout_month/tier/status per-booking. Frontend: Super Admin /commission shows payout-overview + Commission Master tab with searchable Package combobox (25 pkgs loaded, dropdown option testids present); Approvals /approvals shows tab-commission-approval + commission-approval-table for super admin only. Sales sees /commission MyCommission page with my-bookings-table. Accounting sees payout-overview + tab-schemes but no tab-commission-approval on /approvals (expected).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "SchemesTab (Commission Master)", "issue": "React warning: 'Each child in a list should have a unique key prop' when rendering tiers or scheme rows. Cosmetic but should be fixed by adding a stable key to the mapped children.", "selector": "[data-testid=\"schemes-table\"] / tier rows", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Scheme dialog", "issues": ["Radix Warning: Missing Description/aria-describedby for DialogContent — a11y minor."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_phase8e_commission.py", "/app/test_reports/pytest/phase8e.xml"],
+  "action_items": [
+    "(low) Add unique `key` prop inside SchemesTab list rendering to silence React warning.",
+    "(low) Add DialogDescription (or aria-describedby) to Commission Master dialog for a11y."
+  ],
+  "critical_code_review_comments": [
+    "GET /commissions/master-packages sorts by 'name' but many package documents actually store the display name in 'package_name'; the mongo sort key is inconsistent (works because it falls through) — consider sorting by 'package_name' or using an aggregation with $ifNull to guarantee alphabetical ordering.",
+    "_commission_status returns 'APPROVED' when CLOSED+sa_approval=APPROVED AND payout_month>current_month, while the copy on sales page groups PENDING/PAID; verify that string is what the sales UI expects.",
+    "server.py is 4945 lines — long past the 700-line guideline; extract commission routes to /app/backend/routers/commission.py.",
+    "_compute_period recomputes packages one-by-one per booking (N+1). For large datasets, batch the packages by $in query."
+  ],
+  "updated_files": ["/app/backend/tests/test_phase8e_commission.py"],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "test_credentials": "Super: dedyirawan18@gmail.com/Admin@123; Sales: sales@safarcrm.com/Sales@123; Accounting: accounting@safarcrm.com/Account@123 — all valid.",
+  "seed_data_creation": "Test seeded and cleaned up (via test_zzz_cleanup) prefix P8E-: 4 fully-paid bookings (3 pkg-A totaling 12 pax, 1 pkg-B 6 pax), 1 partial-paid booking (excluded correctly), invoices+payments for PAID basis, and 3 schemes (P8E-DEFAULT ALL@50k, P8E-UMROH@100k, P8E-PKG-A tiered 200k/300k/500k) for period 2027-03.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Phase 8E fully green backend + frontend. Backend regression tests live at /app/backend/tests/test_phase8e_commission.py and cleanup after themselves via test_zzz_cleanup. Existing 2026-08 closing (CLOSED/APPROVED/payout 2026-09) is untouched. Server current month is 2026-08 so PROCESS PAYMENT button on the 2026-08 closing remains gated until 2026-09 by design. Sales /commission renders per-booking table with columns Booking, Customer, Package, Departure, Pax, Full Payment Date, Tier, Commission, Commission Month, Payout Month, Status."
+}

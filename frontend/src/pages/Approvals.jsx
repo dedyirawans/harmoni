@@ -10,7 +10,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { toast } from "sonner";
-import { Loader2, ShieldCheck, XCircle, RotateCcw, Wallet, Ban, Eye } from "lucide-react";
+import { Loader2, ShieldCheck, XCircle, RotateCcw, Wallet, Ban, Eye, Percent } from "lucide-react";
 
 const rp = (v) => "Rp " + (Number(v || 0)).toLocaleString("id-ID");
 const CX_COLORS = { REQUESTED: "bg-amber-50 text-amber-700 border-amber-200", ACCOUNTING_REVIEWED: "bg-sky-50 text-sky-700 border-sky-200", APPROVED: "bg-emerald-50 text-emerald-700 border-emerald-200", REJECTED: "bg-red-50 text-red-700 border-red-200" };
@@ -34,9 +34,11 @@ export default function Approvals() {
         <TabsList data-testid="approval-tabs">
           <TabsTrigger value="cancellation" data-testid="tab-cancellation">Cancellation</TabsTrigger>
           <TabsTrigger value="refund" data-testid="tab-refund">Refund</TabsTrigger>
+          {user.role === "super_admin" && <TabsTrigger value="commission" data-testid="tab-commission-approval">Sales Commission</TabsTrigger>}
         </TabsList>
         <TabsContent value="cancellation"><CancellationList has={has} role={user.role} /></TabsContent>
         <TabsContent value="refund"><RefundList has={has} role={user.role} /></TabsContent>
+        {user.role === "super_admin" && <TabsContent value="commission"><CommissionApprovalTab /></TabsContent>}
       </Tabs>
     </div>
   );
@@ -300,3 +302,92 @@ function RefundDetail({ id, has, onClose, onChanged }) {
 }
 
 const Info = ({ k, v }) => (<div><p className="text-xs uppercase tracking-wide text-slate-400">{k}</p><p className="font-medium text-slate-800">{v || "-"}</p></div>);
+
+
+/* ---------------- SALES COMMISSION APPROVAL (Super Admin) ---------------- */
+function CommissionApprovalTab() {
+  const [rows, setRows] = useState([]);
+  const [sel, setSel] = useState(null);
+  const [reason, setReason] = useState("");
+  const load = () => api.get("/commissions/pending-approval").then((r) => setRows(r.data || [])).catch(() => {});
+  useEffect(() => { load(); }, []);
+  const decide = async (period, decision) => {
+    if ((decision === "REJECTED" || decision === "REVISION") && !reason) return toast.error("Isi alasan dulu");
+    try { await api.patch(`/commissions/closings/${period}/approval`, { decision, reason }); toast.success(`Commission ${decision}`); setReason(""); setSel(null); load(); }
+    catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); }
+  };
+  const adjust = async (lineId, adjustment, adjReason) => {
+    if (!adjReason) return toast.error("Adjustment reason wajib diisi");
+    try { await api.patch(`/commissions/lines/${lineId}/adjustment`, { adjustment: Number(adjustment) || 0, notes: adjReason }); toast.success("Adjustment tersimpan"); load(); setSel(null); }
+    catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); }
+  };
+  return (
+    <Card className="border-slate-200 shadow-sm">
+      <CardHeader className="border-b border-slate-100"><CardTitle className="font-display text-lg flex items-center gap-2"><Percent className="h-5 w-5 text-blue-600" /> Sales Commission Approval</CardTitle></CardHeader>
+      <CardContent className="p-0">
+        <table className="w-full text-sm" data-testid="commission-approval-table">
+          <thead><tr className="bg-blue-600 text-white text-left">
+            <th className="px-3 py-2.5">Period</th><th className="px-3 py-2.5 border-l border-blue-500">Status</th><th className="px-3 py-2.5 border-l border-blue-500">Payout</th>
+            <th className="px-3 py-2.5 border-l border-blue-500">Pax</th><th className="px-3 py-2.5 border-l border-blue-500">Total</th><th className="px-3 py-2.5 border-l border-blue-500">SA Approval</th><th className="px-3 py-2.5 border-l border-blue-500"></th>
+          </tr></thead>
+          <tbody>
+            {rows.length === 0 ? <tr><td colSpan={7} className="px-4 py-8 text-center text-slate-400">Tidak ada commission menunggu approval.</td></tr> :
+              rows.map((r) => { const c = r.closing; return (
+                <tr key={c.period} className="border-t border-slate-100" data-testid={`comm-appr-row-${c.period}`}>
+                  <td className="px-3 py-2.5 font-medium">{c.period}</td>
+                  <td className="px-3 py-2.5 border-l border-slate-100"><Badge className="bg-slate-100 text-slate-600 border-slate-200">{c.status}</Badge></td>
+                  <td className="px-3 py-2.5 border-l border-slate-100">{c.payout_month}</td>
+                  <td className="px-3 py-2.5 border-l border-slate-100">{c.total_pax}</td>
+                  <td className="px-3 py-2.5 border-l border-slate-100 font-semibold">{rp(c.total_commission)}</td>
+                  <td className="px-3 py-2.5 border-l border-slate-100"><Badge className={c.sa_approval === "APPROVED" ? "bg-emerald-50 text-emerald-700 border-emerald-200" : c.sa_approval === "REJECTED" ? "bg-red-50 text-red-700 border-red-200" : c.sa_approval === "REVISION" ? "bg-amber-50 text-amber-700 border-amber-200" : "bg-slate-100 text-slate-500 border-slate-200"}>{c.sa_approval || "PENDING"}</Badge></td>
+                  <td className="px-3 py-2.5 border-l border-slate-100"><Button size="sm" variant="ghost" onClick={() => setSel(r)} data-testid={`comm-appr-open-${c.period}`}><Eye className="h-4 w-4" /></Button></td>
+                </tr>
+              ); })}
+          </tbody>
+        </table>
+      </CardContent>
+      {sel && <CommissionApprovalDetail data={sel} reason={reason} setReason={setReason} onDecide={decide} onAdjust={adjust} onClose={() => { setSel(null); setReason(""); }} />}
+    </Card>
+  );
+}
+
+function CommissionApprovalDetail({ data, reason, setReason, onDecide, onAdjust, onClose }) {
+  const c = data.closing;
+  const [adj, setAdj] = useState({});
+  return (
+    <Dialog open onOpenChange={onClose}>
+      <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto" data-testid="comm-appr-dialog">
+        <DialogHeader><DialogTitle className="flex items-center gap-2">Commission {c.period} <Badge className="bg-slate-100 text-slate-600 border-slate-200">{c.status}</Badge> <span className="text-xs text-slate-400">Payout {c.payout_month}</span></DialogTitle></DialogHeader>
+        <div className="space-y-3">
+          <table className="w-full text-sm border border-slate-100">
+            <thead><tr className="bg-slate-800 text-white text-left"><th className="px-3 py-2">Sales</th><th className="px-3 py-2 border-l border-slate-600">Pax</th><th className="px-3 py-2 border-l border-slate-600">Tier</th><th className="px-3 py-2 border-l border-slate-600">Commission</th><th className="px-3 py-2 border-l border-slate-600">Adjustment</th><th className="px-3 py-2 border-l border-slate-600">Final</th></tr></thead>
+            <tbody>
+              {data.lines.map((l) => (
+                <tr key={l.id} className="border-t border-slate-100" data-testid={`comm-appr-line-${l.sales_pic_id}`}>
+                  <td className="px-3 py-2 font-medium">{l.sales_pic_name}</td>
+                  <td className="px-3 py-2 border-l border-slate-100">{l.total_pax}</td>
+                  <td className="px-3 py-2 border-l border-slate-100">{l.tier}</td>
+                  <td className="px-3 py-2 border-l border-slate-100">{rp(l.total_commission)}</td>
+                  <td className="px-3 py-2 border-l border-slate-100">
+                    <div className="flex items-center gap-1">
+                      <Input type="number" className="w-24 h-8" defaultValue={l.adjustment || 0} onChange={(e) => setAdj({ ...adj, [l.id]: { ...(adj[l.id] || {}), value: e.target.value } })} data-testid={`comm-adj-val-${l.sales_pic_id}`} />
+                      <Input className="w-32 h-8" placeholder="Reason" onChange={(e) => setAdj({ ...adj, [l.id]: { ...(adj[l.id] || {}), reason: e.target.value } })} data-testid={`comm-adj-reason-${l.sales_pic_id}`} />
+                      <Button size="sm" variant="outline" onClick={() => onAdjust(l.id, adj[l.id]?.value ?? l.adjustment, adj[l.id]?.reason)} data-testid={`comm-adj-save-${l.sales_pic_id}`}>Adjust</Button>
+                    </div>
+                  </td>
+                  <td className="px-3 py-2 border-l border-slate-100 font-semibold">{rp(l.final_commission)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div><Label className="text-xs">Reason (untuk Reject / Request Revision)</Label><Textarea rows={2} value={reason} onChange={(e) => setReason(e.target.value)} data-testid="comm-appr-reason" /></div>
+        </div>
+        <DialogFooter className="gap-2">
+          <Button variant="outline" onClick={() => onDecide(c.period, "REVISION")} data-testid="comm-appr-revision"><RotateCcw className="h-4 w-4 mr-1" />Request Revision</Button>
+          <Button variant="outline" className="text-red-600 border-red-200" onClick={() => onDecide(c.period, "REJECTED")} data-testid="comm-appr-reject"><XCircle className="h-4 w-4 mr-1" />Reject</Button>
+          <Button className="bg-emerald-600 hover:bg-emerald-700" onClick={() => onDecide(c.period, "APPROVED")} data-testid="comm-appr-approve"><ShieldCheck className="h-4 w-4 mr-1" />Approve</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
