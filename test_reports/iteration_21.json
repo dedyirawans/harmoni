@@ -1,0 +1,24 @@
+{
+  "summary": "Phase 8D Executive Dashboard tested end-to-end. Backend: 5/5 pytest cases pass (200 + all 13 required keys incl 6-month trend; month filter honored; profitability arithmetic gross_profit=revenue-hpp and gross_margin rounded to 1dp; RBAC 403 for Sales and Accounting). Frontend: Super Admin lands on /dashboard rendering data-testid=executive-dashboard; all 4 KPI groups (exec-sales/financial/profit/tax) render real IDR numbers; all 6 charts render (chart-profit-trend, chart-cashflow, chart-funnel, chart-aging, chart-rev-package, chart-sales-perf); all 6 Company Outstanding tiles (eo-unpaid/overdue/refund/commission/commpayable/tax) present; eo-unpaid navigates to /accounting and eo-refund to /approvals; exec-period-filter is an <input type=month> and re-fetch works when the value is changed. Regression: Sales login shows sales-dashboard (no exec), Accounting login shows accounting-dashboard (no exec).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Executive Dashboard", "issues": ["Recharts logs many 'width(-1) height(-1)' warnings on first render before ResponsiveContainer settles — cosmetic console noise only; charts still paint correctly. Consider setting explicit min-height on ResponsiveContainer wrappers."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_phase8d_executive.py", "/app/test_reports/pytest/phase8d.xml"],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Recharts ResponsiveContainer emits width/height=-1 warnings — add minHeight on parent divs to silence and prevent brief zero-size layout thrash.",
+    "server.py is very large (>4300 lines); Phase 8D endpoint is fine but the module should be split into routers for maintainability."
+  ],
+  "updated_files": ["/app/backend/tests/test_phase8d_executive.py"],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "test_credentials": "Super: dedyirawan18@gmail.com/Admin@123; Sales: sales@safarcrm.com/Sales@123; Accounting: accounting@safarcrm.com/Account@123 (all working).",
+  "seed_data_creation": "None. Used existing seeded data — profitability shows real values (Revenue Rp1.27M, HPP Rp321.6jt, GP Rp946.2jt, GM 74.6%).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Phase 8D Executive Dashboard fully green. Backend endpoint GET /api/executive-dashboard uses require_role('super_admin'); month filter param is 'month' in YYYY-MM. Frontend period filter is a native <input type=month> (not a select) — use fill() not select_option() in Playwright. Existing Sales/Accounting dashboards untouched."
+}

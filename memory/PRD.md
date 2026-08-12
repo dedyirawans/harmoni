@@ -1,5 +1,17 @@
 # Safar Travel CRM — Product Requirements (Living Doc)
 
+## Phase 8D — Super Admin Executive Dashboard (2026-06) — DONE
+- **Executive Dashboard** menggantikan total dashboard SA lama (Dashboard.jsx: sales→SalesDashboard, accounting→AccountingDashboard, else→SuperAdminDashboard.jsx).
+- **Periode**: default bulan berjalan + filter `<input type=month>` (exec-period-filter). Metrik period-scoped (revenue invoice, cash in/out, booking/pax/HPP/gross profit periode) vs kumulatif (receivable, refund, commission payable, outstanding).
+- **KPI Sales**: leads (total/new/qualified/lost), quotation (total/converted/conversion rate), booking (total/pax/value).
+- **KPI Financial**: Revenue (invoice), Cash In, Cash Out, Net Cash Flow, Outstanding Receivable, Refund Paid.
+- **Profitability**: Revenue (booking), HPP/COGS (= package.total_cost × pax), Gross Profit, Gross Margin, Commission Payable. (Seed cost ≈80% harga jual utk 5 package yg di-booking → GM demo 74.6%.)
+- **Tax & Refund**: DPP, PPN, PPh, Tax Payable, Refund pending/approved/outstanding.
+- **Company Outstanding** (drill-down): unpaid/overdue invoice & receivable→/accounting, pending refund→/approvals, pending commission & commission payable→/commission, supplier→/accounting, tax payable→/tax.
+- **Charts** (Recharts): Revenue+HPP+Gross Profit trend 6 bln (ComposedChart), Cash Flow in/out, Lead Funnel, Receivable Aging, Revenue by Package, Sales Performance per PIC.
+- Backend: GET /api/executive-dashboard (require_role('super_admin'); param `month`=YYYY-MM). **Sales & Accounting → 403.**
+- **Tests**: iteration_21.json — backend 5/5 pytest (200 + 13 keys + trend 6 bln + month filter + profitability arithmetic + RBAC 403), frontend 100% (4 KPI groups, 6 charts, 6 outstanding tiles clickable, period filter; regresi Sales/Accounting dashboard tetap). File: test_phase8d_executive.py.
+
 ## Phase 8C — Accounting Dashboard (2026-06) — DONE
 - **Accounting Dashboard** di route `/` (Dashboard.jsx branch `role==='accounting'` → AccountingDashboard.jsx; Sales→SalesDashboard, Super Admin→dashboard lama tak diubah).
 - **KPI**: Money In (revenue/invoice/payment/DP/installment/final), Money Out (expense/supplier/refund/commission payable/operational), Receivable aging (total/current/1-30/31-60/61-90/>90), Refund (requested/pending/approved/paid/outstanding), Tax (DPP/PPN/PPh/tax payable).

@@ -4342,6 +4342,197 @@ async def accounting_dashboard(user: dict = Depends(require_permission("accounti
     }
 
 
+@api_router.get("/executive-dashboard")
+async def executive_dashboard(month: Optional[str] = None, user: dict = Depends(require_role("super_admin"))):
+    from datetime import date
+    today = today_str()
+    td = date.fromisoformat(today)
+    period = month or f"{td.year:04d}-{td.month:02d}"
+
+    leads = await db.leads.find({}).to_list(20000)
+    quotes = await db.quotations.find({}).to_list(20000)
+    bookings = await db.bookings.find({}).to_list(20000)
+    invoices = await db.invoices.find({}).to_list(20000)
+    payments = await db.payments.find({}).to_list(40000)
+    expenses = await db.expenses.find({}).to_list(20000)
+    refunds = await db.refund_requests.find({}).to_list(10000)
+    clines = await db.commission_lines.find({}).to_list(10000)
+    packages = await db.packages.find({}).to_list(5000)
+
+    pkg_cost = {str(p["_id"]): float(p.get("total_cost") or p.get("hpp") or 0) for p in packages}
+
+    def in_period(dt):
+        return (dt or "")[:7] == period
+
+    def bk_hpp(b):
+        return pkg_cost.get(str(b.get("package_id") or ""), 0) * int(b.get("pax") or 0)
+
+    active_stages = {"NEW", "CONTACTED", "QUALIFIED", "QUOTATION", "NEGOTIATION", "BOOKING"}
+    active_bookings = [b for b in bookings if b.get("status") != "CANCELLED"]
+    period_leads = [l for l in leads if in_period(l.get("created_at"))]
+    period_bookings = [b for b in active_bookings if in_period(b.get("created_at"))]
+    period_quotes = [q for q in quotes if in_period(q.get("created_at"))]
+    total_q = len(period_quotes)
+    converted_q = len([q for q in period_quotes if q.get("status") == "ACCEPTED" or q.get("converted_booking_id")])
+    period_pax = sum(int(b.get("pax") or 0) for b in period_bookings)
+    booking_revenue = sum(float(b.get("total") or 0) for b in period_bookings)
+    period_hpp = sum(bk_hpp(b) for b in period_bookings)
+    gross_profit = booking_revenue - period_hpp
+
+    # --- financial (period invoices/payments/expenses) ---
+    period_invoices = [i for i in invoices if in_period(i.get("created_at"))]
+    inv_revenue = sum(float(i.get("total") or 0) for i in period_invoices)
+    dpp = sum(float(i.get("amount") or 0) for i in period_invoices)
+    ppn = sum(float(i.get("tax_amount") or 0) for i in period_invoices)
+    cash_in = sum(float(p.get("amount") or 0) for p in payments if in_period(p.get("payment_date")))
+    cash_out = sum(float(e.get("amount") or 0) for e in expenses if in_period(e.get("date") or e.get("created_at")))
+
+    # --- cumulative receivable aging ---
+    aging = {"current": 0.0, "d1_30": 0.0, "d31_60": 0.0, "d61_90": 0.0, "d90": 0.0}
+    total_receivable = 0.0
+    for i in invoices:
+        out = float(i.get("outstanding") or 0)
+        if out <= 0 or i.get("status") == "Paid":
+            continue
+        total_receivable += out
+        dd = (i.get("due_date") or "")[:10]
+        days = (td - date.fromisoformat(dd)).days if dd else 0
+        if days <= 0:
+            aging["current"] += out
+        elif days <= 30:
+            aging["d1_30"] += out
+        elif days <= 60:
+            aging["d31_60"] += out
+        elif days <= 90:
+            aging["d61_90"] += out
+        else:
+            aging["d90"] += out
+
+    # --- refunds (cumulative) ---
+    refund_paid = sum(float(r.get("refunded_amount") or 0) for r in refunds)
+
+    def rsum(statuses):
+        return sum(float(r.get("proposed_refund") or 0) for r in refunds if r.get("status") in statuses)
+    pending_refund = len([r for r in refunds if r.get("status") in ("CALCULATED", "ACCOUNTING_REVIEWED")])
+    refund_block = {
+        "pending_approval": pending_refund,
+        "approved": rsum(("APPROVED", "PROCESSING", "PARTIALLY_REFUNDED", "REFUNDED")),
+        "paid": refund_paid,
+        "outstanding": rsum(("APPROVED", "PROCESSING", "PARTIALLY_REFUNDED")) - refund_paid,
+    }
+
+    commission_payable = sum(float(c.get("final_commission") or 0) for c in clines if c.get("payment_status") != "PAID")
+    pending_commission = len([c for c in clines if c.get("payment_status") != "PAID"])
+    supplier_pay = sum(float(e.get("amount") or 0) for e in expenses if "supplier" in (e.get("category") or "").lower())
+
+    # --- lead funnel (all) ---
+    idx = {s: i for i, s in enumerate(LEAD_STAGES)}
+
+    def cnt(items, pred):
+        return sum(1 for x in items if pred(x))
+    order = ["QUALIFIED", "QUOTATION", "NEGOTIATION", "BOOKING", "PAID"]
+    funnel = [{"stage": "Lead", "count": len(leads)}]
+    for s in order:
+        si = idx.get(s, 99)
+        funnel.append({"stage": s.title(), "count": cnt(leads, lambda x: idx.get(x.get("status"), -1) >= si and x.get("status") != "LOST")})
+
+    # --- 6-month trend ---
+    months = []
+    y, m = td.year, td.month
+    for i in range(5, -1, -1):
+        mm, yy = m - i, y
+        while mm <= 0:
+            mm += 12
+            yy -= 1
+        months.append(f"{yy:04d}-{mm:02d}")
+    trend = []
+    for mo in months:
+        rev = sum(float(i.get("total") or 0) for i in invoices if (i.get("created_at") or "")[:7] == mo)
+        mb = [b for b in active_bookings if (b.get("created_at") or "")[:7] == mo]
+        hpp_m = sum(bk_hpp(b) for b in mb)
+        bkrev = sum(float(b.get("total") or 0) for b in mb)
+        ci = sum(float(p.get("amount") or 0) for p in payments if (p.get("payment_date") or "")[:7] == mo)
+        co = sum(float(e.get("amount") or 0) for e in expenses if (e.get("date") or e.get("created_at") or "")[:7] == mo)
+        trend.append({"month": mo, "revenue": rev, "hpp": hpp_m, "gross_profit": bkrev - hpp_m, "cash_in": ci, "cash_out": co})
+
+    # --- revenue by package (period) ---
+    rev_pkg = {}
+    for i in period_invoices:
+        n = i.get("package_name") or "—"
+        rev_pkg[n] = rev_pkg.get(n, 0) + float(i.get("total") or 0)
+    revenue_by_package = sorted([{"package": k, "value": v} for k, v in rev_pkg.items()], key=lambda x: -x["value"])[:8]
+
+    # --- sales by person (period) ---
+    by_sales = {}
+    for b in period_bookings:
+        n = b.get("sales_name") or "—"
+        by_sales.setdefault(n, {"sales": n, "bookings": 0, "pax": 0, "value": 0})
+        by_sales[n]["bookings"] += 1
+        by_sales[n]["pax"] += int(b.get("pax") or 0)
+        by_sales[n]["value"] += float(b.get("total") or 0)
+    sales_performance = sorted(by_sales.values(), key=lambda x: -x["value"])[:8]
+
+    # payment status counts (cumulative)
+    ps = {"Paid": 0, "Partial": 0, "Unpaid": 0, "Overdue": 0}
+    for i in invoices:
+        st = i.get("status", "Unpaid")
+        dd = (i.get("due_date") or "")[:10]
+        if st != "Paid" and dd and dd < today:
+            ps["Overdue"] += 1
+        ps[st if st in ps else "Unpaid"] = ps.get(st if st in ps else "Unpaid", 0) + 1
+
+    return {
+        "period": period,
+        "sales": {
+            "leads_total": len(period_leads),
+            "leads_new": cnt(period_leads, lambda x: x.get("status") == "NEW"),
+            "leads_qualified": cnt(period_leads, lambda x: x.get("status") == "QUALIFIED"),
+            "leads_lost": cnt(period_leads, lambda x: x.get("status") == "LOST"),
+            "quotation_total": total_q,
+            "quotation_converted": converted_q,
+            "conversion_rate": round(converted_q / total_q * 100, 1) if total_q else 0,
+            "booking_total": len(period_bookings),
+            "total_pax": period_pax,
+            "booking_revenue": booking_revenue,
+        },
+        "financial": {
+            "revenue": inv_revenue,
+            "cash_in": cash_in,
+            "cash_out": cash_out,
+            "net_cash_flow": cash_in - cash_out,
+            "outstanding_receivable": total_receivable,
+            "refund_paid": refund_paid,
+        },
+        "profitability": {
+            "revenue": booking_revenue,
+            "hpp": period_hpp,
+            "gross_profit": gross_profit,
+            "gross_margin": round(gross_profit / booking_revenue * 100, 1) if booking_revenue else 0,
+            "commission_payable": commission_payable,
+        },
+        "tax": {"dpp": dpp, "ppn": ppn, "pph": 0, "tax_payable": ppn},
+        "refund": refund_block,
+        "trend": trend,
+        "funnel": funnel,
+        "receivable_aging": {"total": total_receivable, **aging},
+        "revenue_by_package": revenue_by_package,
+        "sales_performance": sales_performance,
+        "payment_status": ps,
+        "outstanding": {
+            "unpaid_invoice": len([i for i in invoices if i.get("status") == "Unpaid"]),
+            "overdue_invoice": ps["Overdue"],
+            "outstanding_receivable": total_receivable,
+            "pending_refund": pending_refund,
+            "pending_commission": pending_commission,
+            "outstanding_supplier": supplier_pay,
+            "tax_payable": ppn,
+            "commission_payable": commission_payable,
+        },
+    }
+
+
+
+
 app.include_router(api_router)
 
 app.add_middleware(
