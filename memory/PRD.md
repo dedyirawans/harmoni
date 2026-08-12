@@ -1,5 +1,12 @@
 # Safar Travel CRM — Product Requirements (Living Doc)
 
+## PHASE 9I Enhancements Batch 2 (2026-06) — DONE (Verified iteration_34, Frontend 100% + backend curl)
+- **Manifest Excel (.xlsx)**: `GET /operations/departures/{did}/manifest.xlsx` (openpyxl; role super_admin/accounting). Tombol "Excel" + "PDF" di detail departure.
+- **Sales Alerts Widget**: `GET /operations/sales-alerts` (owner-scoped, booking sales ≤60 hari dengan issue payment/dokumen/paspor) → `SalesAlertsWidget` di Sales Dashboard; klik → /booking/{id}.
+- **Passenger Filter**: filter Payment (PAID/PARTIAL/UNPAID) & Document (COMPLETE/INCOMPLETE) di tab Passengers (komponen `PassengersTab`), dengan penghitung hasil.
+- Non-blocking: Recharts ResponsiveContainer width/height(-1) warning (kosmetik, pre-existing).
+
+
 ## PHASE 9I Enhancements (2026-06) — DONE (Verified iteration_33 + re-fix)
 - **Room Type dropdown** (SINGLE/DOUBLE/TRIPLE/QUAD) di tab Rooming (Operations.jsx).
 - **Unduh Manifest PDF**: `GET /operations/departures/{did}/manifest.pdf` (reportlab; role super_admin/accounting; token via header/?auth) → tabel penumpang (nama, L/P, paspor±EXP, room/group/bus, payment, docs). Tombol `download-manifest-btn` di detail departure.

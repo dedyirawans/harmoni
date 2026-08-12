@@ -1,0 +1,28 @@
+{
+  "summary": "Frontend testing for Phase 9I batch 2 (3 items): Excel manifest download, Passenger filters (Payment/Document), and Sales Alerts widget. All 3 features PASS end-to-end.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Dashboard (multiple)", "issues": ["Console warning: Recharts ResponsiveContainer receives width(-1)/height(-1) repeatedly on dashboard load — non-blocking but should set explicit minHeight."]}
+    ]
+  },
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Recharts container width/height(-1) warnings persist; add minHeight/minWidth to ResponsiveContainer parents."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "N/A (skipped per request)", "frontend": "100%"},
+  "test_credentials": "Super Admin dedyirawan18@gmail.com/Admin@123 and Sales sales@safarcrm.com/Sales@123 both work.",
+  "seed_data_creation": "None",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Passenger filter dropdowns are shadcn Radix Select (not native <select>). Use click on data-testid then click role=option with option text (Semua/PAID/PARTIAL/UNPAID/COMPLETE/INCOMPLETE). Verified: Payment=PAID => 0/1 jamaah rows hidden; Payment=PARTIAL => Test Jamaah 9F visible again; Document=INCOMPLETE => still visible (1/1). Excel download works — file manifest_<did>.xlsx downloaded. Sales alerts widget renders BKG-00016 with Belum lunas + Dok. kurang badges and navigates to /booking/6a7c6911f21f8ffb9cb49099.",
+  "detailed_results": {
+    "excel_manifest": "PASS — download-manifest-btn (PDF) & download-manifest-xlsx-btn (Excel) both present in header. Clicking Excel triggered download of manifest_6a7a9abd743c2458fcee9eba.xlsx (no error).",
+    "passenger_filters": "PASS — data-testid=passenger-filter-payment, passenger-filter-document, passenger-filter-count present. Initial count '1 / 1 jamaah'. Payment=PAID => '0 / 1 jamaah', row hidden. Payment=PARTIAL => '1 / 1 jamaah', Test Jamaah 9F visible. Document=INCOMPLETE => '1 / 1 jamaah', row still visible.",
+    "sales_alerts_widget": "PASS — sales-alerts-widget present with 1 item (sales-alert-6a7c6911f21f8ffb9cb49099) showing 'Budi Test · BKG-00016', 'Belum lunas' & 'Dok. kurang' badges. Click navigates to /booking/6a7c6911f21f8ffb9cb49099 correctly."
+  }
+}

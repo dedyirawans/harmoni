@@ -2372,6 +2372,82 @@ async def operations_alerts_summary(user: dict = Depends(require_role("super_adm
     return out
 
 
+@api_router.get("/operations/departures/{did}/manifest.xlsx")
+async def departure_manifest_xlsx(did: str, request: Request, auth: str = Query(None)):
+    auth_h = request.headers.get("authorization") or ""
+    token = auth_h[7:] if auth_h.startswith("Bearer ") else auth
+    user = await user_from_token(token) if token else None
+    if not user or user.get("role") not in ("super_admin", "accounting"):
+        raise HTTPException(status_code=403, detail="403 Forbidden")
+    dep, pkg, passengers = await _op_departure_passengers(did)
+    if not dep:
+        raise HTTPException(status_code=404, detail="Departure not found")
+    import io
+    import openpyxl
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Manifest"
+    ws.append([f"Manifest — {(pkg or {}).get('package_name', '')}"])
+    ws.append([f"{(dep.get('departure_date') or '')[:10]} s/d {(dep.get('return_date') or '')[:10]} | Flight {dep.get('flight') or '-'} | Hotel {dep.get('hotel') or '-'}"])
+    ws.append([])
+    ws.append(["No", "Nama", "L/P", "Paspor", "Paspor Exp", "Room Type", "Room", "Group", "Bus", "Payment", "Docs"])
+    for i, p in enumerate(passengers, 1):
+        ws.append([i, p["full_name"] or "", p["gender"] or "", p["passport_number"] or "", p["passport_expiry"] or "",
+                   p["room_type"] or "", p["room"] or "", p["group"] or "", p["bus"] or "", p["payment_status"], p["document_status"]])
+    buf = io.BytesIO()
+    wb.save(buf)
+    return Response(content=buf.getvalue(), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": f"attachment; filename=manifest_{did}.xlsx"})
+
+
+@api_router.get("/operations/sales-alerts")
+async def sales_departure_alerts(user: dict = Depends(require_permission("sales.view"))):
+    from datetime import date, timedelta
+    today = date.today()
+    end = (today + timedelta(days=60)).isoformat()
+    q = owner_filter(user)
+    q["status"] = {"$ne": "CANCELLED"}
+    bookings = await db.bookings.find(q).to_list(1000)
+    out = []
+    for b in bookings:
+        did = b.get("departure_id")
+        dep = await db.departures.find_one({"_id": ObjectId(did)}) if did and ObjectId.is_valid(did) else None
+        if not dep:
+            continue
+        dep_date = (dep.get("departure_date") or "")[:10]
+        if not (today.isoformat() <= dep_date <= end):
+            continue
+        pkg = await db.packages.find_one({"_id": ObjectId(dep["package_id"])}) if ObjectId.is_valid(dep.get("package_id") or "") else None
+        required = _required_docs((pkg or {}).get("product_type", "TOUR"))
+        invs = await db.invoices.find({"booking_id": str(b["_id"])}).to_list(50)
+        tot = sum(float(i.get("total") or i.get("amount") or 0) for i in invs)
+        pd = sum(float(i.get("paid_amount") or 0) for i in invs)
+        outstanding = max(tot - pd, 0)
+        pstat = "PAID" if (invs and tot > 0 and pd >= tot) else ("PARTIAL" if pd > 0 else "UNPAID")
+        travelers = await db.travelers.find({"booking_id": str(b["_id"])}).to_list(200)
+        docs_missing = pexp = 0
+        for t in travelers:
+            tdocs = await db.documents.find({"traveler_id": str(t["_id"]), "is_deleted": {"$ne": True}}).to_list(50)
+            have = {x.get("doc_type") for x in tdocs}
+            if any(r not in have for r in required):
+                docs_missing += 1
+            pe = (t.get("passport_expiry") or "")[:10]
+            if pe and dep_date and pe < dep_date:
+                pexp += 1
+        issues = []
+        if outstanding > 0:
+            issues.append("PAYMENT_DUE")
+        if docs_missing > 0:
+            issues.append("DOCS_INCOMPLETE")
+        if pexp > 0:
+            issues.append("PASSPORT_EXPIRED")
+        if issues:
+            out.append({"booking_id": str(b["_id"]), "booking_number": b.get("booking_number"), "customer_name": b.get("customer_name"),
+                        "package_name": (pkg or {}).get("package_name", ""), "departure_date": dep_date, "payment_status": pstat,
+                        "outstanding": outstanding, "docs_missing": docs_missing, "passport_expired": pexp, "issues": issues})
+    return out
+
+
 # ---- Departures ----
 @api_router.get("/packages/{pid}/departures")
 async def package_departures(pid: str, user: dict = Depends(require_any_permission("product.view", "packages.view", "departures.view", "hpp.view"))):

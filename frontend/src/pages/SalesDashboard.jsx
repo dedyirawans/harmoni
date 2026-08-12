@@ -6,6 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Loader2, TrendingUp, Users2, FileText, CalendarCheck, Bell, Wallet } from "lucide-react";
 import ExpiringDocsWidget from "@/components/ExpiringDocsWidget";
+import SalesAlertsWidget from "@/components/SalesAlertsWidget";
 import {
   ResponsiveContainer, LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid, Cell,
 } from "recharts";
@@ -128,6 +129,7 @@ export default function SalesDashboard() {
       </Card>
 
       <ExpiringDocsWidget within={90} />
+      <SalesAlertsWidget />
     </div>
   );
 }

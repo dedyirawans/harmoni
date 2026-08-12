@@ -103,10 +103,16 @@ function DepartureDetail({ detail, onReload }) {
           <h2 className="font-display text-xl font-bold text-slate-900">{dep.package_name}</h2>
           <p className="text-sm text-slate-500">{(dep.departure_date || "").slice(0, 10)} → {(dep.return_date || "").slice(0, 10)} · {dep.product_type} · Flight {dep.flight || "—"} · Hotel {dep.hotel || "—"}</p>
         </div>
-        <Button size="sm" variant="outline" data-testid="download-manifest-btn"
-          onClick={() => window.open(`${API}/operations/departures/${dep.id || dep._id}/manifest.pdf?auth=${localStorage.getItem("token")}`, "_blank")}>
-          <Download className="h-4 w-4 mr-1" />Unduh Manifest
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button size="sm" variant="outline" data-testid="download-manifest-btn"
+            onClick={() => window.open(`${API}/operations/departures/${dep.id || dep._id}/manifest.pdf?auth=${localStorage.getItem("token")}`, "_blank")}>
+            <Download className="h-4 w-4 mr-1" />PDF
+          </Button>
+          <Button size="sm" variant="outline" data-testid="download-manifest-xlsx-btn"
+            onClick={() => window.open(`${API}/operations/departures/${dep.id || dep._id}/manifest.xlsx?auth=${localStorage.getItem("token")}`, "_blank")}>
+            <Download className="h-4 w-4 mr-1" />Excel
+          </Button>
+        </div>
       </div>
 
       {alerts.length > 0 && (
@@ -141,26 +147,7 @@ function DepartureDetail({ detail, onReload }) {
         </TabsContent>
 
         <TabsContent value="passengers" className="pt-4">
-          <div className="overflow-x-auto">
-            <Table data-testid="passenger-table">
-              <TableHeader><TableRow className="bg-slate-50">
-                <TableHead>Customer</TableHead><TableHead>Gender</TableHead><TableHead>Passport</TableHead>
-                <TableHead>Payment</TableHead><TableHead>Document</TableHead><TableHead>Booking</TableHead>
-              </TableRow></TableHeader>
-              <TableBody>
-                {passengers.map((p) => (
-                  <TableRow key={p.traveler_id} data-testid={`passenger-${p.traveler_id}`}>
-                    <TableCell><div className="font-medium text-slate-900">{p.full_name}</div><div className="text-xs text-slate-400">{p.customer_name}</div></TableCell>
-                    <TableCell className="text-slate-600">{p.gender || "—"}</TableCell>
-                    <TableCell><div className="text-slate-600">{p.passport_number || "—"}</div>{p.passport_expired && <Badge variant="outline" className="bg-red-50 text-red-700 border-red-200 text-[10px]">EXPIRED</Badge>}</TableCell>
-                    <TableCell><Badge variant="outline" className={PAY[p.payment_status]}>{p.payment_status}</Badge></TableCell>
-                    <TableCell><Badge variant="outline" className={p.document_status === "COMPLETE" ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-red-50 text-red-700 border-red-200"} title={p.missing_docs.join(", ")}>{p.document_status}</Badge></TableCell>
-                    <TableCell><Badge variant="outline" className="bg-slate-100 text-slate-600">{p.booking_status}</Badge></TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
+          <PassengersTab passengers={passengers} />
         </TabsContent>
 
         <TabsContent value="rooming" className="pt-4">
@@ -168,6 +155,43 @@ function DepartureDetail({ detail, onReload }) {
         </TabsContent>
       </Tabs>
     </Card>
+  );
+}
+
+function PassengersTab({ passengers }) {
+  const [pay, setPay] = useState("all");
+  const [docf, setDocf] = useState("all");
+  const rows = passengers.filter((p) => (pay === "all" || p.payment_status === pay) && (docf === "all" || p.document_status === docf));
+  return (
+    <div>
+      <div className="flex gap-3 mb-3 flex-wrap">
+        <Select value={pay} onValueChange={setPay}><SelectTrigger className="h-8 w-40" data-testid="passenger-filter-payment"><SelectValue placeholder="Payment" /></SelectTrigger>
+          <SelectContent className="bg-white">{["all", "PAID", "PARTIAL", "UNPAID"].map((x) => <SelectItem key={x} value={x}>{x === "all" ? "Semua Payment" : x}</SelectItem>)}</SelectContent></Select>
+        <Select value={docf} onValueChange={setDocf}><SelectTrigger className="h-8 w-44" data-testid="passenger-filter-document"><SelectValue placeholder="Document" /></SelectTrigger>
+          <SelectContent className="bg-white">{["all", "COMPLETE", "INCOMPLETE"].map((x) => <SelectItem key={x} value={x}>{x === "all" ? "Semua Document" : x}</SelectItem>)}</SelectContent></Select>
+        <span className="text-xs text-slate-400 self-center" data-testid="passenger-filter-count">{rows.length} / {passengers.length} jamaah</span>
+      </div>
+      <div className="overflow-x-auto">
+        <Table data-testid="passenger-table">
+          <TableHeader><TableRow className="bg-slate-50">
+            <TableHead>Customer</TableHead><TableHead>Gender</TableHead><TableHead>Passport</TableHead>
+            <TableHead>Payment</TableHead><TableHead>Document</TableHead><TableHead>Booking</TableHead>
+          </TableRow></TableHeader>
+          <TableBody>
+            {rows.map((p) => (
+              <TableRow key={p.traveler_id} data-testid={`passenger-${p.traveler_id}`}>
+                <TableCell><div className="font-medium text-slate-900">{p.full_name}</div><div className="text-xs text-slate-400">{p.customer_name}</div></TableCell>
+                <TableCell className="text-slate-600">{p.gender || "—"}</TableCell>
+                <TableCell><div className="text-slate-600">{p.passport_number || "—"}</div>{p.passport_expired && <Badge variant="outline" className="bg-red-50 text-red-700 border-red-200 text-[10px]">EXPIRED</Badge>}</TableCell>
+                <TableCell><Badge variant="outline" className={PAY[p.payment_status]}>{p.payment_status}</Badge></TableCell>
+                <TableCell><Badge variant="outline" className={p.document_status === "COMPLETE" ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-red-50 text-red-700 border-red-200"} title={p.missing_docs.join(", ")}>{p.document_status}</Badge></TableCell>
+                <TableCell><Badge variant="outline" className="bg-slate-100 text-slate-600">{p.booking_status}</Badge></TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </div>
+    </div>
   );
 }
 
