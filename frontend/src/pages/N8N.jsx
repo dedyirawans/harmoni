@@ -61,7 +61,7 @@ export default function N8N() {
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
           <div className="h-11 w-11 rounded-xl bg-slate-900 flex items-center justify-center"><Zap className="h-6 w-6 text-white" /></div>
-          <div><h1 className="font-display text-3xl font-bold text-slate-900">N8N Automation</h1>
+          <div><h1 className="font-display text-3xl font-bold text-slate-900">AI Automation</h1>
             <p className="text-slate-500 mt-0.5">Monitoring komunikasi customer &amp; order AUTO SALES.</p></div>
         </div>
         <div className="flex gap-2">

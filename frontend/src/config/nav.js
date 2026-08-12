@@ -1,7 +1,7 @@
 import {
   LayoutDashboard, Users2, Briefcase, Package, CalendarCheck, Calculator,
   Receipt, Percent, FileBarChart, Plug, UserCog, Settings, ScrollText,
-  Plane, PlaneTakeoff, Bell, Wallet, TrendingUp, ListChecks, FileText, ShieldCheck, CheckSquare, Building2, Activity,
+  Plane, PlaneTakeoff, Bell, Wallet, TrendingUp, ListChecks, FileText, ShieldCheck, CheckSquare, Building2, Activity, Bot,
 } from "lucide-react";
 
 // Route -> permission required (mirrors backend). null = any authenticated user.
@@ -51,10 +51,9 @@ export const MENUS = {
     { label: "Suppliers", path: "/suppliers", icon: Building2 },
     { label: "Tax", path: "/tax", icon: Receipt },
     { label: "Commission", path: "/commission", icon: Percent },
-    { label: "Approval", path: "/approvals", icon: ShieldCheck },
-    { label: "Approval Center", path: "/approval-center", icon: ShieldCheck },
+    { label: "Approval", path: "/approval-center", icon: ShieldCheck },
     { label: "Reports", path: "/reports", icon: FileBarChart },
-    { label: "N8N", path: "/n8n", icon: Plug },
+    { label: "AI Automation", path: "/n8n", icon: Bot },
     { label: "Integration", path: "/integration", icon: Plug },
     { label: "User Management", path: "/users", icon: UserCog },
     { label: "Settings", path: "/settings", icon: Settings },
@@ -83,8 +82,7 @@ export const MENUS = {
     { label: "Operations", path: "/operations", icon: PlaneTakeoff },
     { label: "Suppliers", path: "/suppliers", icon: Building2 },
     { label: "My Tasks", path: "/tasks", icon: CheckSquare },
-    { label: "Cancellation & Refund", path: "/approvals", icon: ShieldCheck },
-    { label: "Approval Center", path: "/approval-center", icon: ShieldCheck },
+    { label: "Approval", path: "/approval-center", icon: ShieldCheck },
     { label: "Transactions", path: "/transactions", icon: Receipt },
     { label: "Costing / HPP", path: "/hpp", icon: TrendingUp },
     { label: "Packages", path: "/products", icon: Package },

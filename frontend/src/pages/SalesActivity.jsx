@@ -36,7 +36,9 @@ const RANK_TABS = [
 export default function SalesActivity() {
   const { user } = useAuth();
   const isAdmin = user?.role === "super_admin";
-  const [month, setMonth] = useState("");
+  const now = new Date();
+  const defMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  const [month, setMonth] = useState(defMonth);
   const [salesId, setSalesId] = useState("all");
   const [perf, setPerf] = useState(null);
   const [feed, setFeed] = useState(null);

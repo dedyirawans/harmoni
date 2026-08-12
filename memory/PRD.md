@@ -1,5 +1,10 @@
 # Safar Travel CRM — Product Requirements (Living Doc)
 
+## PHASE 9K.2 — Menu tweaks + Target default (2026-06) — DONE
+- Menu **Approval** & **Approval Center** digabung jadi satu "Approval" → `/approval-center` (hub terpadu; rute `/approvals` tetap untuk aksi review/link "Open"). Berlaku di menu super_admin & accounting.
+- Menu & judul halaman **N8N** diganti jadi **AI Automation** (icon Bot).
+- **Sales Activity**: default periode = bulan berjalan sehingga kartu "Target Bulanan" + tombol "Set Target" (Super Admin) dan progress langsung tampil tanpa perlu pilih bulan manual.
+
 ## PHASE 9K.1 — Dashboard Activity Widget + Monthly Targets (2026-06) — DONE (Verified curl + screenshots)
 - **Dashboard Widget** (`SalesActivityWidget.jsx`): di Super Admin Executive Dashboard — ringkasan bulan ini: total aktivitas, Top 3 Activity Score, Top 3 Revenue; link ke `/sales-activity`.
 - **Target Bulanan**: koleksi `sales_targets` {sales_id, period(YYYY-MM), revenue_target, pax_target}. `GET /api/sales/targets?period=` (owner-scoped), `PUT /api/sales/targets` (super_admin only; sales→403 terverifikasi).
