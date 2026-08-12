@@ -72,8 +72,16 @@ export default function BookingDetail() {
   const recSched = async (s) => {
     const amt = Number(window.prompt(`Bayar untuk #${s.payment_number} (sisa Rp ${s.outstanding}):`, s.outstanding) || 0);
     if (amt <= 0) return;
-    try { await api.patch(`/bookings/${id}/schedule/${s.payment_number}/record`, { amount: amt }); toast.success("Pembayaran dicatat"); load(); }
-    catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); }
+    try {
+      const r = await api.patch(`/bookings/${id}/schedule/${s.payment_number}/record`, { amount: amt });
+      toast.success("Pembayaran dicatat");
+      if (r.data?.last_receipt_id) openReceipt(r.data.last_receipt_id);
+      load();
+    } catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); }
+  };
+  const openReceipt = async (rid) => {
+    try { const res = await api.get(`/receipts/${rid}/pdf`, { responseType: "blob" }); window.open(URL.createObjectURL(res.data), "_blank"); }
+    catch { toast.error("Gagal membuka kwitansi"); }
   };
 
   return (
@@ -178,7 +186,10 @@ export default function BookingDetail() {
                     <td className="py-2">{s.payment_number}</td><td>{s.label}</td><td>{(s.due_date || "").slice(0, 10)}</td>
                     <td>{fmtIDR(s.amount)}</td><td>{fmtIDR(s.paid_amount)}</td><td>{fmtIDR(s.outstanding)}</td>
                     <td><Badge variant="outline" className={SCHED_COLORS[s.status]}>{s.status}</Badge></td>
-                    <td className="text-right">{canPay && !["PAID", "CANCELLED"].includes(s.status) && <Button size="sm" variant="outline" onClick={() => recSched(s)} data-testid={`record-schedule-${s.payment_number}`}>Record</Button>}</td>
+                    <td className="text-right space-x-1">
+                      {s.last_receipt_id && <Button size="sm" variant="ghost" className="text-blue-600" onClick={() => openReceipt(s.last_receipt_id)} data-testid={`receipt-${s.payment_number}`}>Kwitansi</Button>}
+                      {canPay && !["PAID", "CANCELLED"].includes(s.status) && <Button size="sm" variant="outline" onClick={() => recSched(s)} data-testid={`record-schedule-${s.payment_number}`}>Record</Button>}
+                    </td>
                   </tr>))}
                 </tbody>
               </table>

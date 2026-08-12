@@ -7,7 +7,8 @@
 - **Full Payment → Commission Eligibility**: saat outstanding total = 0 → payment_status=PAID, full_payment_date=today, commission_eligible=True + notifikasi COMMISSION_ELIGIBLE ke sales (mengikuti Full Payment Date; payout month rule via engine existing).
 - **Reminder** (cron `_run_auto_scan`): per item schedule pada 7/3/1 hari sebelum, due date, & overdue → notifikasi ke Sales + kirim WhatsApp via n8n (event `payment.reminder`) + **tercatat di Conversation History** (OUTBOUND SYSTEM/AUTO), idempotent per hari.
 - **Security**: Sales tak bisa ubah amount/plan (403); Accounting mengelola; Super Admin adjustment via Approval Center (Phase 9C).
-- **UI**: tab "Payment Schedule" di BookingDetail (ringkasan Total/Paid/Outstanding, tabel jadwal + status, Generate Plan & Record per item untuk yang berhak).
+- **Kwitansi PDF otomatis**: tiap pencatatan cicilan membuat kwitansi (`KW-xxxxx`) di koleksi `schedule_payments`; endpoint `GET /api/receipts/{id}/pdf` (perm booking.view) meng-render PDF (reportlab: no kwitansi, tanggal, booking, customer, termin, jumlah dibayar, sisa termin, sisa total, penerima). Frontend membuka PDF otomatis saat record + tombol **Kwitansi** per termin untuk unduh ulang.
+- **UI**: tab "Payment Schedule" di BookingDetail (ringkasan Total/Paid/Outstanding, tabel jadwal + status, Generate Plan & Record + Kwitansi per item untuk yang berhak).
 - **Verified (curl + screenshot)**: DP auto-calc, OVERDUE/PENDING auto, Sales 403, record→PARTIAL_PAID, lunas→PAID+commission_eligible+full_payment_date.
 
 - **Booking Timeline** (`GET /api/bookings/{id}/timeline`): jalur normal Lead→Quotation→Quotation Converted→Booking→Payment→Documents→Departure→Completed; jalur cancellation Booking→Cancellation Requested→Super Admin Approval→Refund Calculation→Refund Approved→Refund Paid. Tiap step punya flag done + tanggal/detail. UI: tab "Timeline" di BookingDetail (stepper vertikal + Status Audit).

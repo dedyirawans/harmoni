@@ -2831,9 +2831,56 @@ async def record_schedule_payment(bid: str, pnum: int, body: dict, request: Requ
             hist = b.get("status_history", []) + [{"old_status": "CONFIRMED", "new_status": "PARTIAL_PAID", "user": user["name"], "role": user["role"], "reason": "DP/cicilan diterima", "at": now_iso()}]
             upd["status"] = "PARTIAL_PAID"
             upd["status_history"] = hist
+    rnum = await next_number("KW", db.schedule_payments, "receipt_number")
+    rec = {"receipt_number": rnum, "booking_id": bid, "booking_number": b.get("booking_number"),
+           "customer_id": b.get("customer_id"), "customer_name": b.get("customer_name", ""),
+           "payment_number": int(pnum), "label": it.get("label", ""), "amount": amount,
+           "paid_after": it["paid_amount"], "outstanding_after": it["outstanding"],
+           "outstanding_total": outstanding, "recorded_by": user["name"], "created_at": now_iso()}
+    rid = str((await db.schedule_payments.insert_one(rec)).inserted_id)
+    it["last_receipt_id"] = rid
+    it["last_receipt_number"] = rnum
+    upd["payment_schedule"] = sched
     await db.bookings.update_one({"_id": ObjectId(bid)}, {"$set": upd})
-    await log_audit(user, "booking", "schedule_payment", request, record_id=bid, new={"payment_number": pnum, "amount": amount, "outstanding_total": outstanding})
-    return serialize(await db.bookings.find_one({"_id": ObjectId(bid)}))
+    await log_audit(user, "booking", "schedule_payment", request, record_id=bid, new={"payment_number": pnum, "amount": amount, "receipt": rnum})
+    out_doc = serialize(await db.bookings.find_one({"_id": ObjectId(bid)}))
+    out_doc["last_receipt_id"] = rid
+    out_doc["last_receipt_number"] = rnum
+    return out_doc
+
+
+@api_router.get("/receipts/{rid}/pdf")
+async def receipt_pdf(rid: str, user: dict = Depends(require_permission("booking.view"))):
+    r = await db.schedule_payments.find_one({"_id": ObjectId(rid)})
+    if not r:
+        raise HTTPException(status_code=404, detail="Kwitansi tidak ditemukan")
+    settings = await get_settings_dict()
+    company = (settings.get("company") or {}).get("name", "Travel CRM")
+
+    def rp(n):
+        return "Rp " + f"{float(n or 0):,.0f}".replace(",", ".")
+
+    buf = BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4, topMargin=20 * mm, bottomMargin=20 * mm)
+    styles = getSampleStyleSheet()
+    rows = [["No. Kwitansi", r.get("receipt_number", "")],
+            ["Tanggal", (r.get("created_at") or "")[:16].replace("T", " ")],
+            ["Booking", r.get("booking_number", "")],
+            ["Customer", r.get("customer_name", "")],
+            ["Termin", f"#{r.get('payment_number')} {r.get('label', '')}"],
+            ["Jumlah Dibayar", rp(r.get("amount"))],
+            ["Sisa Termin", rp(r.get("outstanding_after"))],
+            ["Sisa Total Booking", rp(r.get("outstanding_total"))],
+            ["Diterima oleh", r.get("recorded_by", "")]]
+    t = Table(rows, colWidths=[55 * mm, 110 * mm])
+    t.setStyle(TableStyle([("GRID", (0, 0), (-1, -1), 0.5, colors.grey), ("BACKGROUND", (0, 0), (0, -1), colors.whitesmoke),
+                           ("FONTSIZE", (0, 0), (-1, -1), 10), ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                           ("TOPPADDING", (0, 0), (-1, -1), 6), ("BOTTOMPADDING", (0, 0), (-1, -1), 6)]))
+    el = [Paragraph(f"<b>{company}</b>", styles["Title"]), Paragraph("KWITANSI PEMBAYARAN", styles["Heading2"]),
+          Spacer(1, 8), t, Spacer(1, 20), Paragraph("Terima kasih atas pembayaran Anda.", styles["Normal"])]
+    doc.build(el)
+    return Response(content=buf.getvalue(), media_type="application/pdf",
+                    headers={"Content-Disposition": f"inline; filename=kwitansi-{r.get('receipt_number', '')}.pdf"})
 
 
 # ---------- Travelers ----------
