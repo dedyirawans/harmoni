@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import ExpiringDocsWidget from "@/components/ExpiringDocsWidget";
 import DepartureAlertsWidget from "@/components/DepartureAlertsWidget";
+import SalesActivityWidget from "@/components/SalesActivityWidget";
 import {
   ResponsiveContainer, ComposedChart, LineChart, Line, BarChart, Bar, Area,
   XAxis, YAxis, Tooltip, CartesianGrid, Cell, Legend,
@@ -216,6 +217,7 @@ export default function SuperAdminDashboard() {
             </ChartCard>
           </div>
 
+          <SalesActivityWidget />
           <ExpiringDocsWidget within={90} />
       <DepartureAlertsWidget />
         </>

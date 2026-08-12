@@ -1812,7 +1812,12 @@ async def list_sales_activities(sales_id: Optional[str] = None, activity_type: O
 
 @api_router.get("/sales/performance")
 async def sales_performance(frm: Optional[str] = None, to: Optional[str] = None, sales_id: Optional[str] = None,
-                            user: dict = Depends(require_permission("sales.view"))):
+                            period: Optional[str] = None, user: dict = Depends(require_permission("sales.view"))):
+    if period and not frm and not to:
+        y, m = int(period[:4]), int(period[5:7])
+        import calendar
+        frm = f"{period}-01"
+        to = f"{period}-{calendar.monthrange(y, m)[1]:02d}"
     susers = await db.users.find({"role": "sales"}).to_list(500)
     if user["role"] == "sales":
         susers = [u for u in susers if str(u["_id"]) == user["_id"]]
@@ -1825,6 +1830,10 @@ async def sales_performance(frm: Optional[str] = None, to: Optional[str] = None,
     fus = await db.follow_ups.find({}).to_list(20000)
     lines = await db.commission_lines.find({}).to_list(20000)
     acts = [a for a in await db.sales_activities.find({}).to_list(50000) if _in_range(a.get("timestamp"), frm, to)]
+    tmap = {}
+    if period:
+        for t in await db.sales_targets.find({"period": period}).to_list(2000):
+            tmap[t.get("sales_id")] = t
 
     rows = []
     for u in susers:
@@ -1843,24 +1852,65 @@ async def sales_performance(frm: Optional[str] = None, to: Optional[str] = None,
         breakdown["Quotation"] = len(uq)
         breakdown["Booking"] = len(ub)
         activity_score = sum(breakdown[t] * ACTIVITY_SCORE_WEIGHTS.get(t, 0) for t in breakdown)
+        revenue = sum(float(b.get("total") or 0) for b in ub)
+        pax = sum(int(b.get("pax") or 0) for b in ub)
+        t = tmap.get(sid) or {}
+        rt = float(t.get("revenue_target") or 0)
+        pt = int(t.get("pax_target") or 0)
         rows.append({
             "sales_id": sid, "sales": u.get("name"),
             "leads": len(ul), "follow_up": len(ufu), "quotation": len(uq),
             "converted": len(conv), "conversion_rate": _pct(len(conv), len(uq)),
-            "booking": len(ub), "pax": sum(int(b.get("pax") or 0) for b in ub),
-            "revenue": sum(float(b.get("total") or 0) for b in ub),
+            "booking": len(ub), "pax": pax, "revenue": revenue,
             "commission": sum(float(c.get("final_commission") or 0) for c in lines if c.get("sales_pic_id") == sid),
             "activity_breakdown": breakdown, "total_activities": sum(breakdown.values()),
             "activity_score": activity_score,
+            "revenue_target": rt, "pax_target": pt,
+            "revenue_progress": _pct(revenue, rt) if rt else 0,
+            "pax_progress": _pct(pax, pt) if pt else 0,
         })
 
     def top(k):
         return [{"sales_id": r["sales_id"], "sales": r["sales"], "value": r[k]} for r in sorted(rows, key=lambda r: -(r[k] or 0))]
 
-    return {"title": "Sales Activity & Performance", "period": {"from": frm, "to": to},
+    return {"title": "Sales Activity & Performance", "period": {"from": frm, "to": to, "month": period},
             "score_weights": ACTIVITY_SCORE_WEIGHTS, "rows": rows,
             "rankings": {"by_revenue": top("revenue"), "by_pax": top("pax"), "by_booking": top("booking"),
                          "by_conversion": top("conversion_rate"), "by_activity": top("activity_score")}}
+
+
+class SalesTargetInput(BaseModel):
+    sales_id: str
+    period: str
+    revenue_target: float = 0
+    pax_target: int = 0
+
+
+@api_router.get("/sales/targets")
+async def list_sales_targets(period: Optional[str] = None, user: dict = Depends(require_permission("sales.view"))):
+    q = {}
+    if period:
+        q["period"] = period
+    if user["role"] == "sales":
+        q["sales_id"] = user["_id"]
+    docs = await db.sales_targets.find(q).to_list(2000)
+    return [serialize(d) for d in docs]
+
+
+@api_router.put("/sales/targets")
+async def upsert_sales_target(body: SalesTargetInput, request: Request, user: dict = Depends(require_role("super_admin"))):
+    if not ObjectId.is_valid(body.sales_id):
+        raise HTTPException(status_code=400, detail="sales_id tidak valid")
+    su = await db.users.find_one({"_id": ObjectId(body.sales_id), "role": "sales"})
+    if not su:
+        raise HTTPException(status_code=404, detail="Sales tidak ditemukan")
+    doc = {"sales_id": body.sales_id, "sales_name": su.get("name"), "period": body.period,
+           "revenue_target": float(body.revenue_target or 0), "pax_target": int(body.pax_target or 0),
+           "updated_at": now_iso(), "updated_by": user["name"]}
+    await db.sales_targets.update_one({"sales_id": body.sales_id, "period": body.period}, {"$set": doc}, upsert=True)
+    await log_audit(user, "sales_target", "upsert", request, record_id=f"{body.sales_id}:{body.period}",
+                    new={"revenue_target": doc["revenue_target"], "pax_target": doc["pax_target"]})
+    return {"success": True, **doc}
 
 
 # ---------- Global Search ----------

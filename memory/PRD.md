@@ -1,5 +1,10 @@
 # Safar Travel CRM — Product Requirements (Living Doc)
 
+## PHASE 9K.1 — Dashboard Activity Widget + Monthly Targets (2026-06) — DONE (Verified curl + screenshots)
+- **Dashboard Widget** (`SalesActivityWidget.jsx`): di Super Admin Executive Dashboard — ringkasan bulan ini: total aktivitas, Top 3 Activity Score, Top 3 Revenue; link ke `/sales-activity`.
+- **Target Bulanan**: koleksi `sales_targets` {sales_id, period(YYYY-MM), revenue_target, pax_target}. `GET /api/sales/targets?period=` (owner-scoped), `PUT /api/sales/targets` (super_admin only; sales→403 terverifikasi).
+- **Progress**: `/api/sales/performance?period=YYYY-MM` kini menyertakan revenue_target/pax_target + revenue_progress/pax_progress (%). Kartu "Target Bulanan" di halaman `/sales-activity` menampilkan progress bar Revenue & Pax per sales; Super Admin punya tombol "Set Target".
+
 ## PHASE 9K — Sales Activity & Performance (2026-06) — DONE (Verified: curl RBAC + scoping, screenshots admin+sales)
 - **Akses**: `require_permission("sales.view")` → Super Admin (lihat semua sales) + Sales (lihat diri sendiri). Accounting diblok (403, terverifikasi). Menu "Sales Activity" (super_admin) / "My Activity" (sales), route `/sales-activity`.
 - **Activity Tracking** (7 tipe): Call, WhatsApp, Email, Meeting (manual via `sales_activities`), Follow Up/Quotation/Booking (dihitung otomatis dari koleksi masing-masing).

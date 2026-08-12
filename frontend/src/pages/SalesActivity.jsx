@@ -12,7 +12,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogTrigger } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Activity, Plus, Loader2, Phone, MessageCircle, Mail, Users, ClipboardList, FileText, CalendarCheck, Trophy } from "lucide-react";
+import { Activity, Plus, Loader2, Phone, MessageCircle, Mail, Users, ClipboardList, FileText, CalendarCheck, Trophy, Target, Pencil } from "lucide-react";
 import { toast } from "sonner";
 
 const MANUAL_TYPES = ["Call", "WhatsApp", "Email", "Meeting"];
@@ -41,36 +41,29 @@ export default function SalesActivity() {
   const [perf, setPerf] = useState(null);
   const [feed, setFeed] = useState(null);
 
-  const range = useCallback(() => {
-    if (!month) return {};
-    const [y, m] = month.split("-").map(Number);
-    const last = new Date(y, m, 0).getDate();
-    return { frm: `${month}-01`, to: `${month}-${String(last).padStart(2, "0")}` };
-  }, [month]);
-
   const load = useCallback(() => {
-    const params = { ...range() };
+    const params = {};
+    if (month) params.period = month;
     if (isAdmin && salesId !== "all") params.sales_id = salesId;
     setPerf(null); setFeed(null);
     api.get("/sales/performance", { params }).then((r) => setPerf(r.data)).catch(() => setPerf({ rows: [], rankings: {} }));
     api.get("/sales/activities", { params: { ...params, limit: 60 } }).then((r) => setFeed(r.data)).catch(() => setFeed([]));
-  }, [range, isAdmin, salesId]);
+  }, [month, isAdmin, salesId]);
   useEffect(() => { load(); }, [load]);
 
   const rows = perf?.rows || [];
-  const allSales = rows; // for admin selector fallback (populated after first load)
 
   return (
     <div className="space-y-6" data-testid="sales-activity-page">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="font-display text-3xl font-bold text-slate-900">Sales Activity &amp; Performance</h1>
-          <p className="text-slate-500 mt-1">KPI, aktivitas, dan ranking sales. {isAdmin ? "Anda melihat seluruh tim." : "Anda hanya melihat data Anda sendiri."}</p>
+          <p className="text-slate-500 mt-1">KPI, aktivitas, target, dan ranking sales. {isAdmin ? "Anda melihat seluruh tim." : "Anda hanya melihat data Anda sendiri."}</p>
         </div>
         <div className="flex items-center gap-2">
           <Input type="month" value={month} onChange={(e) => setMonth(e.target.value)} className="w-40 h-9" data-testid="period-month" />
           {month && <Button variant="ghost" size="sm" onClick={() => setMonth("")} data-testid="clear-period">All time</Button>}
-          <LogActivityDialog isAdmin={isAdmin} sales={allSales} onSaved={load} />
+          <LogActivityDialog isAdmin={isAdmin} sales={rows} onSaved={load} />
         </div>
       </div>
 
@@ -92,6 +85,7 @@ export default function SalesActivity() {
         : (
           <>
             {rows.length === 1 ? <SalesCards row={rows[0]} /> : <KpiTable rows={rows} />}
+            <TargetsCard rows={rows} month={month} isAdmin={isAdmin} onSaved={load} />
             <ActivityBreakdown rows={rows} weights={perf.score_weights} />
             {rows.length > 1 && <Rankings rankings={perf.rankings} />}
             <ActivityFeed feed={feed} />
@@ -151,6 +145,79 @@ function KpiTable({ rows }) {
           </TableRow>))}</TableBody>
       </Table>
     </Card>
+  );
+}
+
+function Bar({ pct, color }) {
+  const w = Math.min(100, Math.max(0, pct));
+  return (
+    <div className="h-2 rounded-full bg-slate-100 overflow-hidden">
+      <div className={`h-full rounded-full ${color}`} style={{ width: `${w}%` }} />
+    </div>
+  );
+}
+
+function TargetsCard({ rows, month, isAdmin, onSaved }) {
+  const [edit, setEdit] = useState(null); // row being edited
+  return (
+    <Card className="border-slate-200" data-testid="targets-card">
+      <CardHeader className="pb-2 flex flex-row items-center justify-between">
+        <CardTitle className="font-display text-lg flex items-center gap-2"><Target className="h-4 w-4 text-blue-600" />Target Bulanan {month && `· ${month}`}</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {!month ? <p className="text-sm text-slate-400" data-testid="targets-hint">Pilih bulan di atas untuk melihat{isAdmin ? " & menetapkan" : ""} target revenue/pax.</p>
+          : rows.map((r) => {
+            const hasT = r.revenue_target > 0 || r.pax_target > 0;
+            return (
+              <div key={r.sales_id} className="space-y-2 border-b border-slate-100 pb-3 last:border-0 last:pb-0" data-testid={`target-${r.sales_id}`}>
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-medium text-slate-800">{r.sales}</span>
+                  {isAdmin && <Button size="sm" variant="ghost" onClick={() => setEdit(r)} data-testid={`edit-target-${r.sales_id}`}><Pencil className="h-3.5 w-3.5 mr-1" />Set Target</Button>}
+                </div>
+                {!hasT ? <p className="text-xs text-slate-400" data-testid={`no-target-${r.sales_id}`}>Belum ada target.</p>
+                  : (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div>
+                        <div className="flex justify-between text-xs mb-1"><span className="text-slate-500">Revenue</span><span className="text-slate-700"><b data-testid={`rev-progress-${r.sales_id}`}>{r.revenue_progress}%</b> · {fmtIDR(r.revenue)} / {fmtIDR(r.revenue_target)}</span></div>
+                        <Bar pct={r.revenue_progress} color={r.revenue_progress >= 100 ? "bg-emerald-500" : "bg-blue-500"} />
+                      </div>
+                      <div>
+                        <div className="flex justify-between text-xs mb-1"><span className="text-slate-500">Pax</span><span className="text-slate-700"><b data-testid={`pax-progress-${r.sales_id}`}>{r.pax_progress}%</b> · {r.pax} / {r.pax_target}</span></div>
+                        <Bar pct={r.pax_progress} color={r.pax_progress >= 100 ? "bg-emerald-500" : "bg-indigo-500"} />
+                      </div>
+                    </div>
+                  )}
+              </div>
+            );
+          })}
+      </CardContent>
+      {edit && <SetTargetDialog row={edit} month={month} onClose={() => setEdit(null)} onSaved={() => { setEdit(null); onSaved(); }} />}
+    </Card>
+  );
+}
+
+function SetTargetDialog({ row, month, onClose, onSaved }) {
+  const [rev, setRev] = useState(row.revenue_target || "");
+  const [pax, setPax] = useState(row.pax_target || "");
+  const [saving, setSaving] = useState(false);
+  const save = async () => {
+    setSaving(true);
+    try {
+      await api.put("/sales/targets", { sales_id: row.sales_id, period: month, revenue_target: Number(rev || 0), pax_target: Number(pax || 0) });
+      toast.success("Target disimpan"); onSaved();
+    } catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); } finally { setSaving(false); }
+  };
+  return (
+    <Dialog open onOpenChange={onClose}>
+      <DialogContent className="bg-white max-w-sm" data-testid="set-target-dialog">
+        <DialogHeader><DialogTitle className="font-display">Target {row.sales} · {month}</DialogTitle></DialogHeader>
+        <div className="space-y-3 py-2">
+          <div className="space-y-1"><Label className="text-xs">Target Revenue (Rp)</Label><Input type="number" value={rev} onChange={(e) => setRev(e.target.value)} data-testid="target-revenue" /></div>
+          <div className="space-y-1"><Label className="text-xs">Target Pax</Label><Input type="number" value={pax} onChange={(e) => setPax(e.target.value)} data-testid="target-pax" /></div>
+        </div>
+        <DialogFooter><Button onClick={save} disabled={saving} className="bg-blue-600 hover:bg-blue-700" data-testid="target-save">{saving ? "..." : "Simpan"}</Button></DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
