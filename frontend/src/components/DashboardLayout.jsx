@@ -131,32 +131,41 @@ function GlobalSearch() {
   if (!hasPerm("crm.view")) return null;
 
   const go = (path) => { setOpen(false); setQ(""); setRes(null); navigate(path); };
-  const empty = res && res.customers.length === 0 && res.leads.length === 0;
+  const cust = (id) => (id ? `/crm/${id}` : null);
+
+  const groups = res ? [
+    ["Customer", (res.customers || []).map((c) => ({ key: c._id, title: c.full_name, sub: `${c.customer_code || ""} · ${c.whatsapp || c.phone || c.email || ""}`, path: cust(c._id), tid: `search-customer-${c._id}` }))],
+    ["Lead", (res.leads || []).map((l) => ({ key: l._id, title: l.interested_package || l.lead_code, sub: `${l.customer_name || ""} · ${l.status || ""}`, path: cust(l.customer_id) || "/sales", tid: `search-lead-${l._id}` }))],
+    ["Quotation", (res.quotations || []).map((x) => ({ key: x._id, title: x.quotation_number, sub: `${x.customer_name || ""} · ${x.package_name || ""}`, path: cust(x.customer_id) || "/quotations", tid: `search-quotation-${x._id}` }))],
+    ["Booking", (res.bookings || []).map((x) => ({ key: x._id, title: x.booking_number, sub: `${x.customer_name || ""} · ${x.package_name || ""}`, path: cust(x.customer_id) || "/booking", tid: `search-booking-${x._id}` }))],
+    ["Invoice", (res.invoices || []).map((x) => ({ key: x._id, title: x.invoice_number, sub: `${x.customer_name || ""} · ${x.booking_number || ""}`, path: cust(x.customer_id) || "/accounting", tid: `search-invoice-${x._id}` }))],
+    ["Payment", (res.payments || []).map((x) => ({ key: x._id, title: x.reference_number || x.invoice_number || "Payment", sub: `${x.invoice_number || ""} · Rp ${x.amount || 0}`, path: "/accounting", tid: `search-payment-${x._id}` }))],
+    ["Package", (res.packages || []).map((x) => ({ key: x._id, title: x.package_name, sub: `${x.package_code || ""} · ${x.product_type || ""}`, path: "/products", tid: `search-package-${x._id}` }))],
+    ["Refund", (res.refunds || []).map((x) => ({ key: x._id, title: x.refund_number, sub: `${x.customer_name || ""} · ${x.status || ""}`, path: cust(x.customer_id) || "/approvals", tid: `search-refund-${x._id}` }))],
+    ["Conversation", (res.conversations || []).map((x) => ({ key: x._id || x.conversation_id, title: x.customer_name || x.whatsapp || "Chat", sub: (x.message || "").slice(0, 40), path: cust(x.customer_id) || "/n8n", tid: `search-conv-${x._id || x.conversation_id}` }))],
+  ] : [];
+  const empty = res && groups.every(([, items]) => items.length === 0);
 
   return (
     <div className="relative hidden md:block w-72">
       <Search className="h-4 w-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" aria-hidden="true" />
       <Input value={q} onChange={(e) => setQ(e.target.value)} onBlur={() => setTimeout(() => setOpen(false), 150)}
-        onFocus={() => res && setOpen(true)} placeholder="Search customers, leads, WhatsApp..."
+        onFocus={() => res && setOpen(true)} placeholder="Cari customer, booking, invoice, paket..."
         className="pl-9 h-9" data-testid="global-search-input" />
       {open && res && (
-        <div className="absolute mt-2 w-full bg-white border border-slate-200 rounded-md shadow-xl z-50 max-h-96 overflow-y-auto" data-testid="global-search-results">
-          {empty && <p className="p-3 text-sm text-slate-400">No results.</p>}
-          {res.customers.length > 0 && <p className="px-3 pt-2 pb-1 text-[10px] uppercase font-semibold text-slate-400">Customers</p>}
-          {res.customers.map((c) => (
-            <button key={c._id} onMouseDown={() => go(`/crm/${c._id}`)} data-testid={`search-customer-${c._id}`}
-              className="w-full text-left px-3 py-2 hover:bg-slate-50 text-sm">
-              <span className="font-medium text-slate-900">{c.full_name}</span>
-              <span className="text-slate-400 ml-2">{c.whatsapp || c.email}</span>
-            </button>
-          ))}
-          {res.leads.length > 0 && <p className="px-3 pt-2 pb-1 text-[10px] uppercase font-semibold text-slate-400">Leads</p>}
-          {res.leads.map((l) => (
-            <button key={l._id} onMouseDown={() => go("/sales")} data-testid={`search-lead-${l._id}`}
-              className="w-full text-left px-3 py-2 hover:bg-slate-50 text-sm">
-              <span className="font-medium text-slate-900">{l.interested_package || l.lead_code}</span>
-              <span className="text-slate-400 ml-2">{l.customer_name} · {l.status}</span>
-            </button>
+        <div className="absolute mt-2 right-0 w-96 bg-white border border-slate-200 rounded-md shadow-xl z-50 max-h-[28rem] overflow-y-auto" data-testid="global-search-results">
+          {empty && <p className="p-3 text-sm text-slate-400">Tidak ada hasil.</p>}
+          {groups.map(([label, items]) => items.length > 0 && (
+            <div key={label} data-testid={`search-group-${label.toLowerCase()}`}>
+              <p className="px-3 pt-2 pb-1 text-[10px] uppercase font-semibold text-slate-400 bg-slate-50">{label}</p>
+              {items.map((it) => (
+                <button key={it.key} onMouseDown={() => go(it.path)} data-testid={it.tid}
+                  className="w-full text-left px-3 py-2 hover:bg-slate-50 text-sm">
+                  <span className="font-medium text-slate-900">{it.title}</span>
+                  <span className="text-slate-400 ml-2">{it.sub}</span>
+                </button>
+              ))}
+            </div>
           ))}
         </div>
       )}

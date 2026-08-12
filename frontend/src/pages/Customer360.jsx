@@ -40,6 +40,16 @@ export default function Customer360() {
   );
 
   const c = data.customer;
+  const T = data.totals || {};
+  const lastActivity = (data.timeline && data.timeline[0]) ? data.timeline[0].timestamp : null;
+  const bmap = {};
+  (data.bookings || []).forEach((b) => { bmap[b._id || b.id] = b.booking_number; });
+  const stats = [
+    ["Total Leads", T.leads ?? 0], ["Total Quotations", T.quotations ?? 0], ["Total Bookings", T.bookings ?? 0],
+    ["Total Pax", T.total_pax ?? 0], ["Total Sales", fmtIDR(T.total_sales || 0)], ["Total Paid", fmtIDR(T.total_paid || 0)],
+    ["Outstanding", fmtIDR(T.outstanding || 0)], ["Total Refund", fmtIDR(T.total_refund || 0)],
+    ["Last Booking", T.last_booking ? fmtDate(T.last_booking) : "—"],
+  ];
 
   return (
     <div className="space-y-6" data-testid="customer360-page">
@@ -70,10 +80,14 @@ export default function Customer360() {
               {(c.city || c.country) && <p className="flex items-center gap-2"><MapPin className="h-4 w-4 text-slate-400" aria-hidden="true" />{[c.city, c.country].filter(Boolean).join(", ")}</p>}
               <p className="flex items-center gap-2"><UserIcon className="h-4 w-4 text-slate-400" aria-hidden="true" />PIC: {c.sales_pic_name}</p>
             </div>
-            <div className="mt-5 grid grid-cols-2 gap-2 text-xs text-slate-500">
-              <Info label="NIK" value={c.nik} /><Info label="Passport" value={c.passport_number} />
-              <Info label="DOB" value={fmtDate(c.date_of_birth)} /><Info label="Passport Exp" value={fmtDate(c.passport_expiry)} />
-              <Info label="Source" value={c.customer_source} /><Info label="Since" value={fmtDate(c.created_at)} />
+            <div className="mt-5 grid grid-cols-2 gap-2 text-xs text-slate-500" data-testid="c360-profile">
+              <Info label="Customer ID" value={c.customer_code} /><Info label="Type" value={c.customer_type} />
+              <Info label="Phone" value={c.phone || c.whatsapp} /><Info label="WhatsApp" value={c.whatsapp} />
+              <Info label="Email" value={c.email} /><Info label="Gender" value={c.gender} />
+              <Info label="DOB" value={fmtDate(c.date_of_birth)} /><Info label="Lead Source" value={c.customer_source} />
+              <Info label="Assigned Sales" value={c.sales_pic_name} /><Info label="Since" value={fmtDate(c.created_at)} />
+              <Info label="Last Activity" value={lastActivity ? fmtDate(lastActivity) : "—"} /><Info label="NIK" value={c.nik} />
+              <div className="col-span-2"><Info label="Address" value={[c.address, c.city, c.country].filter(Boolean).join(", ")} /></div>
             </div>
             {c.notes && <p className="mt-4 text-sm text-slate-500 bg-slate-50 rounded-md p-3 border border-slate-100">{c.notes}</p>}
             <div className="mt-5 grid grid-cols-2 gap-2">
@@ -86,20 +100,151 @@ export default function Customer360() {
 
         {/* Right column */}
         <div className="lg:col-span-2 space-y-4">
-          <div className="grid grid-cols-3 gap-3">
-            <Kpi label="Leads" value={data.totals.leads} icon={Briefcase} />
-            <Kpi label="Follow Ups" value={data.totals.follow_ups} icon={CalendarClock} />
-            <Kpi label="Pipeline Value" value={fmtIDR(data.totals.total_value)} icon={Clock} />
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3" data-testid="c360-stats">
+            {stats.map(([l, v], i) => (
+              <Card key={i} className="border-slate-200 shadow-sm"><CardContent className="p-3.5">
+                <p className="text-[11px] uppercase tracking-wide font-semibold text-slate-400">{l}</p>
+                <p className="font-display text-lg font-bold text-slate-900 mt-0.5">{v}</p>
+              </CardContent></Card>
+            ))}
           </div>
 
-          <Tabs defaultValue="timeline">
-            <TabsList data-testid="c360-tabs">
-              <TabsTrigger value="timeline" data-testid="tab-timeline">Timeline</TabsTrigger>
-              <TabsTrigger value="leads">Leads</TabsTrigger>
-              <TabsTrigger value="followups">Follow Ups</TabsTrigger>
-              <TabsTrigger value="comms">Communication</TabsTrigger>
-              <TabsTrigger value="chat" data-testid="tab-chat">WhatsApp Chat</TabsTrigger>
+          <Tabs defaultValue="overview">
+            <TabsList className="flex flex-wrap h-auto gap-1" data-testid="c360-tabs">
+              <TabsTrigger value="overview" data-testid="tab-overview">Overview</TabsTrigger>
+              <TabsTrigger value="leads" data-testid="tab-leads">Leads</TabsTrigger>
+              <TabsTrigger value="quotations" data-testid="tab-quotations">Quotations</TabsTrigger>
+              <TabsTrigger value="bookings" data-testid="tab-bookings">Bookings</TabsTrigger>
+              <TabsTrigger value="payments" data-testid="tab-payments">Payments</TabsTrigger>
+              <TabsTrigger value="refunds" data-testid="tab-refunds">Refunds</TabsTrigger>
+              <TabsTrigger value="commissions" data-testid="tab-commissions">Commissions</TabsTrigger>
+              <TabsTrigger value="conversations" data-testid="tab-conversations">Conversations</TabsTrigger>
+              <TabsTrigger value="followups" data-testid="tab-followups">Follow Ups</TabsTrigger>
+              <TabsTrigger value="documents" data-testid="tab-documents">Documents</TabsTrigger>
+              <TabsTrigger value="timeline" data-testid="tab-timeline">Activity Timeline</TabsTrigger>
             </TabsList>
+
+            <TabsContent value="overview">
+              <Card className="border-slate-200 shadow-sm"><CardContent className="p-5 grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm" data-testid="c360-overview">
+                <Info label="Assigned Sales" value={c.sales_pic_name} />
+                <Info label="Customer Since" value={fmtDate(c.created_at)} />
+                <Info label="Last Activity" value={lastActivity ? fmtDateTime(lastActivity) : "—"} />
+                <Info label="Last Booking" value={T.last_booking ? fmtDate(T.last_booking) : "—"} />
+                <Info label="Total Bookings / Pax" value={`${T.bookings ?? 0} / ${T.total_pax ?? 0}`} />
+                <Info label="Total Sales" value={fmtIDR(T.total_sales || 0)} />
+                <Info label="Total Paid" value={fmtIDR(T.total_paid || 0)} />
+                <Info label="Outstanding" value={fmtIDR(T.outstanding || 0)} />
+              </CardContent></Card>
+            </TabsContent>
+
+            <TabsContent value="leads">
+              <Rows testid="c360-leads" items={data.leads} empty="No leads." row={(l) => (
+                <>
+                  <div><p className="font-medium text-slate-900">{l.interested_package || l.lead_code}</p>
+                    <p className="text-xs text-slate-500">{l.destination} · {l.pax || 0} pax · {fmtIDR(l.budget || 0)}</p></div>
+                  <Badge variant="outline" className={STAGE_COLORS[l.status]}>{l.status}</Badge>
+                </>
+              )} />
+            </TabsContent>
+
+            <TabsContent value="quotations">
+              <Rows testid="c360-quotations" items={data.quotations} empty="No quotations." row={(q) => (
+                <>
+                  <div><p className="font-medium text-slate-900">{q.quotation_number}</p>
+                    <p className="text-xs text-slate-500">{q.package_name} · {q.pax || 0} pax · {fmtIDR(q.total || 0)}</p></div>
+                  <Badge variant="outline" className="bg-slate-100 text-slate-700">{q.status}</Badge>
+                </>
+              )} />
+            </TabsContent>
+
+            <TabsContent value="bookings">
+              <Rows testid="c360-bookings" items={data.bookings} empty="No bookings." row={(b) => (
+                <>
+                  <div><p className="font-medium text-slate-900">{b.booking_number}</p>
+                    <p className="text-xs text-slate-500">{b.package_name} · {b.pax || 0} pax · {fmtIDR(b.total || 0)}</p></div>
+                  <div className="text-right"><Badge variant="outline" className="bg-slate-100 text-slate-700">{b.status}</Badge>
+                    {b.booking_source === "AUTO SALES" && <Badge className="ml-1 bg-purple-100 text-purple-700 border-purple-200">AUTO</Badge>}</div>
+                </>
+              )} />
+            </TabsContent>
+
+            <TabsContent value="payments">
+              <Rows testid="c360-payments" items={data.payments} empty="No payments." row={(p) => (
+                <>
+                  <div><p className="font-medium text-slate-900">{fmtIDR(p.amount || 0)}</p>
+                    <p className="text-xs text-slate-500">{p.invoice_number} · {p.payment_method || "—"} · {p.reference_number || ""}</p></div>
+                  <span className="text-xs text-slate-500">{fmtDate(p.payment_date || p.created_at)}</span>
+                </>
+              )} />
+            </TabsContent>
+
+            <TabsContent value="refunds">
+              <Rows testid="c360-refunds" items={data.refunds} empty="No refunds." row={(r) => (
+                <>
+                  <div><p className="font-medium text-slate-900">{r.refund_number}</p>
+                    <p className="text-xs text-slate-500">{fmtIDR(r.approved_refund || r.proposed_refund || 0)}</p></div>
+                  <Badge variant="outline" className="bg-slate-100 text-slate-700">{r.status}</Badge>
+                </>
+              )} />
+            </TabsContent>
+
+            <TabsContent value="commissions">
+              <Rows testid="c360-commissions" items={data.commissions} empty="No commissions." row={(cm) => (
+                <>
+                  <div><p className="font-medium text-slate-900">{bmap[cm.booking_id] || cm.booking_number || "Commission"}</p>
+                    <p className="text-xs text-slate-500">Period {cm.period || "—"} · {cm.pax || 0} pax</p></div>
+                  <span className="text-sm font-medium text-slate-700">{fmtIDR(cm.final_commission ?? cm.total_commission ?? cm.commission ?? cm.rate_per_pax ?? 0)}</span>
+                </>
+              )} />
+            </TabsContent>
+
+            <TabsContent value="conversations">
+              <Card className="border-slate-200 shadow-sm"><CardContent className="p-4" data-testid="c360-conversations">
+                {(data.conversations || []).length === 0 ? <p className="text-sm text-slate-400 text-center py-6">Belum ada percakapan.</p> : (
+                  <div className="space-y-3">
+                    {data.conversations.map((m, i) => {
+                      const inbound = m.direction === "INBOUND";
+                      return (
+                        <div key={m.id || m.conversation_id || i} className={`flex ${inbound ? "justify-start" : "justify-end"}`} data-testid={`c360-chat-${m.direction}`}>
+                          <div className={`max-w-[75%] rounded-2xl px-4 py-2 ${inbound ? "bg-slate-100 text-slate-800 rounded-tl-sm" : "bg-blue-600 text-white rounded-tr-sm"}`}>
+                            <div className="flex items-center gap-2 mb-0.5">
+                              <span className={`text-[10px] font-semibold ${inbound ? "text-slate-500" : "text-blue-100"}`}>
+                                {m.sender_name || m.sender_type}{m.ai_or_human === "AI" ? " · AI" : ""} · {m.channel || "WHATSAPP"}
+                              </span>
+                              {m.status === "REQUIRES_HUMAN" && <Badge className="bg-amber-500 text-white text-[9px] px-1.5 py-0">HANDOVER</Badge>}
+                            </div>
+                            <p className="text-sm whitespace-pre-wrap">{m.message}</p>
+                            <p className={`text-[10px] mt-1 ${inbound ? "text-slate-400" : "text-blue-100"}`}>
+                              {fmtDateTime(m.timestamp)}{m.n8n_workflow_id ? ` · WF ${m.n8n_workflow_id}` : ""}
+                            </p>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </CardContent></Card>
+            </TabsContent>
+
+            <TabsContent value="followups">
+              <Rows testid="c360-followups" items={data.follow_ups} empty="No follow ups." row={(f) => (
+                <>
+                  <div><p className="font-medium text-slate-900">{f.activity_type}</p><p className="text-xs text-slate-500">{f.notes}</p></div>
+                  <div className="text-right"><p className="text-xs text-slate-500">{fmtDate(f.due_date)}</p>
+                    <Badge variant="outline" className={f.status === "completed" ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-amber-50 text-amber-700 border-amber-200"}>{f.status}</Badge></div>
+                </>
+              )} />
+            </TabsContent>
+
+            <TabsContent value="documents">
+              <Rows testid="c360-documents" items={data.documents} empty="No documents." row={(d) => (
+                <>
+                  <div><p className="font-medium text-slate-900">{d.doc_type}</p>
+                    <p className="text-xs text-slate-500">{bmap[d.booking_id] || d.booking_id || "—"}</p></div>
+                  <Badge variant="outline" className="bg-slate-100 text-slate-700">{d.status}</Badge>
+                </>
+              )} />
+            </TabsContent>
 
             <TabsContent value="timeline">
               <Card className="border-slate-200 shadow-sm"><CardContent className="p-6" data-testid="customer-timeline">
@@ -120,48 +265,6 @@ export default function Customer360() {
                 )}
               </CardContent></Card>
             </TabsContent>
-
-            <TabsContent value="leads">
-              <Card className="border-slate-200 shadow-sm"><CardContent className="p-4 space-y-2">
-                {data.leads.length === 0 ? <p className="text-sm text-slate-400 text-center py-6">No leads.</p> :
-                  data.leads.map((l) => (
-                    <div key={l._id} className="flex items-center justify-between border border-slate-100 rounded-md p-3">
-                      <div><p className="font-medium text-slate-900">{l.interested_package || "Lead"}</p>
-                        <p className="text-xs text-slate-500">{l.destination} · {l.pax} pax · {fmtIDR(l.budget)}</p></div>
-                      <Badge variant="outline" className={STAGE_COLORS[l.status]}>{l.status}</Badge>
-                    </div>
-                  ))}
-              </CardContent></Card>
-            </TabsContent>
-
-            <TabsContent value="followups">
-              <Card className="border-slate-200 shadow-sm"><CardContent className="p-4 space-y-2">
-                {data.follow_ups.length === 0 ? <p className="text-sm text-slate-400 text-center py-6">No follow ups.</p> :
-                  data.follow_ups.map((f) => (
-                    <div key={f._id} className="flex items-center justify-between border border-slate-100 rounded-md p-3">
-                      <div><p className="font-medium text-slate-900">{f.activity_type}</p><p className="text-xs text-slate-500">{f.notes}</p></div>
-                      <div className="text-right"><p className="text-xs text-slate-500">{fmtDate(f.due_date)}</p>
-                        <Badge variant="outline" className={f.status === "completed" ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-amber-50 text-amber-700 border-amber-200"}>{f.status}</Badge></div>
-                    </div>
-                  ))}
-              </CardContent></Card>
-            </TabsContent>
-
-            <TabsContent value="comms">
-              <Card className="border-slate-200 shadow-sm"><CardContent className="p-4 space-y-2">
-                {data.communications.length === 0 ? <p className="text-sm text-slate-400 text-center py-6">No communication logged.</p> :
-                  data.communications.map((m) => (
-                    <div key={m._id} className="border border-slate-100 rounded-md p-3">
-                      <div className="flex items-center justify-between"><p className="text-sm font-medium text-slate-900">{m.channel} · {m.direction}</p>
-                        <span className="text-xs text-slate-400">{fmtDateTime(m.timestamp)}</span></div>
-                      <p className="text-sm text-slate-500 mt-0.5">{m.message}</p>
-                    </div>
-                  ))}
-              </CardContent></Card>
-            </TabsContent>
-            <TabsContent value="chat">
-              <ChatHistory customerId={id} />
-            </TabsContent>
           </Tabs>
         </div>
       </div>
@@ -173,6 +276,18 @@ export default function Customer360() {
 
 function Info({ label, value }) {
   return <div><span className="text-slate-400">{label}: </span><span className="text-slate-700">{value || "—"}</span></div>;
+}
+function Rows({ items, row, empty, testid }) {
+  return (
+    <Card className="border-slate-200 shadow-sm"><CardContent className="p-4 space-y-2" data-testid={testid}>
+      {(!items || items.length === 0) ? <p className="text-sm text-slate-400 text-center py-6">{empty}</p> :
+        items.map((it, i) => (
+          <div key={it._id || it.id || i} className="flex items-center justify-between border border-slate-100 rounded-md p-3">
+            {row(it)}
+          </div>
+        ))}
+    </CardContent></Card>
+  );
 }
 function Kpi({ label, value, icon: Icon }) {
   return (

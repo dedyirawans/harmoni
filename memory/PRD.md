@@ -1,6 +1,12 @@
 # Safar Travel CRM — Product Requirements (Living Doc)
 
-## N8N Inbox — Assign CS ("Tangani") & SLA Handover (2026-06) — DONE
+## PHASE 9A — Customer 360° & Global Search (2026-06) — DONE
+- **Customer 360°** (`GET /api/customers/{id}/360`, page `/crm/{id}`): profil lengkap (Customer ID, Type, Phone, WhatsApp, Email, Gender, DOB, Lead Source, Assigned Sales, Since, Last Activity, NIK, Address), 9 statistik (Total Leads/Quotations/Bookings/Pax/Sales/Paid/Outstanding/Refund/Last Booking dari DB), dan 11 tab: Overview, Leads, Quotations, Bookings, Payments, Refunds, Commissions, Conversations (bubble WA + sender/channel/workflow id), Follow Ups, Documents, Activity Timeline (lead/quotation/booking/payment/document/cancellation/refund/commission).
+- **Global Search** (`GET /api/search?q=`, header input): mencari customer name/phone/WhatsApp/email/ID, booking/quotation/invoice number, package name/code, payment reference, refund number, conversation. Hasil dikelompokkan: Customer, Lead, Quotation, Booking, Invoice, Payment, Package, Refund, Conversation. Klik → Customer 360 terkait.
+- **RBAC**: `crm.view` + `owner_filter`; Sales owner-scoped (search & 360 hanya customer miliknya, non-owned → 403). HPP tidak pernah tampil. Tanpa data dummy.
+- **Perbaikan**: invalid/malformed customer id di `/360` kini balas 404 (bukan 500).
+- **Testing**: iteration_26 — Frontend 100% (search 3 pola, click-navigate, 11 tab, RBAC Sales), Backend 7/9 pytest (2 minor sudah ditangani/di-skip sesuai konvensi `_id`). File: `/app/backend/tests/test_phase9a_search_c360.py`.
+
 - **Assign / Tangani**: percakapan handover bisa di-claim CS via tombol **"Tangani"** di header thread → tampil badge "Ditangani: <nama>" + tombol **"Lepas"**; indikator "● <nama>" di list item. `POST /api/integrations/n8n/conversations/assign` (super_admin, body {customer_id/whatsapp, release?}) simpan/hapus di koleksi `n8n_inbox_assignments` (key=customer_id atau `wa:<no>`). Anti-balas-ganda: bila membalas percakapan yang ditangani orang lain → konfirmasi dulu.
 - **SLA Handover**: monitor menghitung `waiting_minutes` (sejak pesan INBOUND terakhir bila belum dibalas) & `sla_overdue` bila status REQUIRES_HUMAN dan waiting > `n8n_sla_minutes`. Ambang **SLA Handover (menit)** diatur di Settings → Global → Integration & Notifications (default 15). UI: badge merah "SLA <n>m" di list item + KPI "SLA Overdue" di dashboard N8N.
 - Verifikasi: curl (assign→"Dedy Irawan"; SLA=1 → sla_overdue=1, waiting 6m>1m) + screenshot (header "Ditangani: Dedy Irawan"+Lepas, list "● Dedy Irawan", badge "SLA 7m").

@@ -1,0 +1,37 @@
+{
+  "summary": "Phase 9A (Global Search + Customer 360) end-to-end tested. Backend: 7/9 pytest passed. Frontend: global search returns correct grouped results for name/WhatsApp/booking-number; clicking a booking result navigates to /crm/{customer_id}; Customer 360 renders profile, stats (Total Bookings=1, Total Sales=Rp 55.000.000, Total Pax=2, Outstanding=Rp 55M) and all 11 tabs (overview/leads/quotations/bookings/payments/refunds/commissions/conversations/followups/documents/timeline) with real DB data. RBAC verified: Sales user search is owner-scoped (returns only Budi Santoso, not Budi Test); Sales opening a non-owned /crm/{id} shows data-testid='customer360-forbidden' with '403 / not found' message and toast; no HPP/margin/cost terms on Sales' Customer 360.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/customers/{id}/360", "issue": "Response leaks MongoDB '_id' in customer object alongside 'id' (violates code review rule 'always exclude MongoDB _id'). Not a functional bug but should be cleaned."},
+      {"endpoint": "GET /api/customers/{invalid_id}/360", "issue": "Returns HTTP 500 for a non-existent/invalid customer id; should return 404 (or 400 for malformed ObjectId)."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_phase9a_search_c360.py",
+    "/app/test_reports/pytest/phase9a.xml"
+  ],
+  "action_items": [
+    "(Minor) Exclude '_id' from customer object in GET /api/customers/{id}/360 response; keep only 'id'.",
+    "(Minor) Handle invalid/nonexistent customer id in /api/customers/{id}/360 -> return 404 instead of 500."
+  ],
+  "critical_code_review_comments": [
+    "server.py customer_360: sanitize output to strip _id; add try/except ObjectId validation returning HTTPException(404).",
+    "Customer360.jsx: uses `b._id || b.id` fallbacks in several places -- once backend hides _id, verify no UI regressions (currently OK because both are still returned)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_phase9a_search_c360.py (new)"
+  ],
+  "success_rate": {"backend": "78% (7/9 pytest)", "frontend": "100% (all Phase 9A flows verified: search 3 patterns, click-navigate, 11 tabs, Sales RBAC forbidden, Sales search scoping)"},
+  "test_credentials": "Super Admin dedyirawan18@gmail.com/Admin@123 ; Sales sales@safarcrm.com/Sales@123 ; Customer id 6a7c6910f21f8ffb9cb4908f (Budi Test, BKG-00016, 7 conversations)",
+  "seed_data_creation": "None - used existing seeded data.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Phase 9A verified end-to-end. Login API returns 'token' (not 'access_token'); use j.get('access_token') or j.get('token'). Customer 360 totals keys are {leads, quotations, bookings, total_pax, total_sales, total_paid, outstanding, total_refund, last_booking}. Tab TRIGGERS use data-testid='tab-<label>' (overview/leads/quotations/bookings/payments/refunds/commissions/conversations/followups/documents/timeline); tab CONTENT uses c360-<label> and customer-timeline (only rendered when active). Sales forbidden view shows data-testid='customer360-forbidden'.",
+  "rca of the issue": "For _id leak: customer_360 serializes the customer document without popping '_id'. For 500 on invalid id: no try/except around ObjectId(cid) conversion; PyMongo raises InvalidId which becomes 500. Fix: wrap conversion in try/except and return 404; and delete _id before returning."
+}

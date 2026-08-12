@@ -907,7 +907,11 @@ async def add_note(cid: str, body: NoteCreate, user: dict = Depends(require_perm
 
 @api_router.get("/customers/{cid}/360")
 async def customer_360(cid: str, user: dict = Depends(require_permission("crm.view"))):
-    customer = await db.customers.find_one({"_id": ObjectId(cid)})
+    try:
+        oid = ObjectId(cid)
+    except Exception:
+        raise HTTPException(status_code=404, detail="Customer not found")
+    customer = await db.customers.find_one({"_id": oid})
     if not customer:
         raise HTTPException(status_code=404, detail="Customer not found")
     if not can_access_record(user, customer):
@@ -917,6 +921,19 @@ async def customer_360(cid: str, user: dict = Depends(require_permission("crm.vi
     comms = [serialize(d) for d in await db.communications.find({"customer_id": cid}).sort("timestamp", -1).to_list(500)]
     notes = [serialize(d) for d in await db.customer_notes.find({"customer_id": cid}).sort("timestamp", -1).to_list(500)]
     acts = [serialize(d) for d in await db.lead_activities.find({"customer_id": cid}).sort("timestamp", -1).to_list(500)]
+
+    raw_bookings = await db.bookings.find({"customer_id": cid}).sort("created_at", -1).to_list(1000)
+    booking_ids = [str(b["_id"]) for b in raw_bookings]
+    bookings = [serialize(b) for b in raw_bookings]
+    quotations = [serialize(d) for d in await db.quotations.find({"customer_id": cid}).sort("created_at", -1).to_list(1000)]
+    raw_invoices = await db.invoices.find({"customer_id": cid}).sort("created_at", -1).to_list(1000)
+    invoices = [serialize(d) for d in raw_invoices]
+    inv_ids = [str(i["_id"]) for i in raw_invoices]
+    payments = [serialize(d) for d in await db.payments.find({"$or": [{"invoice_id": {"$in": inv_ids}}, {"booking_id": {"$in": booking_ids}}]}).sort("created_at", -1).to_list(2000)]
+    refunds = [serialize(d) for d in await db.refund_requests.find({"$or": [{"customer_id": cid}, {"booking_id": {"$in": booking_ids}}]}).sort("created_at", -1).to_list(500)]
+    commissions = [serialize(d) for d in await db.commission_items.find({"booking_id": {"$in": booking_ids}}).to_list(2000)]
+    conversations = [serialize(d) for d in await db.conversations.find({"customer_id": cid}).sort("timestamp", 1).to_list(2000)]
+    documents = [serialize(d) for d in await db.documents.find({"booking_id": {"$in": booking_ids}, "is_deleted": False}).to_list(2000)]
 
     timeline = []
     for a in acts:
@@ -931,14 +948,48 @@ async def customer_360(cid: str, user: dict = Depends(require_permission("crm.vi
     for n in notes:
         timeline.append({"kind": "note", "title": "Note", "detail": n.get("note", ""),
                          "user_name": n.get("user_name"), "timestamp": n.get("timestamp")})
+    for qq in quotations:
+        timeline.append({"kind": "quotation", "title": f"Quotation {qq.get('quotation_number', '')} Created",
+                         "detail": f"{qq.get('package_name', '')} · {qq.get('pax', 0)} pax", "user_name": qq.get("sales_pic_name"), "timestamp": qq.get("created_at")})
+        if qq.get("status") == "CONVERTED":
+            timeline.append({"kind": "quotation", "title": f"Quotation {qq.get('quotation_number', '')} Converted",
+                             "detail": "", "user_name": qq.get("sales_pic_name"), "timestamp": qq.get("created_at")})
+    for bb in bookings:
+        timeline.append({"kind": "booking", "title": f"Booking {bb.get('booking_number', '')} Created",
+                         "detail": f"{bb.get('package_name', '')} · {bb.get('pax', 0)} pax", "user_name": bb.get("sales_pic_name"), "timestamp": bb.get("created_at")})
+        if bb.get("status") == "CANCELLED":
+            timeline.append({"kind": "cancellation", "title": f"Booking {bb.get('booking_number', '')} Cancelled",
+                             "detail": "", "user_name": "", "timestamp": bb.get("updated_at") or bb.get("created_at")})
+    for pp in payments:
+        timeline.append({"kind": "payment", "title": "Payment Received",
+                         "detail": f"{pp.get('invoice_number', '')} · Rp {pp.get('amount', 0)}", "user_name": pp.get("recorded_by"), "timestamp": pp.get("created_at") or pp.get("payment_date")})
+    for dd in documents:
+        timeline.append({"kind": "document", "title": f"Document Uploaded — {dd.get('doc_type', '')}",
+                         "detail": dd.get("status", ""), "user_name": dd.get("uploaded_by", ""), "timestamp": dd.get("created_at") or dd.get("uploaded_at")})
+    for rr in refunds:
+        timeline.append({"kind": "refund", "title": f"Refund {rr.get('refund_number', '')}",
+                         "detail": rr.get("status", ""), "user_name": "", "timestamp": rr.get("created_at")})
+    for cm in commissions:
+        timeline.append({"kind": "commission", "title": f"Commission {cm.get('period', '')}",
+                         "detail": cm.get("booking_number", ""), "user_name": cm.get("sales_pic_name", ""), "timestamp": cm.get("created_at") or ((cm.get("period", "") + "-01") if cm.get("period") else "")})
     timeline.sort(key=lambda x: x.get("timestamp") or "", reverse=True)
 
     total_value = sum(float(l.get("budget") or 0) for l in leads if l.get("status") != "LOST")
+    total_pax = sum(int(b.get("pax") or 0) for b in bookings if b.get("status") != "CANCELLED")
+    total_sales = sum(float(b.get("total") or 0) for b in bookings if b.get("status") != "CANCELLED")
+    total_paid = sum(float(p.get("amount") or 0) for p in payments)
+    outstanding = sum(float(i.get("outstanding") or 0) for i in invoices)
+    total_refund = sum(float(r.get("approved_refund") or r.get("proposed_refund") or 0) for r in refunds)
+    last_booking = bookings[0].get("created_at") if bookings else None
     return {
         "customer": serialize(customer), "leads": leads, "follow_ups": follow_ups,
-        "communications": comms, "notes": notes, "timeline": timeline,
-        "totals": {"leads": len(leads), "follow_ups": len(follow_ups),
-                   "communications": len(comms), "total_value": total_value},
+        "communications": comms, "notes": notes, "quotations": quotations, "bookings": bookings,
+        "invoices": invoices, "payments": payments, "refunds": refunds, "commissions": commissions,
+        "conversations": conversations, "documents": documents, "timeline": timeline,
+        "totals": {"leads": len(leads), "follow_ups": len(follow_ups), "communications": len(comms),
+                   "quotations": len(quotations), "bookings": len(bookings), "total_pax": total_pax,
+                   "total_sales": total_sales, "total_paid": total_paid, "outstanding": outstanding,
+                   "total_refund": total_refund, "total_value": total_value, "last_booking": last_booking},
     }
 
 
@@ -1173,21 +1224,44 @@ async def sales_dashboard(user: dict = Depends(require_permission("sales.view"))
 @api_router.get("/search")
 async def global_search(q: str, user: dict = Depends(require_permission("crm.view"))):
     of = owner_filter(user)
-    cust_q = {**of, "$or": [
-        {"full_name": {"$regex": q, "$options": "i"}},
-        {"whatsapp": {"$regex": q, "$options": "i"}},
-        {"email": {"$regex": q, "$options": "i"}},
-        {"customer_code": {"$regex": q, "$options": "i"}},
-    ]}
-    customers = [serialize(d) for d in await db.customers.find(cust_q).limit(8).to_list(8)]
-    lead_q = {**of, "$or": [
-        {"lead_code": {"$regex": q, "$options": "i"}},
-        {"customer_name": {"$regex": q, "$options": "i"}},
-        {"interested_package": {"$regex": q, "$options": "i"}},
-        {"destination": {"$regex": q, "$options": "i"}},
-    ]}
-    leads = [serialize(d) for d in await db.leads.find(lead_q).limit(8).to_list(8)]
-    return {"customers": customers, "leads": leads}
+    rx = {"$regex": q, "$options": "i"}
+    sales_scope = user["role"] == "sales" and user.get("data_scope", "own") not in ("all",)
+    customers = [serialize(d) for d in await db.customers.find({**of, "$or": [
+        {"full_name": rx}, {"whatsapp": rx}, {"phone": rx}, {"email": rx}, {"customer_code": rx}]}).limit(8).to_list(8)]
+    leads = [serialize(d) for d in await db.leads.find({**of, "$or": [
+        {"lead_code": rx}, {"customer_name": rx}, {"interested_package": rx}, {"destination": rx}]}).limit(8).to_list(8)]
+    quotations = [serialize(d) for d in await db.quotations.find({**of, "$or": [
+        {"quotation_number": rx}, {"customer_name": rx}, {"package_name": rx}]}).limit(8).to_list(8)]
+    bookings = [serialize(d) for d in await db.bookings.find({**of, "$or": [
+        {"booking_number": rx}, {"customer_name": rx}, {"package_name": rx}]}).limit(8).to_list(8)]
+    inv_of = {"sales_pic_id": user["_id"]} if sales_scope else {}
+    invoices = [serialize(d) for d in await db.invoices.find({**inv_of, "$or": [
+        {"invoice_number": rx}, {"customer_name": rx}, {"booking_number": rx}]}).limit(8).to_list(8)]
+    packages = [{"_id": str(p["_id"]), "id": str(p["_id"]), "package_code": p.get("package_code", ""),
+                 "package_name": p.get("package_name", ""), "product_type": p.get("product_type", ""),
+                 "destination": p.get("destination", "")} for p in await db.packages.find({"$or": [
+        {"package_name": rx}, {"package_code": rx}]}).limit(8).to_list(8)]
+    allowed_bids = allowed_cids = None
+    if sales_scope:
+        mine = await db.bookings.find({"sales_pic_id": user["_id"]}).to_list(5000)
+        allowed_bids = {str(b["_id"]) for b in mine}
+        myc = await db.customers.find({"sales_pic_id": user["_id"]}).to_list(5000)
+        allowed_cids = {str(cc["_id"]) for cc in myc}
+    pay_docs = await db.payments.find({"$or": [{"reference_number": rx}, {"invoice_number": rx}]}).limit(30).to_list(30)
+    if allowed_bids is not None:
+        pay_docs = [p for p in pay_docs if p.get("booking_id") in allowed_bids]
+    payments = [serialize(d) for d in pay_docs[:8]]
+    ref_docs = await db.refund_requests.find({"$or": [{"refund_number": rx}, {"customer_name": rx}]}).limit(30).to_list(30)
+    if allowed_bids is not None:
+        ref_docs = [r for r in ref_docs if (r.get("booking_id") in allowed_bids or r.get("customer_id") in (allowed_cids or set()))]
+    refunds = [serialize(d) for d in ref_docs[:8]]
+    conv_docs = await db.conversations.find({"$or": [{"whatsapp": rx}, {"customer_name": rx}, {"message": rx}]}).limit(30).to_list(30)
+    if allowed_cids is not None:
+        conv_docs = [cv for cv in conv_docs if cv.get("customer_id") in allowed_cids]
+    conversations = [serialize(d) for d in conv_docs[:8]]
+    return {"customers": customers, "leads": leads, "quotations": quotations, "bookings": bookings,
+            "invoices": invoices, "packages": packages, "payments": payments, "refunds": refunds,
+            "conversations": conversations}
 
 
 # ============================================================================
