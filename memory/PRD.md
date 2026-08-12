@@ -1,5 +1,15 @@
 # Safar Travel CRM — Product Requirements (Living Doc)
 
+## Phase 8I — N8N Customer Communication Integration (2026-06) — DONE
+- Membangun di atas Phase 6/7 (HMAC `n8n_auth`, rate-limit, ACTIVE-only reads, AUTO SALES + idempotent booking). Delta baru:
+- **Conversation Log** (koleksi `conversations`): POST `/api/v1/conversations` (n8n_auth) mencatat pesan — conversation_id, customer_id, whatsapp, channel, direction (INBOUND/OUTBOUND), message, message_type, sender_type (CUSTOMER/AI/SALES/SYSTEM), receiver, ai_or_human, n8n_workflow_id, status, timestamp. **Customer matching** by whatsapp (existing → dipakai; else auto-create Source=N8N, PIC=AUTO SALES, sales_pic_id=NULL). **Idempotency** via external_message_id / X-Idempotency-Key.
+- **Human Handover**: `requires_human:true` → status REQUIRES_HUMAN + customer.conversation_status=HUMAN_HANDOVER + event `conversation.handover` ke N8N.
+- **History**: GET `/api/v1/conversations?customer_id|whatsapp` (n8n) & GET `/api/customers/{cid}/conversations` (crm.view) — kronologis.
+- **Availability**: GET `/api/v1/packages/{id}/availability` (n8n) & `/api/packages/{id}/availability` (CRM) → package_name, departure_date, total_seat, booked_seat (pax non-cancelled), available_seat (live).
+- **Frontend**: tab **WhatsApp Chat** di Customer360 (bubble kiri customer / kanan AI, badge HANDOVER, kronologis).
+- **Security**: semua endpoint N8N wajib HMAC (X-API-Key/X-Timestamp/X-Signature); tanpa signature → 401. Scope terbatas (customer communication + order capture), bukan akses penuh DB.
+- **Tests**: `tests/test_phase8i_n8n_conv.py` — e2e HMAC: availability, inbound(customer)+AI reply+handover, history kronologis (3), AUTO SALES booking + idempotent (no duplicate), 401 tanpa signature → SEMUA PASS. Frontend chat diverifikasi via screenshot.
+
 ## Phase 8H — Report Download, Export & Validation (2026-06) — DONE
 - **Export & Print** untuk 8 laporan Phase 8G: tombol Excel / CSV / PDF / Print (A4) + Riwayat di toolbar `/reports`.
 - **Endpoint** `GET /api/mgmt-reports/{key}/export?format=xlsx|csv|pdf` (token via Bearer header atau `?auth=`), plus `GET /api/report-exports` (riwayat).

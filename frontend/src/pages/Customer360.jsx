@@ -98,6 +98,7 @@ export default function Customer360() {
               <TabsTrigger value="leads">Leads</TabsTrigger>
               <TabsTrigger value="followups">Follow Ups</TabsTrigger>
               <TabsTrigger value="comms">Communication</TabsTrigger>
+              <TabsTrigger value="chat" data-testid="tab-chat">WhatsApp Chat</TabsTrigger>
             </TabsList>
 
             <TabsContent value="timeline">
@@ -157,6 +158,9 @@ export default function Customer360() {
                     </div>
                   ))}
               </CardContent></Card>
+            </TabsContent>
+            <TabsContent value="chat">
+              <ChatHistory customerId={id} />
             </TabsContent>
           </Tabs>
         </div>
@@ -230,5 +234,38 @@ function QuickDialog({ dialog, setDialog, customer, onDone }) {
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+function ChatHistory({ customerId }) {
+  const [msgs, setMsgs] = useState(null);
+  useEffect(() => {
+    api.get(`/customers/${customerId}/conversations`).then((r) => setMsgs(r.data || [])).catch(() => setMsgs([]));
+  }, [customerId]);
+  if (msgs === null) return <Card className="border-slate-200 shadow-sm"><CardContent className="p-8 flex justify-center"><Loader2 className="h-5 w-5 animate-spin text-blue-600" /></CardContent></Card>;
+  return (
+    <Card className="border-slate-200 shadow-sm">
+      <CardContent className="p-4" data-testid="chat-history">
+        {msgs.length === 0 ? <p className="text-sm text-slate-400 text-center py-6">Belum ada percakapan WhatsApp.</p> : (
+          <div className="space-y-3">
+            {msgs.map((m) => {
+              const inbound = m.direction === "INBOUND";
+              return (
+                <div key={m.id || m.conversation_id} className={`flex ${inbound ? "justify-start" : "justify-end"}`} data-testid={`chat-msg-${m.direction}`}>
+                  <div className={`max-w-[75%] rounded-2xl px-4 py-2 ${inbound ? "bg-slate-100 text-slate-800 rounded-tl-sm" : "bg-blue-600 text-white rounded-tr-sm"}`}>
+                    <div className="flex items-center gap-2 mb-0.5">
+                      <span className={`text-[10px] font-semibold ${inbound ? "text-slate-500" : "text-blue-100"}`}>{m.sender_type}{m.ai_or_human === "AI" && !inbound ? " · AI" : ""}</span>
+                      {m.status === "REQUIRES_HUMAN" && <Badge className="bg-amber-500 text-white text-[9px] px-1.5 py-0">HANDOVER</Badge>}
+                    </div>
+                    <p className="text-sm whitespace-pre-wrap">{m.message}</p>
+                    <p className={`text-[10px] mt-1 ${inbound ? "text-slate-400" : "text-blue-100"}`}>{fmtDateTime(m.timestamp)}</p>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }

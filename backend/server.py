@@ -4234,6 +4234,113 @@ async def get_n8n_api_logs(user: dict = Depends(require_role("super_admin"))):
     return [serialize(d) for d in docs]
 
 
+# ---------- Phase 8I: Availability, Conversation Log, Human Handover ----------
+async def _availability(package_id, departure_id=None):
+    pkg = await db.packages.find_one({"_id": ObjectId(package_id)}) if ObjectId.is_valid(package_id) else None
+    if not pkg:
+        return None
+    q = {"_id": ObjectId(departure_id)} if (departure_id and ObjectId.is_valid(departure_id)) else {"package_id": package_id}
+    dep = await db.departures.find_one(q, sort=[("departure_date", 1)])
+    total = int((dep or {}).get("total_seat") or (dep or {}).get("seat") or 0)
+    depid = str(dep["_id"]) if dep else (departure_id or None)
+    booked = 0
+    if depid:
+        for b in await db.bookings.find({"departure_id": depid, "status": {"$ne": "CANCELLED"}}).to_list(3000):
+            booked += int(b.get("pax") or 0)
+    return {"package_id": package_id, "package_name": pkg.get("package_name") or pkg.get("name"),
+            "departure_id": depid, "departure_date": (dep or {}).get("departure_date") or (dep or {}).get("date") or "",
+            "total_seat": total, "booked_seat": booked, "available_seat": max(total - booked, 0)}
+
+
+@api_router.get("/v1/packages/{package_id}/availability")
+async def v1_availability(package_id: str, request: Request, departure_id: Optional[str] = None, _n=Depends(n8n_auth)):
+    start = _time.time()
+    a = await _availability(package_id, departure_id)
+    if not a:
+        await _api_log(request, f"/v1/packages/{package_id}/availability", "GET", None, False, 404, start, "not found")
+        return _v1_err("PACKAGE_NOT_FOUND", "Package tidak ditemukan", 404)
+    await _api_log(request, f"/v1/packages/{package_id}/availability", "GET", None, True, 200, start)
+    return {"success": True, **a}
+
+
+@api_router.get("/packages/{package_id}/availability")
+async def crm_availability(package_id: str, departure_id: Optional[str] = None, user: dict = Depends(get_current_user)):
+    a = await _availability(package_id, departure_id)
+    if not a:
+        raise HTTPException(status_code=404, detail="Package tidak ditemukan")
+    return a
+
+
+async def _match_or_create_customer(payload):
+    wa = (payload.get("whatsapp") or payload.get("customer_phone") or payload.get("phone") or "").strip()
+    cid = payload.get("customer_id")
+    if cid and ObjectId.is_valid(cid):
+        c = await db.customers.find_one({"_id": ObjectId(cid)})
+        if c:
+            return c
+    if wa:
+        c = await db.customers.find_one({"whatsapp": wa})
+        if c:
+            return c
+        count = await db.customers.count_documents({})
+        doc = {"customer_code": f"CUST-{count + 1:05d}", "full_name": payload.get("customer_name") or wa, "whatsapp": wa,
+               "email": payload.get("email", ""), "customer_type": "Prospect", "customer_source": "N8N",
+               "sales_pic_id": None, "sales_pic_name": "AUTO SALES", "created_at": now_iso(), "created_by": "SYSTEM"}
+        r = await db.customers.insert_one(doc)
+        return await db.customers.find_one({"_id": r.inserted_id})
+    return None
+
+
+@api_router.post("/v1/conversations")
+async def v1_log_conversation(payload: dict = Body(default={}), request: Request = None, _n=Depends(n8n_auth)):
+    start = _time.time()
+    ext = payload.get("external_message_id") or (request.headers.get("X-Idempotency-Key") if request else None)
+    if ext:
+        dup = await db.conversations.find_one({"external_message_id": ext})
+        if dup:
+            await _api_log(request, "/v1/conversations", "POST", ext, True, 200, start, "idempotent")
+            return {"success": True, "idempotent": True, "conversation": serialize(dup)}
+    cust = await _match_or_create_customer(payload)
+    direction = (payload.get("direction") or "INBOUND").upper()
+    requires_human = bool(payload.get("requires_human"))
+    doc = {"conversation_id": payload.get("conversation_id") or str(_uuid.uuid4()),
+           "customer_id": str(cust["_id"]) if cust else None, "customer_name": (cust or {}).get("full_name"),
+           "whatsapp": (payload.get("whatsapp") or payload.get("customer_phone") or (cust or {}).get("whatsapp") or ""),
+           "channel": payload.get("channel", "WHATSAPP"), "direction": direction,
+           "message": payload.get("message", ""), "message_type": payload.get("message_type", "TEXT"),
+           "sender_type": (payload.get("sender_type") or ("CUSTOMER" if direction == "INBOUND" else "AI")).upper(),
+           "receiver": payload.get("receiver", ""), "ai_or_human": payload.get("ai_or_human", "AI"),
+           "n8n_workflow_id": payload.get("n8n_workflow_id", ""), "external_message_id": ext,
+           "status": "REQUIRES_HUMAN" if requires_human else payload.get("status", "LOGGED"),
+           "timestamp": payload.get("timestamp") or now_iso(), "created_at": now_iso()}
+    r = await db.conversations.insert_one(doc)
+    if requires_human and cust:
+        await db.customers.update_one({"_id": cust["_id"]}, {"$set": {"conversation_status": "HUMAN_HANDOVER"}})
+        trigger_n8n("conversation.handover", {"customer_id": doc["customer_id"], "whatsapp": doc["whatsapp"]})
+    await _api_log(request, "/v1/conversations", "POST", ext, True, 201, start)
+    return {"success": True, "conversation": serialize(await db.conversations.find_one({"_id": r.inserted_id}))}
+
+
+@api_router.get("/v1/conversations")
+async def v1_list_conversations(request: Request, customer_id: Optional[str] = None, whatsapp: Optional[str] = None, _n=Depends(n8n_auth)):
+    start = _time.time()
+    q = {}
+    if customer_id:
+        q["customer_id"] = customer_id
+    if whatsapp:
+        q["whatsapp"] = whatsapp
+    docs = await db.conversations.find(q).sort("timestamp", 1).to_list(1000)
+    await _api_log(request, "/v1/conversations", "GET", None, True, 200, start)
+    return {"success": True, "conversations": [serialize(d) for d in docs]}
+
+
+@api_router.get("/customers/{cid}/conversations")
+async def crm_conversations(cid: str, user: dict = Depends(require_permission("crm.view"))):
+    docs = await db.conversations.find({"customer_id": cid}).sort("timestamp", 1).to_list(2000)
+    return [serialize(d) for d in docs]
+
+
+
 # ---------- N8N MACHINE API /api/v1/* ----------
 @api_router.get("/v1/packages")
 async def v1_packages(request: Request, _n=Depends(n8n_auth)):
