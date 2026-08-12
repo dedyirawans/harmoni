@@ -1,0 +1,34 @@
+{
+  "summary": "Phase 8H Report Export & Validation — 51/51 backend tests PASS across 8 report keys × 3 formats (xlsx/csv/pdf) with RBAC, auth-query fallback, filename convention, history recording, and 8G regression. Frontend /reports UI: toolbar buttons (Excel/CSV/PDF/Print/Riwayat) present with correct data-testid; downloads triggered for all 3 formats for accounting (filenames follow [ReportName]_[Period]_[GeneratedDate].[ext]); Riwayat dialog populated (59 rows); Sales user restricted to 3 tabs (sales-detail/team-performance/receivable-aging) and can download own-scoped CSV.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "/reports", "issues": ["Recharts warning 'width(-1) and height(-1)' persists (carry-over from 8G, cosmetic).", "History Dialog missing aria-describedby (a11y warning only)."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_phase8h_report_exports.py",
+    "/app/test_reports/pytest/phase8h_results.xml"
+  ],
+  "action_items": [
+    "(Optional a11y) Add DialogDescription/aria-describedby to history-dialog to remove Radix warning.",
+    "(Optional) Investigate ResponsiveContainer width/height warnings on Reports page (pre-existing from 8G)."
+  ],
+  "critical_code_review_comments": [
+    "export_mgmt_report accepts token via ?auth= query — acceptable for browser blob-download workflow but token will appear in server access logs; consider POST-then-signed-URL if logs are shipped externally.",
+    "_validate_report returns True on Exception (silently bypasses 409); intentional to avoid false blocks but hides genuine flatten mismatches.",
+    "server.py now ~5730 lines — split reports/export into a router module.",
+    "Excel sheet title sanitized (replaces / \\ * ? : [ ]) — fix from prior iteration confirmed working (balance-sheet xlsx 200).",
+    "Payable summary uses key 'd90' (no 'p' suffix) — consistent with 8G tests."
+  ],
+  "updated_files": ["/app/backend/tests/test_phase8h_report_exports.py"],
+  "success_rate": {"backend": "100% (51/51)", "frontend": "100% for UI + RBAC + download flows tested"},
+  "test_credentials": "super_admin dedyirawan18@gmail.com/Admin@123, accounting accounting@safarcrm.com/Account@123, sales sales@safarcrm.com/Sales@123",
+  "seed_data_creation": "None — reused existing seeded data. Test exports were logged into db.report_exports collection (59 rows visible in Riwayat).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Phase 8H exports fully working: GET /api/mgmt-reports/{key}/export?format=xlsx|csv|pdf with Bearer or ?auth= token; correct Content-Type, Content-Disposition filename [ReportName]_[Period]_[GeneratedDate].[ext]; RBAC enforced via REPORT_META finance flag (sales blocked from profit-loss/balance-sheet/cash-flow/tax-recap/payable). GET /api/report-exports scoped by role. Frontend Reports.jsx has data-testid attributes: export-excel-btn, export-csv-btn, export-pdf-btn, print-btn, history-btn, history-dialog, history-table, history-row-{i}. 8G endpoints unchanged.",
+  "rca of the issue": "No issues found. Prior balance-sheet xlsx 500 was fixed by sanitizing '/' in Excel sheet title; verified all 8 keys × xlsx return 200."
+}

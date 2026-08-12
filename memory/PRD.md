@@ -1,5 +1,18 @@
 # Safar Travel CRM — Product Requirements (Living Doc)
 
+## Phase 8H — Report Download, Export & Validation (2026-06) — DONE
+- **Export & Print** untuk 8 laporan Phase 8G: tombol Excel / CSV / PDF / Print (A4) + Riwayat di toolbar `/reports`.
+- **Endpoint** `GET /api/mgmt-reports/{key}/export?format=xlsx|csv|pdf` (token via Bearer header atau `?auth=`), plus `GET /api/report-exports` (riwayat).
+  - **Excel** (openpyxl): company name, report name, periode, generated date, filter, header berwarna, data, TOTAL/SUMMARY, auto-width. Sheet title disanitasi (hapus `/ \ * ? : [ ]`).
+  - **PDF** (reportlab): logo + company, judul, periode, generated, filter, tabel, summary, nomor halaman.
+  - **CSV**: tabular saja (+ summary rows).
+- **Penamaan file**: `[NamaReport]_[Period]_[GeneratedDate].[ext]` (mis. `Laporan_Laba_Rugi_Agustus_2026_2026-08-12.xlsx`).
+- **Report Export History** (koleksi `report_exports`): report_name, user, waktu, format, filter, file_name. Accounting/SA lihat semua; Sales lihat milik sendiri.
+- **Validation** (`_validate_report`): total baris vs summary harus konsisten; jika tidak → **409** dan export dibatalkan (P&L gross=rev-hpp, Neraca balanced, Penjualan/Piutang/Utang total baris=summary).
+- **RBAC export** mengikuti REPORT_META finance flag: Sales 403 untuk Laba Rugi/Neraca/Arus Kas/Rekap Pajak/Utang; boleh export Penjualan/Kinerja Tim/Piutang (own-scoped).
+- **Print A4**: CSS `@media print` (hide UI, tampilkan `#print-area` + header print company/report/periode).
+- **Tests**: iteration_25.json — backend 51/51 (8 report × 3 format × RBAC/filename/history + regresi 8G) + frontend 100% (toolbar, download 3 format, Riwayat, Sales 3-tab + own export).
+
 ## Phase 8G — Financial & Management Reports (2026-06) — DONE
 - **Menu Reports** (`/reports` → `Reports.jsx`, sebelumnya Placeholder) dengan 8 laporan dari data transaksi aktual (tanpa dummy):
   1. **Laba Rugi**: Pendapatan (Tour/Umrah/Lainnya), HPP (Flight/Hotel/Visa/Transport/Supplier/Other dari package_costs×pax), Gross Profit, Operating Expense (Salary/Marketing/Office/Transportation/Commission/Bank Fee/Other), Net Profit — nominal + persentase + margin.

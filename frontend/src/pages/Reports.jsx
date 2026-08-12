@@ -7,7 +7,9 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Loader2, TrendingUp, Scale, Waves, ShoppingCart, Users2, Receipt, ArrowDownCircle, ArrowUpCircle, AlertTriangle } from "lucide-react";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+import { toast } from "sonner";
+import { Loader2, TrendingUp, Scale, Waves, ShoppingCart, Users2, Receipt, ArrowDownCircle, ArrowUpCircle, AlertTriangle, FileSpreadsheet, FileText, Printer, Download, History } from "lucide-react";
 
 const rp = (v) => "Rp " + Number(v || 0).toLocaleString("id-ID");
 const num = (v) => Number(v || 0).toLocaleString("id-ID");
@@ -44,18 +46,46 @@ export default function Reports() {
   const [filters, setFilters] = useState({ product_type: "", package_id: "", sales_id: "", destination: "", status: "", vendor: "", customer: "", tax_type: "PPN", month: String(new Date().getMonth() + 1), year: String(new Date().getFullYear()) });
   const [opts, setOpts] = useState({ packages: [], sales: [], product_types: [], destinations: [], tax_types: [] });
   const [data, setData] = useState(null);
+  const [brand, setBrand] = useState({ company_name: "", logo: "" });
+  const [history, setHistory] = useState(null);
 
-  useEffect(() => { api.get("/mgmt-reports/filters").then((r) => setOpts(r.data)).catch(() => {}); }, []);
+  useEffect(() => {
+    api.get("/mgmt-reports/filters").then((r) => setOpts(r.data)).catch(() => {});
+    api.get("/public/branding").then((r) => setBrand(r.data || {})).catch(() => {});
+  }, []);
 
-  const load = () => {
-    setData(null);
+  const buildQuery = () => {
     const q = new URLSearchParams();
     if (active !== "tax-recap" && active !== "balance-sheet") { if (range.frm) q.set("frm", range.frm); if (range.to) q.set("to", range.to); }
     if (active === "balance-sheet" && range.to) q.set("as_of", range.to);
     if (active === "tax-recap") { q.set("month", filters.month); q.set("year", filters.year); q.set("tax_type", filters.tax_type); }
     ["product_type", "package_id", "sales_id", "destination", "status", "vendor", "customer"].forEach((k) => { if (filters[k]) q.set(k, filters[k]); });
-    api.get(`/mgmt-reports/${active}?${q.toString()}`).then((r) => setData(r.data)).catch((e) => setData({ __err: e.response?.status === 403 ? "403 Forbidden" : "Gagal memuat laporan" }));
+    return q.toString();
   };
+
+  const load = () => {
+    setData(null);
+    api.get(`/mgmt-reports/${active}?${buildQuery()}`).then((r) => setData(r.data)).catch((e) => setData({ __err: e.response?.status === 403 ? "403 Forbidden" : "Gagal memuat laporan" }));
+  };
+
+  const doExport = async (fmt) => {
+    try {
+      const res = await api.get(`/mgmt-reports/${active}/export?format=${fmt}&${buildQuery()}`, { responseType: "blob" });
+      const cd = res.headers["content-disposition"] || "";
+      const m = cd.match(/filename=([^;]+)/);
+      const name = m ? m[1].trim() : `${active}.${fmt}`;
+      const url = URL.createObjectURL(res.data);
+      const a = document.createElement("a"); a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+      toast.success(`Export ${fmt.toUpperCase()} berhasil`);
+    } catch (e) {
+      let msg = "Export gagal";
+      if (e.response?.status === 403) msg = "Anda tidak diizinkan meng-export laporan ini";
+      else if (e.response?.status === 409) { try { msg = JSON.parse(await e.response.data.text()).detail; } catch { msg = "Data tidak konsisten"; } }
+      toast.error(msg);
+    }
+  };
+  const openHistory = () => api.get("/report-exports").then((r) => setHistory(r.data || [])).catch(() => setHistory([]));
+  const periodLabel = active === "balance-sheet" ? `Per ${range.to || "-"}` : active === "tax-recap" ? `${filters.month}/${filters.year}` : `${range.frm || "..."} s/d ${range.to || "..."}`;
   useEffect(() => { load(); /* eslint-disable-next-line */ }, [active, range, filters.product_type, filters.package_id, filters.sales_id, filters.destination, filters.status, filters.vendor, filters.customer, filters.tax_type, filters.month, filters.year]);
 
   const applyPreset = (p) => { setPreset(p); if (p !== "custom") setRange(presetRange(p)); };
@@ -101,12 +131,49 @@ export default function Reports() {
             </>
           )}
           <Button onClick={load} data-testid="report-apply-btn">Terapkan</Button>
+          <div className="flex flex-wrap gap-2 ml-auto no-print">
+            <Button variant="outline" onClick={() => doExport("xlsx")} data-testid="export-excel-btn"><FileSpreadsheet className="h-4 w-4 mr-1" />Excel</Button>
+            <Button variant="outline" onClick={() => doExport("csv")} data-testid="export-csv-btn"><Download className="h-4 w-4 mr-1" />CSV</Button>
+            <Button variant="outline" onClick={() => doExport("pdf")} data-testid="export-pdf-btn"><FileText className="h-4 w-4 mr-1" />PDF</Button>
+            <Button variant="outline" onClick={() => window.print()} data-testid="print-btn"><Printer className="h-4 w-4 mr-1" />Print</Button>
+            <Button variant="ghost" onClick={openHistory} data-testid="history-btn"><History className="h-4 w-4 mr-1" />Riwayat</Button>
+          </div>
         </CardContent>
       </Card>
 
-      {data === null ? <div className="p-12 flex justify-center"><Loader2 className="h-6 w-6 animate-spin text-blue-600" /></div>
-        : data.__err ? <div className="p-8 text-slate-400" data-testid="report-error">{data.__err}</div>
-          : <div data-testid={`report-body-${active}`}>{renderReport(active, data)}</div>}
+      <div id="print-area">
+        <div className="print-only mb-4">
+          <div className="text-xl font-bold">{brand.company_name || "Safar Travel CRM"}</div>
+          <div className="text-lg font-semibold">{meta?.label} — {data && !data.__err && data.title ? data.title : ""}</div>
+          <div className="text-sm text-slate-600">Periode: {periodLabel} · Generated: {new Date().toISOString().slice(0, 10)}</div>
+        </div>
+        {data === null ? <div className="p-12 flex justify-center"><Loader2 className="h-6 w-6 animate-spin text-blue-600" /></div>
+          : data.__err ? <div className="p-8 text-slate-400" data-testid="report-error">{data.__err}</div>
+            : <div data-testid={`report-body-${active}`}>{renderReport(active, data)}</div>}
+      </div>
+
+      <Dialog open={history !== null} onOpenChange={(o) => !o && setHistory(null)}>
+        <DialogContent className="max-w-3xl max-h-[85vh] overflow-y-auto" data-testid="history-dialog">
+          <DialogHeader><DialogTitle>Report Export History</DialogTitle><DialogDescription className="sr-only">Riwayat export laporan</DialogDescription></DialogHeader>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm" data-testid="history-table">
+              <thead><tr className="bg-slate-800 text-white text-left"><th className="px-3 py-2">Report</th><th className="px-3 py-2 border-l border-slate-600">User</th><th className="px-3 py-2 border-l border-slate-600">Waktu</th><th className="px-3 py-2 border-l border-slate-600">Format</th><th className="px-3 py-2 border-l border-slate-600">File</th></tr></thead>
+              <tbody>
+                {(history || []).length === 0 ? <tr><td colSpan={5} className="px-4 py-8 text-center text-slate-400">Belum ada riwayat export.</td></tr>
+                  : (history || []).map((h, i) => (
+                    <tr key={h.id || i} className={i % 2 ? "bg-slate-50" : "bg-white"} data-testid={`history-row-${i}`}>
+                      <td className="px-3 py-2">{h.report_name}</td>
+                      <td className="px-3 py-2 border-l border-slate-100">{h.user_name}</td>
+                      <td className="px-3 py-2 border-l border-slate-100">{(h.created_at || "").replace("T", " ").slice(0, 16)}</td>
+                      <td className="px-3 py-2 border-l border-slate-100"><Badge className="bg-slate-100 text-slate-600 border-slate-200">{(h.format || "").toUpperCase()}</Badge></td>
+                      <td className="px-3 py-2 border-l border-slate-100 text-xs">{h.file_name}</td>
+                    </tr>
+                  ))}
+              </tbody>
+            </table>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

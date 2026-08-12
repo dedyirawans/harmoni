@@ -3263,6 +3263,266 @@ async def rpt_receivable_aging(frm: Optional[str] = None, to: Optional[str] = No
     return {"title": "Laporan Piutang Usaha", "rows": rows, "summary": {"total_receivable": tot_out, "overdue": overdue, **buckets}}
 
 
+# ---------- Phase 8H: Report Export, Download & Validation ----------
+ID_MONTHS = ["", "Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember"]
+REPORT_META = {
+    "profit-loss": ("Laporan_Laba_Rugi", True),
+    "balance-sheet": ("Neraca_Bulanan", True),
+    "cash-flow": ("Laporan_Arus_Kas", True),
+    "sales-detail": ("Laporan_Penjualan", False),
+    "team-performance": ("Laporan_Kinerja_Tim", False),
+    "tax-recap": ("Rekap_Pajak", True),
+    "payable": ("Laporan_Utang_Usaha", True),
+    "receivable-aging": ("Laporan_Piutang_Usaha", False),
+}
+
+
+def _flatten_report(key, d):
+    if key == "profit-loss":
+        cols = ["Bagian", "Item", "Nominal", "%"]
+        rows = []
+        for k in ("tour", "umrah", "other", "total"):
+            x = d["revenue"][k]
+            rows.append(["Pendapatan", x["label"], x["amount"], x["percent"]])
+        for k in ("flight", "hotel", "visa", "transport", "supplier", "other", "total"):
+            x = d["hpp"][k]
+            rows.append(["HPP", x["label"], x["amount"], x["percent"]])
+        rows.append(["", d["gross_profit"]["label"], d["gross_profit"]["amount"], d["gross_profit"]["percent"]])
+        for k in ("salary", "marketing", "office", "transportation", "commission", "bank_fee", "other", "total"):
+            x = d["opex"][k]
+            rows.append(["Operating Expense", x["label"], x["amount"], x["percent"]])
+        rows.append(["", d["net_profit"]["label"], d["net_profit"]["amount"], d["net_profit"]["percent"]])
+        s = d["summary"]
+        summ = [["Revenue", s["revenue"]], ["HPP", s["hpp"]], ["Gross Profit", s["gross_profit"]], ["Operating Expense", s["opex"]], ["Net Profit", s["net_profit"]]]
+        return cols, rows, summ
+    if key == "balance-sheet":
+        cols = ["Bagian", "Item", "Nominal"]
+        rows = []
+        for grp, lbl in (("assets_current", "Asset"), ("assets_noncurrent", "Asset"), ("liabilities", "Liability"), ("equity", "Equity")):
+            for k, v in d[grp].items():
+                rows.append([lbl, k.replace("_", " ").title(), v])
+        summ = [["Total Asset", d["total_assets"]], ["Total Liability", d["total_liabilities"]], ["Total Equity", d["total_equity"]], ["Balanced", "YA" if d["balanced"] else "TIDAK"]]
+        return cols, rows, summ
+    if key == "cash-flow":
+        cols = ["Aktivitas", "Item", "Nominal"]
+        rows = []
+        for grp, lbl in (("operating", "Operating"), ("investing", "Investing"), ("financing", "Financing")):
+            for k, v in d[grp].items():
+                rows.append([lbl, k.replace("_", " ").title(), v])
+        summ = [["Opening Cash", d["opening_cash"]], ["Cash In", d["cash_in"]], ["Cash Out", d["cash_out"]], ["Net Cash Flow", d["net_cash_flow"]], ["Ending Cash", d["ending_cash"]]]
+        return cols, rows, summ
+    if key == "sales-detail":
+        cols = ["Booking", "Date", "Customer", "Sales", "Package", "Type", "Departure", "Pax", "Selling", "Discount", "Net", "Paid", "Outstanding", "Status"]
+        rows = [[r["booking_number"], r["date"], r["customer"], r["sales"], r["package"], r["product_type"], r["departure"], r["pax"], r["selling_price"], r["discount"], r["net_sales"], r["payment"], r["outstanding"], r["status"]] for r in d["rows"]]
+        s = d["summary"]
+        summ = [["Total Booking", s["total_booking"]], ["Total Pax", s["total_pax"]], ["Gross Sales", s["gross_sales"]], ["Net Sales", s["net_sales"]], ["Paid", s["paid"]], ["Outstanding", s["outstanding"]]]
+        return cols, rows, summ
+    if key == "team-performance":
+        cols = ["Sales", "Leads", "Qualified", "Quotations", "Converted", "Bookings", "Pax", "Sales Value", "Conversion %", "Follow Up", "Overdue FU", "Commission"]
+        rows = [[r["sales"], r["leads"], r["qualified"], r["quotations"], r["converted"], r["bookings"], r["pax"], r["sales_value"], r["conversion_rate"], r["follow_up"], r["overdue_follow_up"], r["commission"]] for r in d["rows"]]
+        summ = [["Total Sales (PIC)", len(d["rows"])], ["Total Booking", sum(r["bookings"] for r in d["rows"])], ["Total Pax", sum(r["pax"] for r in d["rows"])], ["Total Value", sum(r["sales_value"] for r in d["rows"])]]
+        return cols, rows, summ
+    if key == "tax-recap":
+        cols = d.get("columns") or []
+        rows = [list(r) for r in (d.get("rows") or [])]
+        summ = [[k.replace("_", " ").title(), v] for k, v in (d.get("summary") or {}).items()]
+        return cols, rows, summ
+    if key == "payable":
+        cols = ["Vendor", "Invoice", "Inv Date", "Due", "Amount", "Paid", "Outstanding", "Aging", "Status"]
+        rows = [[r["vendor"], r["invoice"], r["invoice_date"], r["due_date"], r["amount"], r["paid"], r["outstanding"], r["aging"], r["status"]] for r in d["rows"]]
+        s = d["summary"]
+        summ = [["Total Payable", s["total_payable"]], ["Outstanding", s["total_outstanding"]], ["Current", s["current"]], [">90", s["d90"]]]
+        return cols, rows, summ
+    if key == "receivable-aging":
+        cols = ["Customer", "Invoice", "Inv Date", "Due", "Total", "Paid", "Outstanding", "Aging", "Status", "Sales"]
+        rows = [[r["customer"], r["invoice"], r["invoice_date"], r["due_date"], r["total_invoice"], r["paid"], r["outstanding"], r["aging"], r["status"], r["sales"]] for r in d["rows"]]
+        s = d["summary"]
+        summ = [["Total Receivable", s["total_receivable"]], ["Overdue", s["overdue"]], ["Current", s["current"]], [">90", s["d90"]]]
+        return cols, rows, summ
+    return [], [], []
+
+
+def _validate_report(key, d, rows):
+    try:
+        if key == "sales-detail":
+            return abs(sum(float(r[10]) for r in rows) - float(d["summary"]["net_sales"])) < 1
+        if key == "receivable-aging":
+            return abs(sum(float(r[6]) for r in rows) - float(d["summary"]["total_receivable"])) < 1
+        if key == "payable":
+            return abs(sum(float(r[6]) for r in rows) - float(d["summary"]["total_outstanding"])) < 1
+        if key == "profit-loss":
+            return abs((d["summary"]["revenue"] - d["summary"]["hpp"]) - d["summary"]["gross_profit"]) < 1
+        if key == "balance-sheet":
+            return bool(d.get("balanced"))
+    except Exception:
+        return True
+    return True
+
+
+def _num_or_money(v):
+    return _money(v) if isinstance(v, (int, float)) else str(v)
+
+
+def export_mgmt_file(fmt, company, meta, cols, rows, summ):
+    from openpyxl.styles import Font, PatternFill
+    fname = meta["fname"]
+    if fmt == "csv":
+        sio = StringIO()
+        w = _csv.writer(sio)
+        w.writerow(cols)
+        for r in rows:
+            w.writerow(r)
+        if summ:
+            w.writerow([])
+            for s in summ:
+                w.writerow(s)
+        return Response(content=sio.getvalue(), media_type="text/csv", headers={"Content-Disposition": f"attachment; filename={fname}.csv"})
+    if fmt == "xlsx":
+        wb = Workbook()
+        ws = wb.active
+        _st = (meta["report_name"] or "Report")
+        for _ch in "\\/*?:[]":
+            _st = _st.replace(_ch, "-")
+        ws.title = _st[:31]
+        ws.append([company.get("company_name", "Safar Travel CRM")]); ws["A1"].font = Font(bold=True, size=14)
+        ws.append([meta["report_name"]]); ws["A2"].font = Font(bold=True, size=12)
+        ws.append([f"Periode: {meta['period']}"])
+        ws.append([f"Generated: {meta['generated']}"])
+        ws.append([f"Filter: {meta['filter']}"])
+        ws.append([])
+        hr = ws.max_row + 1
+        ws.append(cols)
+        for c in range(1, len(cols) + 1):
+            cell = ws.cell(row=hr, column=c)
+            cell.font = Font(bold=True, color="FFFFFF")
+            cell.fill = PatternFill("solid", fgColor="1D4ED8")
+        for r in rows:
+            ws.append([_fmt_cell(c) for c in r])
+        if summ:
+            ws.append([])
+            ws.append(["TOTAL / SUMMARY"])
+            ws.cell(row=ws.max_row, column=1).font = Font(bold=True)
+            for s in summ:
+                ws.append([s[0], _fmt_cell(s[1])] + [str(x) for x in s[2:]])
+        for col in ws.columns:
+            ln = max((len(str(c.value)) for c in col if c.value is not None), default=10)
+            ws.column_dimensions[col[0].column_letter].width = min(max(ln + 2, 12), 42)
+        bio = BytesIO()
+        wb.save(bio)
+        return Response(content=bio.getvalue(), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Content-Disposition": f"attachment; filename={fname}.xlsx"})
+    # pdf
+    buf = BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4, topMargin=16 * mm, bottomMargin=16 * mm, leftMargin=14 * mm, rightMargin=14 * mm)
+    styles = getSampleStyleSheet()
+    small = ParagraphStyle("s8", parent=styles["Normal"], fontSize=8, textColor=colors.HexColor("#475569"))
+    el = []
+    logo = _logo_flowable(company)
+    head = []
+    if logo:
+        head.append(logo)
+    head.append(Paragraph(f"<b>{company.get('company_name', 'Safar Travel CRM')}</b>", styles["Normal"]))
+    right = [Paragraph(f"<b>{meta['report_name']}</b>", styles["Heading3"]),
+             Paragraph(f"Periode: {meta['period']}", small),
+             Paragraph(f"Generated: {meta['generated']}", small),
+             Paragraph(f"Filter: {meta['filter']}", small)]
+    el.append(Table([[head, right]], colWidths=[80 * mm, 90 * mm], style=TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP")])))
+    el.append(Spacer(1, 5 * mm))
+    data = [cols] + [[_num_or_money(c) for c in r] for r in rows]
+    t = Table(data, repeatRows=1)
+    t.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1d4ed8")), ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                           ("FONTSIZE", (0, 0), (-1, -1), 7), ("GRID", (0, 0), (-1, -1), 0.3, colors.HexColor("#cbd5e1")),
+                           ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f1f5f9")])]))
+    el.append(t)
+    if summ:
+        el.append(Spacer(1, 4 * mm))
+        el.append(Paragraph("<b>Summary</b>", styles["Normal"]))
+        st = Table([[str(s[0]), _num_or_money(s[1])] for s in summ], colWidths=[80 * mm, 55 * mm])
+        st.setStyle(TableStyle([("FONTSIZE", (0, 0), (-1, -1), 8), ("GRID", (0, 0), (-1, -1), 0.3, colors.HexColor("#cbd5e1"))]))
+        el.append(st)
+
+    def _pg(canvas, docx):
+        canvas.setFont("Helvetica", 7)
+        canvas.setFillColor(colors.HexColor("#94a3b8"))
+        canvas.drawRightString(A4[0] - 14 * mm, 10 * mm, f"Halaman {docx.page}")
+    doc.build(el, onFirstPage=_pg, onLaterPages=_pg)
+    return Response(content=buf.getvalue(), media_type="application/pdf", headers={"Content-Disposition": f"attachment; filename={fname}.pdf"})
+
+
+async def _run_report_for_export(key, user, q):
+    if key == "profit-loss":
+        return await rpt_profit_loss(frm=q.get("frm"), to=q.get("to"), product_type=q.get("product_type"), package_id=q.get("package_id"), destination=q.get("destination"), user=user)
+    if key == "balance-sheet":
+        return await rpt_balance_sheet(as_of=q.get("as_of") or q.get("to"), user=user)
+    if key == "cash-flow":
+        return await rpt_cash_flow(frm=q.get("frm"), to=q.get("to"), user=user)
+    if key == "sales-detail":
+        return await rpt_sales_detail(frm=q.get("frm"), to=q.get("to"), product_type=q.get("product_type"), package_id=q.get("package_id"), sales_id=q.get("sales_id"), status=q.get("status"), user=user)
+    if key == "team-performance":
+        return await rpt_team_performance(frm=q.get("frm"), to=q.get("to"), sales_id=q.get("sales_id"), user=user)
+    if key == "tax-recap":
+        return await rpt_tax_recap(month=q.get("month"), year=q.get("year"), tax_type=q.get("tax_type") or "PPN", user=user)
+    if key == "payable":
+        return await rpt_payable(frm=q.get("frm"), to=q.get("to"), vendor=q.get("vendor"), status=q.get("status"), user=user)
+    if key == "receivable-aging":
+        return await rpt_receivable_aging(frm=q.get("frm"), to=q.get("to"), customer=q.get("customer"), sales_id=q.get("sales_id"), status=q.get("status"), user=user)
+    raise HTTPException(status_code=404, detail="Report not found")
+
+
+@api_router.get("/mgmt-reports/{key}/export")
+async def export_mgmt_report(key: str, format: str = "xlsx", frm: Optional[str] = None, to: Optional[str] = None,
+                             as_of: Optional[str] = None, product_type: Optional[str] = None, package_id: Optional[str] = None,
+                             sales_id: Optional[str] = None, destination: Optional[str] = None, status: Optional[str] = None,
+                             vendor: Optional[str] = None, customer: Optional[str] = None, month: Optional[str] = None,
+                             year: Optional[str] = None, tax_type: Optional[str] = None,
+                             authorization: str = Header(None), auth: str = Query(None)):
+    token = authorization[7:] if (authorization or "").startswith("Bearer ") else auth
+    user = await user_from_token(token) if token else None
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    if key not in REPORT_META:
+        raise HTTPException(status_code=404, detail="Report not found")
+    rname, finance = REPORT_META[key]
+    if finance and user["role"] not in ("accounting", "super_admin"):
+        raise HTTPException(status_code=403, detail="403 Forbidden")
+    q = {"frm": frm, "to": to, "as_of": as_of, "product_type": product_type, "package_id": package_id,
+         "sales_id": sales_id, "destination": destination, "status": status, "vendor": vendor,
+         "customer": customer, "month": month, "year": year, "tax_type": tax_type}
+    d = await _run_report_for_export(key, user, q)
+    cols, rows, summ = _flatten_report(key, d)
+    if not _validate_report(key, d, rows):
+        raise HTTPException(status_code=409, detail="Total laporan tidak konsisten dengan database. Export dibatalkan.")
+    fmt = format if format in ("csv", "xlsx", "pdf") else "xlsx"
+    b = await db.system_settings.find_one({}) or {}
+    company = {"company_name": b.get("company_name") or "Safar Travel CRM", "logo": b.get("logo") or "",
+               "address": b.get("address", ""), "phone": b.get("phone", ""), "email": b.get("email", "")}
+    if month and year:
+        period = f"{ID_MONTHS[int(month)]} {year}"
+        pslug = f"{ID_MONTHS[int(month)]}_{year}"
+    elif as_of or (key == "balance-sheet" and to):
+        av = as_of or to or today_str()
+        period, pslug = f"Per {av}", av
+    elif frm or to:
+        period = f"{frm or '...'} s/d {to or '...'}"
+        pslug = f"{frm or 'all'}_{to or 'all'}"
+    else:
+        period, pslug = "Semua Periode", "All"
+    gen = now_iso()[:10]
+    fname = f"{rname}_{pslug}_{gen}".replace(" ", "_").replace("/", "-").replace(":", "-")
+    filt = ", ".join(f"{k}={v}" for k, v in q.items() if v) or "-"
+    meta = {"report_name": d.get("title") or rname.replace("_", " "), "period": period, "generated": gen, "filter": filt, "fname": fname}
+    await db.report_exports.insert_one({"report_key": key, "report_name": meta["report_name"], "user_id": user["_id"],
+                                        "user_name": user.get("name"), "format": fmt, "filter": filt, "period": period,
+                                        "file_name": f"{fname}.{fmt}", "created_at": now_iso()})
+    return export_mgmt_file(fmt, company, meta, cols, rows, summ)
+
+
+@api_router.get("/report-exports")
+async def list_report_exports(user: dict = Depends(get_current_user)):
+    qq = {} if user["role"] in ("accounting", "super_admin") else {"user_id": user["_id"]}
+    docs = await db.report_exports.find(qq).sort("created_at", -1).to_list(200)
+    return [serialize(x) for x in docs]
+
+
 # ---------- Commission & n8n settings (Accounting must be 403) ----------
 @api_router.get("/commission-settings")
 async def get_commission_settings(user: dict = Depends(require_permission("commission.manage"))):

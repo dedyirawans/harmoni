@@ -73,3 +73,14 @@ h1, h2, h3, h4, h5, .font-display {
         @apply bg-background text-foreground;
     }
 }
+
+/* Phase 8H: print (A4) */
+@media print {
+  body * { visibility: hidden !important; }
+  #print-area, #print-area * { visibility: visible !important; }
+  #print-area { position: absolute; left: 0; top: 0; width: 100%; }
+  .no-print { display: none !important; }
+  @page { size: A4; margin: 12mm; }
+}
+.print-only { display: none; }
+@media print { .print-only { display: block !important; } }
