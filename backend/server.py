@@ -2448,6 +2448,178 @@ async def sales_departure_alerts(user: dict = Depends(require_permission("sales.
     return out
 
 
+# ---- Supplier Management (Phase 9J) ----
+SUPPLIER_TYPES = ["Airline", "Hotel", "Transport", "Visa Provider", "Tour Operator", "Guide", "Muthawwif", "Insurance", "Other"]
+_SUP_ROLE = require_role("super_admin", "accounting")
+
+
+def _sup_aging_bucket(due_date, outstanding):
+    if outstanding <= 0 or not due_date:
+        return "current"
+    from datetime import date
+    try:
+        overdue = (date.today() - date.fromisoformat(due_date[:10])).days
+    except Exception:
+        return "current"
+    if overdue <= 0:
+        return "current"
+    if overdue <= 30:
+        return "1-30"
+    if overdue <= 60:
+        return "31-60"
+    return "60+"
+
+
+@api_router.post("/suppliers")
+async def create_supplier(body: dict, request: Request, user: dict = Depends(_SUP_ROLE)):
+    if not (body.get("name") or "").strip():
+        raise HTTPException(status_code=400, detail="Supplier name is required")
+    doc = {"name": body.get("name"), "type": body.get("type") if body.get("type") in SUPPLIER_TYPES else "Other",
+           "contact": body.get("contact", ""), "email": body.get("email", ""), "phone": body.get("phone", ""),
+           "address": body.get("address", ""), "tax_info": body.get("tax_info", ""), "bank_account": body.get("bank_account", ""),
+           "status": body.get("status", "ACTIVE"), "is_deleted": False, "created_at": now_iso(), "created_by": user["name"]}
+    res = await db.suppliers.insert_one(doc)
+    await log_audit(user, "supplier", "create", request, record_id=str(res.inserted_id), new={"name": doc["name"]})
+    return serialize(await db.suppliers.find_one({"_id": res.inserted_id}))
+
+
+@api_router.get("/suppliers")
+async def list_suppliers(type: Optional[str] = None, status: Optional[str] = None,
+                         include_archived: bool = False, user: dict = Depends(_SUP_ROLE)):
+    q = {} if include_archived else {"is_deleted": {"$ne": True}}
+    if type and type != "all":
+        q["type"] = type
+    if status and status != "all":
+        q["status"] = status
+    docs = await db.suppliers.find(q).sort("name", 1).to_list(1000)
+    return [serialize(d) for d in docs]
+
+
+@api_router.patch("/suppliers/{sid}")
+async def update_supplier(sid: str, body: dict, request: Request, user: dict = Depends(_SUP_ROLE)):
+    if not ObjectId.is_valid(sid):
+        raise HTTPException(status_code=404, detail="Supplier not found")
+    fields = {k: body[k] for k in ("name", "type", "contact", "email", "phone", "address", "tax_info", "bank_account", "status") if k in body}
+    r = await db.suppliers.update_one({"_id": ObjectId(sid)}, {"$set": fields})
+    if not r.matched_count:
+        raise HTTPException(status_code=404, detail="Supplier not found")
+    await log_audit(user, "supplier", "update", request, record_id=sid, new=fields)
+    return serialize(await db.suppliers.find_one({"_id": ObjectId(sid)}))
+
+
+@api_router.delete("/suppliers/{sid}")
+async def delete_supplier(sid: str, request: Request, reason: str = Query(""), user: dict = Depends(require_role("super_admin"))):
+    if not (reason or "").strip():
+        raise HTTPException(status_code=400, detail="Reason is required to archive a supplier")
+    if not ObjectId.is_valid(sid):
+        raise HTTPException(status_code=404, detail="Supplier not found")
+    r = await db.suppliers.update_one({"_id": ObjectId(sid)}, {"$set": {"is_deleted": True, "status": "ARCHIVED"}})
+    if not r.matched_count:
+        raise HTTPException(status_code=404, detail="Supplier not found")
+    await log_audit(user, "supplier", "archive", request, record_id=sid, reason=reason.strip())
+    return {"success": True}
+
+
+@api_router.post("/supplier-costs")
+async def create_supplier_cost(body: dict, request: Request, user: dict = Depends(_SUP_ROLE)):
+    qty = float(body.get("quantity") or 0)
+    unit = float(body.get("unit_cost") or 0)
+    if qty <= 0 or unit < 0:
+        raise HTTPException(status_code=400, detail="Quantity/Unit Cost tidak valid")
+    sup = await db.suppliers.find_one({"_id": ObjectId(body["supplier_id"])}) if ObjectId.is_valid(body.get("supplier_id") or "") else None
+    doc = {"supplier_id": body.get("supplier_id"), "supplier_name": (sup or {}).get("name", ""),
+           "package_id": body.get("package_id"), "departure_id": body.get("departure_id"),
+           "service": body.get("service", ""), "quantity": qty, "unit_cost": unit, "total_cost": round(qty * unit, 2),
+           "invoice_number": body.get("invoice_number", ""), "payment_status": body.get("payment_status", "UNPAID"),
+           "created_at": now_iso(), "created_by": user["name"]}
+    res = await db.supplier_costs.insert_one(doc)
+    await log_audit(user, "supplier", "cost_create", request, record_id=str(res.inserted_id), new={"total": doc["total_cost"]})
+    return serialize(await db.supplier_costs.find_one({"_id": res.inserted_id}))
+
+
+@api_router.get("/supplier-costs")
+async def list_supplier_costs(package_id: Optional[str] = None, departure_id: Optional[str] = None, user: dict = Depends(_SUP_ROLE)):
+    q = {}
+    if package_id:
+        q["package_id"] = package_id
+    if departure_id:
+        q["departure_id"] = departure_id
+    docs = await db.supplier_costs.find(q).sort("created_at", -1).to_list(1000)
+    return [serialize(d) for d in docs]
+
+
+@api_router.get("/supplier-costs/summary")
+async def supplier_cost_summary(package_id: Optional[str] = None, departure_id: Optional[str] = None, user: dict = Depends(_SUP_ROLE)):
+    q = {}
+    if package_id:
+        q["package_id"] = package_id
+    if departure_id:
+        q["departure_id"] = departure_id
+    docs = await db.supplier_costs.find(q).to_list(2000)
+    total = sum(float(d.get("total_cost") or 0) for d in docs)
+    by_type = {}
+    for d in docs:
+        by_type[d.get("service") or "Other"] = by_type.get(d.get("service") or "Other", 0) + float(d.get("total_cost") or 0)
+    return {"total_supplier_cost": round(total, 2), "count": len(docs), "by_service": by_type}
+
+
+@api_router.delete("/supplier-costs/{cid}")
+async def delete_supplier_cost(cid: str, request: Request, user: dict = Depends(_SUP_ROLE)):
+    if not ObjectId.is_valid(cid):
+        raise HTTPException(status_code=404, detail="Not found")
+    await db.supplier_costs.delete_one({"_id": ObjectId(cid)})
+    await log_audit(user, "supplier", "cost_delete", request, record_id=cid)
+    return {"success": True}
+
+
+@api_router.post("/supplier-payments")
+async def create_supplier_payment(body: dict, request: Request, user: dict = Depends(_SUP_ROLE)):
+    amt = float(body.get("amount") or 0)
+    if amt <= 0:
+        raise HTTPException(status_code=400, detail="Amount harus lebih dari 0")
+    sup = await db.suppliers.find_one({"_id": ObjectId(body["supplier_id"])}) if ObjectId.is_valid(body.get("supplier_id") or "") else None
+    doc = {"supplier_id": body.get("supplier_id"), "supplier_name": (sup or {}).get("name", ""),
+           "invoice_number": body.get("invoice_number", ""), "due_date": body.get("due_date", ""),
+           "amount": amt, "paid": float(body.get("paid") or 0), "cost_id": body.get("cost_id"),
+           "created_at": now_iso(), "created_by": user["name"]}
+    res = await db.supplier_payments.insert_one(doc)
+    await log_audit(user, "supplier", "payment_create", request, record_id=str(res.inserted_id), new={"amount": amt})
+    return serialize(await db.supplier_payments.find_one({"_id": res.inserted_id}))
+
+
+@api_router.get("/supplier-payments")
+async def list_supplier_payments(supplier_id: Optional[str] = None, user: dict = Depends(_SUP_ROLE)):
+    q = {}
+    if supplier_id:
+        q["supplier_id"] = supplier_id
+    docs = await db.supplier_payments.find(q).sort("due_date", 1).to_list(1000)
+    out = []
+    for d in docs:
+        s = serialize(d)
+        outstanding = round(float(d.get("amount") or 0) - float(d.get("paid") or 0), 2)
+        s["outstanding"] = outstanding
+        s["status"] = "PAID" if outstanding <= 0 else ("PARTIAL" if float(d.get("paid") or 0) > 0 else "UNPAID")
+        s["aging"] = _sup_aging_bucket(d.get("due_date"), outstanding)
+        out.append(s)
+    return out
+
+
+@api_router.patch("/supplier-payments/{pid}")
+async def update_supplier_payment(pid: str, body: dict, request: Request, user: dict = Depends(_SUP_ROLE)):
+    if not ObjectId.is_valid(pid):
+        raise HTTPException(status_code=404, detail="Not found")
+    fields = {k: body[k] for k in ("invoice_number", "due_date", "amount", "paid") if k in body}
+    if "amount" in fields:
+        fields["amount"] = float(fields["amount"] or 0)
+    if "paid" in fields:
+        fields["paid"] = float(fields["paid"] or 0)
+    r = await db.supplier_payments.update_one({"_id": ObjectId(pid)}, {"$set": fields})
+    if not r.matched_count:
+        raise HTTPException(status_code=404, detail="Not found")
+    await log_audit(user, "supplier", "payment_update", request, record_id=pid, new=fields)
+    return serialize(await db.supplier_payments.find_one({"_id": ObjectId(pid)}))
+
+
 # ---- Departures ----
 @api_router.get("/packages/{pid}/departures")
 async def package_departures(pid: str, user: dict = Depends(require_any_permission("product.view", "packages.view", "departures.view", "hpp.view"))):

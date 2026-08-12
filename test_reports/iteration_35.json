@@ -1,0 +1,55 @@
+{
+  "summary": "Phase 9J Supplier Management — full backend + frontend end-to-end testing. 16/18 backend tests pass. All frontend flows PASS (Suppliers CRUD, Supplier Costs with total_cost=qty*unit_cost + delete, Payments creation, RBAC 403 for sales, HPP integration in ProductDetail /packages/:id Costing/HPP tab). ONE CRITICAL BACKEND BUG FOUND: aging bucket for supplier-payments is ALWAYS 'Current' (capitalized) regardless of overdue days, due to a name-shadowing bug (duplicate _aging_bucket definition).",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "GET /api/supplier-payments",
+        "issue": "Aging bucket is always 'Current' (capitalized) even when invoice is 15+ days overdue. Root cause: server.py defines _aging_bucket TWICE — first at line 2456 (Phase 9J: signature (due_date, outstanding), returns lowercase 'current'/'1-30'/'31-60'/'60+'), then again at line 3930 (Receivable module: signature (due_date, today), returns capitalized 'Current'). Python's late binding means the call at line 2602 `_aging_bucket(d.get('due_date'), outstanding)` resolves to the LATER function, which treats the outstanding number as the 'today' date string, fails `date.fromisoformat(today)`, and returns 'Current' in the except branch. Verified: created a payment with due_date 15 days in the past + outstanding=600000 → API returns aging='Current' instead of '1-30'. Also breaks frontend badge coloring (AGING map in Suppliers.jsx uses lowercase keys {current, 1-30, 31-60, 60+}) so all badges render uncolored.",
+        "priority": "CRITICAL"
+      }
+    ],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {
+        "flow": "Payments & Aging tab",
+        "issue": "Aging badge column always shows 'Current' with no color (due to backend bug above). Frontend AGING style map keys ('current','1-30','31-60','60+') do not match backend output ('Current') — even if backend returned correct bucket, capital-C 'Current' would not match the lowercase 'current' key.",
+        "affected_selectors": ["supplier-payments-table"]
+      }
+    ],
+    "design_issues": [
+      {"screen": "Suppliers dialogs", "issues": ["A11y warning: DialogContent missing `Description`/`aria-describedby` (Radix warning). Non-blocking."]},
+      {"screen": "Dashboard (regression)", "issues": ["Existing Recharts width(-1)/height(-1) warnings still present (also reported iteration_34)."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_phase9j_suppliers.py",
+    "/app/test_reports/pytest/phase9j.xml"
+  ],
+  "action_items": [
+    "Rename the second `_aging_bucket` (server.py line 3930) to something like `_ar_aging_bucket` (or rename the Phase 9J one to `_sup_aging_bucket`) to eliminate name shadowing. This alone will restore correct '1-30' / '31-60' / '60+' bucket values for supplier-payments.",
+    "Ensure the Phase 9J bucket returns values that match the frontend AGING map keys in /app/frontend/src/pages/Suppliers.jsx (currently lowercase 'current','1-30','31-60','60+'). If code will standardize on capitalized 'Current','1-30','31-60','61-90','>90' (as used in receivable-aging), update the frontend AGING map keys accordingly."
+  ],
+  "critical_code_review_comments": [
+    "Duplicate function definition `_aging_bucket` in server.py (lines 2456 and 3930) with different signatures — silent Python override. Use unique names for module-level helpers.",
+    "server.py has grown to 7564 lines — well above the 700-line guideline. Consider splitting into routers (suppliers.py, receivables.py, mgmt_reports.py, dashboard.py) for maintainability.",
+    "GET /api/supplier-payments recomputes outstanding/status/aging on every read; consider persisting or caching, or at minimum add a unit test to lock behavior."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_phase9j_suppliers.py (new — 18 tests covering suppliers/costs/payments/RBAC/HPP)"
+  ],
+  "success_rate": {"backend": "16/18 = 88.9% (2 failures both from same aging-bucket bug)", "frontend": "100% for tested flows (visual+API)"},
+  "test_credentials": "Super Admin dedyirawan18@gmail.com/Admin@123 ✓  |  Accounting accounting@safarcrm.com/Account@123 ✓  |  Sales sales@safarcrm.com/Sales@123 ✓",
+  "seed_data_creation": "Backend tests created a few TEST_Supplier_* rows + supplier_payments (INV-TEST-1, INV-TEST-2) and one UI_TEST_Sup_* supplier + INV-UI-1 payment. Test supplier costs are self-cleaned (delete test). Payments/suppliers left in DB (no destructive cleanup implemented).",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Frontend tested against external URL. Suppliers page route is /suppliers. Package detail with Costing/HPP tab is /packages/:id (NOT /product/:id). Sales user login works with sales@safarcrm.com/Sales@123 and route protection correctly renders a nice '403 — Forbidden' page + hides Suppliers from sidebar. HPP integration verified: Component Cost (Rp 14,400,000) + Supplier Cost (Rp 2,000,000) = Total Cost HPP (Rp 16,400,000); Gross Profit and Margin recompute correctly. data-testids present: linked-supplier-costs, linked-supplier-total, combined-hpp-value, gross-margin-value. Aging bug is the ONLY functional defect — after main agent fixes the duplicate _aging_bucket, re-run backend tests test_list_computes_outstanding_status_aging and test_paid_full_status to confirm.",
+  "rca of the issue": {
+    "bug": "Supplier-payments aging bucket always returns 'Current' regardless of overdue days.",
+    "reproduction": "1) POST /api/supplier-payments with due_date 15 days in the past, amount=1000000, paid=400000. 2) GET /api/supplier-payments. Observed: {outstanding:600000, status:'PARTIAL', aging:'Current'}. Expected: aging:'1-30'.",
+    "root_cause": "server.py defines two functions with the same name `_aging_bucket`: line 2456 (Phase 9J) has signature (due_date, outstanding) → lowercase buckets; line 3930 (receivable module) has signature (due_date: str, today: str) → 'Current'/'1-30'/'31-60'/'61-90'/'>90'. Python takes the last binding. When the supplier-payments GET handler at line 2602 calls `_aging_bucket(d.get('due_date'), outstanding)`, `outstanding` (a float) is passed as `today` and `date.fromisoformat(today)` raises TypeError → the except returns 'Current'.",
+    "mitigation": "Rename one of the functions to a unique name (recommended: rename Phase 9J's helper to `_sup_aging_bucket` and update the reference at line 2602). No other logic change needed. Also align the returned bucket keys with the frontend AGING map or vice versa."
+  }
+}

@@ -1,7 +1,7 @@
 import {
   LayoutDashboard, Users2, Briefcase, Package, CalendarCheck, Calculator,
   Receipt, Percent, FileBarChart, Plug, UserCog, Settings, ScrollText,
-  Plane, PlaneTakeoff, Bell, Wallet, TrendingUp, ListChecks, FileText, ShieldCheck, CheckSquare,
+  Plane, PlaneTakeoff, Bell, Wallet, TrendingUp, ListChecks, FileText, ShieldCheck, CheckSquare, Building2,
 } from "lucide-react";
 
 // Route -> permission required (mirrors backend). null = any authenticated user.
@@ -26,6 +26,7 @@ export const ROUTE_PERMS = {
   "/packages": "packages.view",
   "/departures": "departures.view",
   "/operations": null,
+  "/suppliers": "hpp.view",
   "/hpp": "hpp.view",
   "/notifications": "notifications.view",
   "/follow-ups": "sales.view",
@@ -45,6 +46,7 @@ export const MENUS = {
     { label: "Accounting", path: "/accounting", icon: Calculator },
     { label: "Booking", path: "/booking", icon: CalendarCheck },
     { label: "Operations", path: "/operations", icon: PlaneTakeoff },
+    { label: "Suppliers", path: "/suppliers", icon: Building2 },
     { label: "Tax", path: "/tax", icon: Receipt },
     { label: "Commission", path: "/commission", icon: Percent },
     { label: "Approval", path: "/approvals", icon: ShieldCheck },
@@ -76,6 +78,7 @@ export const MENUS = {
     { label: "Bookings", path: "/booking", icon: CalendarCheck },
     { label: "Invoices & AR", path: "/accounting", icon: Calculator },
     { label: "Operations", path: "/operations", icon: PlaneTakeoff },
+    { label: "Suppliers", path: "/suppliers", icon: Building2 },
     { label: "My Tasks", path: "/tasks", icon: CheckSquare },
     { label: "Cancellation & Refund", path: "/approvals", icon: ShieldCheck },
     { label: "Approval Center", path: "/approval-center", icon: ShieldCheck },

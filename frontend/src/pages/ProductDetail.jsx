@@ -248,8 +248,13 @@ function CostingTab({ pkgId, sellingPrice, costing, canManage, onChange }) {
   COST_COMPONENTS.forEach(([k]) => { init[k] = costing?.components?.[k] || 0; });
   const [comp, setComp] = useState(init);
   const [saving, setSaving] = useState(false);
+  const [supCosts, setSupCosts] = useState([]);
+  useEffect(() => { api.get(`/supplier-costs?package_id=${pkgId}`).then((r) => setSupCosts(r.data || [])).catch(() => setSupCosts([])); }, [pkgId]);
+
   const total = Object.values(comp).reduce((a, b) => a + Number(b || 0), 0);
-  const gp = Number(sellingPrice || 0) - total;
+  const supTotal = supCosts.reduce((a, c) => a + Number(c.total_cost || 0), 0);
+  const combined = total + supTotal;
+  const gp = Number(sellingPrice || 0) - combined;
   const gm = sellingPrice ? ((gp / sellingPrice) * 100).toFixed(2) : 0;
 
   const save = async () => {
@@ -261,18 +266,37 @@ function CostingTab({ pkgId, sellingPrice, costing, canManage, onChange }) {
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-4" data-testid="costing-tab">
-      <Card className="border-slate-200 lg:col-span-2"><CardHeader><CardTitle className="font-display text-lg">Cost Components (per pax)</CardTitle></CardHeader>
-        <CardContent className="grid grid-cols-2 gap-3">
-          {COST_COMPONENTS.map(([k, l]) => (
-            <div key={k} className="space-y-1"><Label className="text-xs">{l}</Label>
-              <Input type="number" value={comp[k]} disabled={!canManage} onChange={(e) => setComp({ ...comp, [k]: e.target.value })} data-testid={`cost-${k}`} /></div>
-          ))}
-          {canManage && <div className="col-span-2"><Button onClick={save} disabled={saving} className="bg-blue-600 hover:bg-blue-700" data-testid="save-costing-button">{saving ? "Saving..." : "Save costing"}</Button></div>}
-        </CardContent>
-      </Card>
+      <div className="lg:col-span-2 space-y-4">
+        <Card className="border-slate-200"><CardHeader><CardTitle className="font-display text-lg">Cost Components (per pax)</CardTitle></CardHeader>
+          <CardContent className="grid grid-cols-2 gap-3">
+            {COST_COMPONENTS.map(([k, l]) => (
+              <div key={k} className="space-y-1"><Label className="text-xs">{l}</Label>
+                <Input type="number" value={comp[k]} disabled={!canManage} onChange={(e) => setComp({ ...comp, [k]: e.target.value })} data-testid={`cost-${k}`} /></div>
+            ))}
+            {canManage && <div className="col-span-2"><Button onClick={save} disabled={saving} className="bg-blue-600 hover:bg-blue-700" data-testid="save-costing-button">{saving ? "Saving..." : "Save costing"}</Button></div>}
+          </CardContent>
+        </Card>
+        <Card className="border-slate-200" data-testid="linked-supplier-costs">
+          <CardHeader><CardTitle className="font-display text-lg">Linked Supplier Costs</CardTitle></CardHeader>
+          <CardContent>
+            {supCosts.length === 0 ? <p className="text-sm text-slate-400" data-testid="no-supplier-costs">Belum ada biaya supplier tertaut. Tambahkan via menu Suppliers → Supplier Costs.</p>
+              : <div className="space-y-2">
+                  {supCosts.map((c) => (
+                    <div key={c._id} className="flex justify-between text-sm border-b border-slate-100 pb-1" data-testid={`linked-cost-${c._id}`}>
+                      <span className="text-slate-600">{c.supplier_name || "—"}<span className="text-slate-400"> · {c.service || "-"} ({c.quantity}×)</span></span>
+                      <span className="font-medium text-slate-800">{fmtIDR(c.total_cost)}</span>
+                    </div>
+                  ))}
+                  <div className="flex justify-between pt-1"><span className="text-slate-500 text-sm">Total Supplier Cost</span><span className="font-medium text-blue-700" data-testid="linked-supplier-total">{fmtIDR(supTotal)}</span></div>
+                </div>}
+          </CardContent>
+        </Card>
+      </div>
       <Card className="border-slate-200"><CardContent className="p-6 space-y-3">
         <Price label="Selling Price" v={sellingPrice} />
-        <Price label="Total Cost (HPP)" v={total} />
+        <Price label="Component Cost (per pax)" v={total} />
+        <Price label="Supplier Cost" v={supTotal} />
+        <div className="flex justify-between items-center pt-2 border-t"><span className="text-slate-600 text-sm font-medium">Total Cost (HPP)</span><span className="font-medium text-slate-900" data-testid="combined-hpp-value">{fmtIDR(combined)}</span></div>
         <div className="flex justify-between items-center pt-2 border-t"><span className="text-slate-500 text-sm">Gross Profit</span><span className="font-medium text-emerald-700">{fmtIDR(gp)}</span></div>
         <div className="flex justify-between items-center"><span className="text-slate-500 text-sm">Gross Margin</span><Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200" data-testid="gross-margin-value">{gm}%</Badge></div>
       </CardContent></Card>

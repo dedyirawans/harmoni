@@ -24,6 +24,7 @@ import Products from "@/pages/Products";
 import ProductDetail from "@/pages/ProductDetail";
 import Departures from "@/pages/Departures";
 import Operations from "@/pages/Operations";
+import Suppliers from "@/pages/Suppliers";
 import Quotations from "@/pages/Quotations";
 import Bookings from "@/pages/Bookings";
 import BookingDetail from "@/pages/BookingDetail";
@@ -50,6 +51,7 @@ const PAGES = {
   "/packages": Products,
   "/departures": Departures,
   "/operations": Operations,
+  "/suppliers": Suppliers,
   "/quotations": Quotations,
   "/booking": Bookings,
   "/accounting": Accounting,

@@ -1,5 +1,15 @@
 # Safar Travel CRM — Product Requirements (Living Doc)
 
+## PHASE 9J — Supplier Management (2026-06) — DONE (Verified iteration_35, Frontend 100% + backend 18/18 after fix)
+- **Akses**: HANYA Super Admin + Accounting (`_SUP_ROLE = require_role("super_admin","accounting")`). Menu "Suppliers" (route `/suppliers`, perm `hpp.view`) muncul untuk 2 role tsb; Sales → 403.
+- **Suppliers tab**: Supplier Master CRUD (name, type[Airline/Hotel/Transport/Visa/…], contact, email, phone, address, tax_info/NPWP, bank_account, status). Endpoints `POST/GET/PATCH /api/suppliers`, `DELETE` (soft-archive, super_admin only, reason wajib).
+- **Supplier Costs tab**: pilih paket → tambah biaya (supplier, service, quantity, unit_cost, invoice, payment_status); `total_cost = qty*unit_cost`. `POST/GET/DELETE /api/supplier-costs` + `GET /api/supplier-costs/summary`.
+- **Payments & Aging tab**: invoice supplier (amount, paid, due_date); `outstanding=amount-paid`, status PAID/PARTIAL/UNPAID, aging bucket current/1-30/31-60/60+. `POST/GET/PATCH /api/supplier-payments`.
+- **HPP Integration**: ProductDetail Costing/HPP tab menampilkan "Linked Supplier Costs" + menambahkan Supplier Cost ke Total Cost (HPP), Gross Profit & Margin dihitung ulang.
+- **Bug fix (iteration_35)**: duplikasi nama fungsi `_aging_bucket` (shadowing) → aging supplier selalu "Current". Fungsi Phase 9J di-rename `_sup_aging_bucket`. Verified via curl (due -15 hari → aging `1-30`).
+- Collections: suppliers, supplier_costs, supplier_payments.
+
+
 ## PHASE 9I Enhancements Batch 2 (2026-06) — DONE (Verified iteration_34, Frontend 100% + backend curl)
 - **Manifest Excel (.xlsx)**: `GET /operations/departures/{did}/manifest.xlsx` (openpyxl; role super_admin/accounting). Tombol "Excel" + "PDF" di detail departure.
 - **Sales Alerts Widget**: `GET /operations/sales-alerts` (owner-scoped, booking sales ≤60 hari dengan issue payment/dokumen/paspor) → `SalesAlertsWidget` di Sales Dashboard; klik → /booking/{id}.
