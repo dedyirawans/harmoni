@@ -4234,6 +4234,39 @@ async def get_n8n_api_logs(user: dict = Depends(require_role("super_admin"))):
     return [serialize(d) for d in docs]
 
 
+@api_router.get("/integrations/n8n/monitor")
+async def n8n_monitor(user: dict = Depends(require_role("super_admin"))):
+    today = today_str()
+    convs = await db.conversations.find({}).to_list(8000)
+    tc = [c for c in convs if (c.get("timestamp") or c.get("created_at") or "")[:10] == today]
+    auto = await db.bookings.find({"booking_source": "AUTO SALES"}).sort("created_at", -1).to_list(3000)
+    logs = await db.n8n_api_logs.find({}).sort("timestamp", -1).to_list(500)
+    cfg = await _n8n_cfg()
+    bycust = {}
+    for c in sorted(convs, key=lambda x: x.get("timestamp") or x.get("created_at") or ""):
+        k = c.get("customer_id") or c.get("whatsapp") or "?"
+        bycust[k] = {"customer_id": c.get("customer_id"), "customer_name": c.get("customer_name"),
+                     "whatsapp": c.get("whatsapp"), "last_message": c.get("message"),
+                     "ai_status": c.get("ai_or_human"), "status": c.get("status"), "last_activity": c.get("timestamp")}
+    conversations = sorted(bycust.values(), key=lambda x: x.get("last_activity") or "", reverse=True)[:100]
+    orders = [{"order_id": b.get("booking_number"), "customer": b.get("customer_name"), "package": b.get("package_name"),
+               "departure": b.get("departure_date"), "pax": b.get("pax"), "order_date": (b.get("created_at") or "")[:10],
+               "source": b.get("booking_source"), "booking_status": b.get("status"), "payment_status": b.get("payment_status")} for b in auto[:200]]
+    sync_logs = [{"request_id": str(l.get("_id")), "event": l.get("endpoint"), "method": l.get("method"), "direction": "INBOUND",
+                  "timestamp": l.get("timestamp"), "status": "SUCCESS" if l.get("ok") else "FAILED",
+                  "response": l.get("code"), "error": l.get("error", ""), "retry_count": l.get("retry_count", 0)} for l in logs[:200]]
+    return {"connection": {"status": "CONNECTED" if cfg.get("base_url") else "NOT_CONFIGURED", "base_url": cfg.get("base_url", ""), "last_sync": (logs[0]["timestamp"] if logs else None)},
+            "stats": {"total_today": len(tc), "inbound": sum(1 for c in tc if c.get("direction") == "INBOUND"),
+                      "outbound": sum(1 for c in tc if c.get("direction") == "OUTBOUND"),
+                      "ai_responses": sum(1 for c in tc if c.get("sender_type") == "AI"),
+                      "human_handover": sum(1 for c in convs if c.get("status") == "REQUIRES_HUMAN"),
+                      "orders_today": sum(1 for b in auto if (b.get("created_at") or "")[:10] == today),
+                      "auto_sales_orders": len(auto),
+                      "failed_requests": sum(1 for l in logs if not l.get("ok")),
+                      "api_errors": sum(1 for l in logs if (l.get("code") or 200) >= 500)},
+            "conversations": conversations, "orders": orders, "sync_logs": sync_logs}
+
+
 # ---------- Phase 8I: Availability, Conversation Log, Human Handover ----------
 async def _availability(package_id, departure_id=None):
     pkg = await db.packages.find_one({"_id": ObjectId(package_id)}) if ObjectId.is_valid(package_id) else None

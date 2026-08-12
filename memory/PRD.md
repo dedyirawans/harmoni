@@ -1,5 +1,14 @@
 # Safar Travel CRM — Product Requirements (Living Doc)
 
+## Phase 8J — N8N Admin Monitoring & Order Sync (2026-06) — DONE
+- **Menu N8N khusus Super Admin** (`/n8n` → `N8N.jsx`; tidak tampil untuk Sales/Accounting; backend monitor 403 utk non-super_admin).
+- **Dashboard**: `GET /api/integrations/n8n/monitor` (super_admin) — Connection Status, Last Sync, Messages Today (in/out/AI), Human Handover, Orders Today, AUTO SALES Orders, Failed Requests, API Errors (dari koleksi conversations, bookings AUTO SALES, n8n_api_logs, config).
+- **Conversation Monitoring**: daftar per-customer (last message, AI status, status, last activity). **Order Monitoring**: order AUTO SALES (order id/customer/package/departure/pax/date/source/booking&payment status). **Sync Logs**: request id/event/method/direction/timestamp/status(SUCCESS/FAILED)/response/error/retry.
+- **Test Connection**: tombol → `POST /integrations/n8n/test` (Connected + response time / Failed).
+- **Availability Safety** (sudah ada Phase 7): `POST /v1/bookings` menolak bila available_seat < pax (DEPARTURE_FULL), package harus ACTIVE; seat berkurang hanya setelah booking CRM berhasil. Idempotency via external_booking_id (no duplicate). AUTO SALES → sales_pic_id=NULL (bukan salesperson, tanpa komisi kecuali di-assign; sesuai Phase 8E).
+- **Access Control**: Super Admin full; Accounting & Sales tidak melihat menu & 403 di endpoint monitor.
+- Verifikasi: curl (monitor stats real + RBAC 403 Accounting/Sales) + screenshot UI (9 KPI, 4 tab, connection banner). Backlog: field `publish_to_n8n` per package (ditunda agar tak regresi read N8N).
+
 ## Phase 8I — N8N Customer Communication Integration (2026-06) — DONE
 - Membangun di atas Phase 6/7 (HMAC `n8n_auth`, rate-limit, ACTIVE-only reads, AUTO SALES + idempotent booking). Delta baru:
 - **Conversation Log** (koleksi `conversations`): POST `/api/v1/conversations` (n8n_auth) mencatat pesan — conversation_id, customer_id, whatsapp, channel, direction (INBOUND/OUTBOUND), message, message_type, sender_type (CUSTOMER/AI/SALES/SYSTEM), receiver, ai_or_human, n8n_workflow_id, status, timestamp. **Customer matching** by whatsapp (existing → dipakai; else auto-create Source=N8N, PIC=AUTO SALES, sales_pic_id=NULL). **Idempotency** via external_message_id / X-Idempotency-Key.
