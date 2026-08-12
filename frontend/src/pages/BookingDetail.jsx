@@ -22,7 +22,7 @@ const SCHED_COLORS = { PENDING: "bg-slate-100 text-slate-600", PARTIAL: "bg-ambe
 export default function BookingDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { hasPerm } = useAuth();
+  const { hasPerm, user } = useAuth();
   const canTravel = hasPerm("traveler.manage");
   const canDoc = hasPerm("document.manage");
   const canInvoice = hasPerm("invoice.manage");
@@ -140,6 +140,7 @@ export default function BookingDetail() {
                       {canPay && inv.status !== "Paid" && <Button size="sm" className="bg-emerald-600 hover:bg-emerald-700" onClick={() => setPayFor(inv)} data-testid={`record-payment-${inv._id}`}>Record Payment</Button>}
                     </div>
                   </div>
+                  <InvoicePayments invoiceId={inv._id} canVoid={user?.role === "super_admin"} onChange={load} />
                 </div>
               ))}
             </div>
@@ -332,8 +333,41 @@ function TravelerDialog({ bookingId, onClose, onSaved }) {
   );
 }
 
-function PaymentDialog({ invoice, onClose, onSaved }) {
-  const [f, setF] = useState({ payment_date: new Date().toISOString().slice(0, 10), amount: invoice.outstanding, payment_type: "DP", payment_method: "Bank Transfer", bank: "", reference_number: "", notes: "" });
+function InvoicePayments({ invoiceId, canVoid, onChange }) {
+  const [pays, setPays] = useState(null);
+  const load = useCallback(() => {
+    api.get(`/invoices/${invoiceId}/payments`).then((r) => setPays(r.data || [])).catch(() => setPays([]));
+  }, [invoiceId]);
+  useEffect(() => { load(); }, [load]);
+  const voidPay = async (p) => {
+    const reason = window.prompt(`Alasan VOID pembayaran Rp ${p.amount} (wajib):`, "");
+    if (reason === null) return;
+    if (!reason.trim()) return toast.error("Alasan wajib diisi");
+    try { await api.post(`/payments/${p._id}/void`, { reason }); toast.success("Pembayaran di-VOID"); load(); onChange && onChange(); }
+    catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); }
+  };
+  if (!pays || pays.length === 0) return null;
+  return (
+    <div className="mt-3 border-t border-slate-100 pt-2 space-y-1" data-testid={`payments-list-${invoiceId}`}>
+      {pays.map((p) => {
+        const isVoid = p.status === "VOID";
+        return (
+          <div key={p._id} className="flex items-center justify-between text-xs" data-testid={`payment-item-${p._id}`}>
+            <div className={isVoid ? "line-through text-slate-400" : "text-slate-600"}>
+              {(p.payment_date || "").slice(0, 10)} · {fmtIDR(p.amount)} · {p.payment_method || "—"}
+              {isVoid && <span className="ml-2 text-red-500 no-underline">VOID{p.void_reason ? ` · ${p.void_reason}` : ""}</span>}
+            </div>
+            {canVoid && !isVoid && (
+              <Button size="sm" variant="ghost" className="h-6 px-2 text-red-600" onClick={() => voidPay(p)} data-testid={`void-payment-${p._id}`}><Ban className="h-3 w-3 mr-1" />Void</Button>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function PaymentDialog({ invoice, onClose, onSaved }) {  const [f, setF] = useState({ payment_date: new Date().toISOString().slice(0, 10), amount: invoice.outstanding, payment_type: "DP", payment_method: "Bank Transfer", bank: "", reference_number: "", notes: "" });
   const [saving, setSaving] = useState(false);
   const set = (k) => (v) => setF((o) => ({ ...o, [k]: v }));
   const save = async () => {

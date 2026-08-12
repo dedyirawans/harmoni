@@ -24,18 +24,22 @@ import {
 } from "@/components/ui/alert-dialog";
 import { UserPlus, MoreVertical, Loader2, Users2 } from "lucide-react";
 import { toast } from "sonner";
+import { useAuth } from "@/context/AuthContext";
 
 const EMPTY = { name: "", email: "", phone: "", username: "", role: "sales", status: "active", branch: "", data_scope: "own", password: "" };
 
 export default function Users() {
+  const { user: me } = useAuth();
+  const isSA = me?.role === "super_admin";
   const [users, setUsers] = useState(null);
+  const [showArchived, setShowArchived] = useState(false);
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState(null);
   const [form, setForm] = useState(EMPTY);
   const [saving, setSaving] = useState(false);
 
-  const load = () => api.get("/users").then((r) => setUsers(r.data)).catch(() => setUsers([]));
-  useEffect(() => { load(); }, []);
+  const load = () => api.get("/users", { params: { include_archived: showArchived } }).then((r) => setUsers(r.data)).catch(() => setUsers([]));
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, [showArchived]);
 
   const openCreate = () => { setEditing(null); setForm(EMPTY); setOpen(true); };
   const openEdit = (u) => {
@@ -75,9 +79,20 @@ export default function Users() {
   };
 
   const remove = async (u) => {
+    const reason = window.prompt(`Alasan mengarsipkan user "${u.name}" (wajib):`, "");
+    if (reason === null) return;
+    if (!reason.trim()) return toast.error("Alasan wajib diisi");
     try {
-      await api.delete(`/users/${u._id}`);
-      toast.success("User deleted");
+      await api.delete(`/users/${u._id}`, { params: { reason } });
+      toast.success("User diarsipkan");
+      load();
+    } catch (err) { toast.error(formatApiErrorDetail(err.response?.data?.detail)); }
+  };
+
+  const restore = async (u) => {
+    try {
+      await api.post(`/users/${u._id}/restore`);
+      toast.success("User dipulihkan");
       load();
     } catch (err) { toast.error(formatApiErrorDetail(err.response?.data?.detail)); }
   };
@@ -94,7 +109,11 @@ export default function Users() {
           <h1 className="font-display text-3xl font-bold text-slate-900">User Management</h1>
           <p className="text-slate-500 mt-1">Create and manage users, roles, and access scope.</p>
         </div>
-        <Dialog open={open} onOpenChange={setOpen}>
+        <div className="flex items-center gap-4">
+          <label className="flex items-center gap-2 text-sm text-slate-500">
+            <Switch checked={showArchived} onCheckedChange={setShowArchived} data-testid="users-show-archived" /> Show archived
+          </label>
+          <Dialog open={open} onOpenChange={setOpen}>
           <DialogTrigger asChild>
             <Button className="bg-blue-600 hover:bg-blue-700" onClick={openCreate} data-testid="add-user-button">
               <UserPlus className="h-4 w-4 mr-2" aria-hidden="true" /> Add User
@@ -172,6 +191,7 @@ export default function Users() {
             </DialogFooter>
           </DialogContent>
         </Dialog>
+        </div>
       </div>
 
       <Card className="border-slate-200 shadow-sm overflow-hidden">
@@ -208,8 +228,8 @@ export default function Users() {
                   <TableCell className="text-slate-600 capitalize">{u.role === "sales" ? u.data_scope : "all"}</TableCell>
                   <TableCell>
                     <button onClick={() => toggleStatus(u)} data-testid={`status-toggle-${u.username}`}>
-                      <Badge variant="outline" className={u.status === "active" ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-slate-100 text-slate-500"}>
-                        {u.status}
+                      <Badge variant="outline" className={u.is_deleted ? "bg-amber-50 text-amber-700 border-amber-200" : u.status === "active" ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-slate-100 text-slate-500"}>
+                        {u.is_deleted ? "archived" : u.status}
                       </Badge>
                     </button>
                   </TableCell>
@@ -223,21 +243,12 @@ export default function Users() {
                       <DropdownMenuContent align="end" className="bg-white">
                         <DropdownMenuItem onClick={() => openEdit(u)} data-testid={`edit-user-${u.username}`}>Edit</DropdownMenuItem>
                         <DropdownMenuItem onClick={() => toggleStatus(u)}>Toggle status</DropdownMenuItem>
-                        <AlertDialog>
-                          <AlertDialogTrigger asChild>
-                            <div className="relative flex cursor-pointer select-none items-center rounded-sm px-2 py-1.5 text-sm text-red-600 hover:bg-red-50" data-testid={`delete-user-${u.username}`}>Delete</div>
-                          </AlertDialogTrigger>
-                          <AlertDialogContent className="bg-white">
-                            <AlertDialogHeader>
-                              <AlertDialogTitle>Delete {u.name}?</AlertDialogTitle>
-                              <AlertDialogDescription>This action cannot be undone.</AlertDialogDescription>
-                            </AlertDialogHeader>
-                            <AlertDialogFooter>
-                              <AlertDialogCancel>Cancel</AlertDialogCancel>
-                              <AlertDialogAction className="bg-red-600 hover:bg-red-700" onClick={() => remove(u)} data-testid={`confirm-delete-${u.username}`}>Delete</AlertDialogAction>
-                            </AlertDialogFooter>
-                          </AlertDialogContent>
-                        </AlertDialog>
+                        {isSA && !u.is_deleted && (
+                          <DropdownMenuItem className="text-red-600" onClick={() => remove(u)} data-testid={`archive-user-${u.username}`}>Archive</DropdownMenuItem>
+                        )}
+                        {isSA && u.is_deleted && (
+                          <DropdownMenuItem className="text-emerald-600" onClick={() => restore(u)} data-testid={`restore-user-${u.username}`}>Restore</DropdownMenuItem>
+                        )}
                       </DropdownMenuContent>
                     </DropdownMenu>
                   </TableCell>

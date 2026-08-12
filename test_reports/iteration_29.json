@@ -1,0 +1,39 @@
+{
+  "summary": "Phase 9G (Audit Trail, Soft Delete & Data Security) UI verification. 4/6 target flows fully pass; 2 flows blocked by backend gaps. PASS: (1) Super Admin login, (2) /audit page renders with all filters (audit-module-filter/user-filter/date-from/date-to/search-button), audit-table populated, module=payment filter returns 7 rows, audit-reason-<id> column shows 'Salah input nominal' on void audit id 6a7c981e64b6a63b16b9f216, audit-expand-<id> reveals audit-detail-<id> panel containing both 'Nilai Lama' and 'Nilai Baru' JSON. (3) Customers (/crm) as Super Admin: customers-show-archived toggle present; created TEST_ArchiveMe customer (id 6a7c990064b6a63b16b9f219) then archive-customer-<id> triggers window.prompt - Cancel keeps row visible; empty reason produces toast 'Alasan wajib diisi' and row stays; valid reason 'Test archive reason' archives (row removed from default view); after toggling Show archived the row reappears with ARCHIVED badge and restore-customer-<id> button; Restore returns it to default list. (4) BookingDetail Sales RBAC: page 'Booking tidak tersedia' (backend 403) so no controls exposed to sales; Customers RBAC: sales sees NO customers-show-archived toggle and NO archive-customer-* buttons (0/0). FAIL: (5) Users archive/restore - backend DELETE /users/{id} is a HARD delete (no soft archive), no POST /users/{id}/restore endpoint, and GET /users lacks include_archived. UI archive click returns 405/404 pattern (row is hard-removed); Show archived cannot reveal archived users. (6) Booking /booking/6a7c6911f21f8ffb9cb49099 Invoice&Payment tab: payments-list-<invoiceId> never renders because frontend GET /invoices/{id}/payments returns 405 (backend only registers POST for that route). Consequently no payment-item-<pid> and no void-payment-<pid> buttons rendered - Void flow untestable in UI even though backend POST /payments/{pid}/void works via curl.",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "GET /api/invoices/{iid}/payments", "issue": "Route not implemented (only POST exists at line 3301). Frontend InvoicePayments component (BookingDetail.jsx:339) calls this GET and receives 405 Method Not Allowed, so payments-list-<invoiceId> is never populated and Void Payment UI is unreachable.", "priority": "CRITICAL"},
+      {"endpoint": "DELETE /api/users/{user_id}", "issue": "Implemented as HARD delete (db.users.delete_one) at server.py:453 with no reason handling. Frontend Users.jsx passes ?reason= and expects soft-archive semantics. There is NO POST /api/users/{id}/restore endpoint and GET /api/users has no include_archived param. Users soft-archive spec (9G) is not implemented on backend.", "priority": "HIGH"}
+    ],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {"flow": "Users archive/restore", "issue": "UI wired to non-existent soft-archive backend; archive removes user hard, Show archived cannot list them, restore-user-<username> can never appear.", "affected_selectors": ["archive-user-<username>", "restore-user-<username>", "users-show-archived"]},
+      {"flow": "Void Payment on BookingDetail", "issue": "GET /invoices/{id}/payments 405, so payments-list, payment-item, and void-payment testids never render.", "affected_selectors": ["payments-list-<invoiceId>", "payment-item-<pid>", "void-payment-<pid>"]}
+    ],
+    "design_issues": [
+      {"screen": "/audit", "issues": ["React warning: 'Each child in a list should have a unique key prop' from AuditLog render (two <TableRow> siblings with keys l._id and `${l._id}-d`). Not user-visible but should get stable unique keys; also consider using row `id` not `_id`."]}
+    ]
+  },
+  "test_report_links": [],
+  "action_items": [
+    "Backend: implement GET /api/invoices/{iid}/payments returning payments (including VOID with status/void_reason/void_by/void_at) so UI list renders and Void button appears for super_admin.",
+    "Backend: replace hard DELETE /api/users/{id} with soft archive (set is_deleted+status=archived+archived_by/at+reason, require reason for super_admin), add POST /api/users/{id}/restore, and add include_archived=bool param to GET /api/users to mirror customers/leads behaviour.",
+    "Frontend AuditLog: fix duplicate/related React key warning on expandable detail rows."
+  ],
+  "critical_code_review_comments": [
+    "server.py:453 delete_user still does db.users.delete_one - inconsistent with customers (line 1316) and leads (line 1568) which soft-archive with reason. Spec 9G says all destructive actions must keep audit trail; hard-delete loses the record so audit 'old' snapshot is the only trace.",
+    "BookingDetail.jsx:339 relies on GET /invoices/{id}/payments which does not exist on backend. Either add the endpoint or fetch via GET /api/payments?invoice_id=... - decide one contract and align.",
+    "AuditLog.jsx uses l._id everywhere; consider serializing audit_logs with 'id' (uuid or string _id) and drop raw _id per project convention."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "n/a (per note, backend spot-verified via curl by main agent; UI-driven regression found 2 missing endpoints)", "frontend": "4/6 flows pass (Audit, Customers archive/restore, RBAC customers, RBAC booking); 2/6 blocked by backend gaps (Users archive, Void Payment)"},
+  "test_credentials": "Super Admin dedyirawan18@gmail.com/Admin@123 ; Sales sales@safarcrm.com/Sales@123",
+  "seed_data_creation": "Created customer TEST_ArchiveMe (id 6a7c990064b6a63b16b9f219) - archived and then restored (currently ACTIVE in default list). Created user test_sales_9g (sales role) via Add User - attempted archive returned 405 so user was HARD-DELETED by backend and no longer exists.",
+  "retest_needed": true,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "All testids used are confirmed present: audit-page/audit-table/audit-module-filter/audit-user-filter/audit-date-from/audit-date-to/audit-search-button/audit-row-<id>/audit-expand-<id>/audit-reason-<id>/audit-detail-<id>; customers-show-archived, archive-customer-<id>, restore-customer-<id>, customer-row-<id>; users-show-archived, user-actions-<username>, archive-user-<username>, restore-user-<username>, user-row-<username>; tab-payments, payments-list-<invoiceId>, payment-item-<pid>, void-payment-<pid>, invoice-status-<invoiceId>. Prompt handling: page.once('dialog', lambda d: asyncio.create_task(d.accept('reason'))) works; dismissing (Cancel) is a no-op path. Once backend fixes are applied, re-run void payment on invoice 6a7c6911f21f8ffb9cb4909a (has an ACTIVE payment plus one already-VOID from earlier curl). Users archive re-test: create dummy sales user via Add User then archive with reason.",
+  "rca of the issue": "1) Void Payment UI empty: BookingDetail.jsx:339 calls api.get('/invoices/${invoiceId}/payments'); backend server.py only registers @api_router.post at line 3301 for that path -> FastAPI responds 405. Fix: add GET handler returning list of payments for the invoice (include VOID with void_reason/void_by/void_at). 2) Users archive non-functional: server.py:446-455 does hard delete_one; no restore route; list_users has no include_archived filter. Fix: mirror customers implementation (soft flag is_deleted+status=ARCHIVED, keep audit, add POST /users/{id}/restore, and include_archived param on GET /users)."
+}

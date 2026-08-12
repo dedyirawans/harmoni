@@ -7,6 +7,12 @@ const api = axios.create({ baseURL: API });
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem("token");
   if (token) config.headers.Authorization = `Bearer ${token}`;
+  let sid = localStorage.getItem("session_id");
+  if (!sid) {
+    sid = (typeof crypto !== "undefined" && crypto.randomUUID) ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    localStorage.setItem("session_id", sid);
+  }
+  config.headers["X-Session-Id"] = sid;
   return config;
 });
 

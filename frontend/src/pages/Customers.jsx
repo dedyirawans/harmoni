@@ -10,9 +10,11 @@ import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogTrigger } from "@/components/ui/dialog";
-import { UserPlus, Search, Loader2, Users2, Phone, Mail } from "lucide-react";
+import { UserPlus, Search, Loader2, Users2, Phone, Mail, Archive, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
+import { useAuth } from "@/context/AuthContext";
 
 const EMPTY = {
   full_name: "", whatsapp: "", email: "", gender: "", date_of_birth: "", nik: "",
@@ -22,19 +24,34 @@ const EMPTY = {
 
 export default function Customers() {
   const navigate = useNavigate();
+  const { user: me } = useAuth();
+  const isSA = me?.role === "super_admin";
   const [rows, setRows] = useState(null);
   const [q, setQ] = useState("");
   const [type, setType] = useState("all");
+  const [showArchived, setShowArchived] = useState(false);
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState(EMPTY);
   const [saving, setSaving] = useState(false);
 
   const load = () => {
     setRows(null);
-    api.get("/customers", { params: { q: q || undefined, customer_type: type } })
+    api.get("/customers", { params: { q: q || undefined, customer_type: type, include_archived: showArchived } })
       .then((r) => setRows(r.data)).catch(() => setRows([]));
   };
-  useEffect(() => { load(); /* eslint-disable-next-line */ }, [type]);
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, [type, showArchived]);
+
+  const archive = async (c) => {
+    const reason = window.prompt(`Alasan mengarsipkan customer "${c.full_name}" (wajib):`, "");
+    if (reason === null) return;
+    if (!reason.trim()) return toast.error("Alasan wajib diisi");
+    try { await api.delete(`/customers/${c._id}`, { params: { reason } }); toast.success("Customer diarsipkan"); load(); }
+    catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); }
+  };
+  const restore = async (c) => {
+    try { await api.post(`/customers/${c._id}/restore`); toast.success("Customer dipulihkan"); load(); }
+    catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); }
+  };
 
   const set = (k) => (v) => setForm((f) => ({ ...f, [k]: v }));
 
@@ -123,6 +140,11 @@ export default function Customers() {
           </SelectContent>
         </Select>
         <Button variant="outline" onClick={load} data-testid="customer-search-button">Search</Button>
+        {isSA && (
+          <label className="flex items-center gap-2 text-sm text-slate-500">
+            <Switch checked={showArchived} onCheckedChange={setShowArchived} data-testid="customers-show-archived" /> Show archived
+          </label>
+        )}
       </div>
 
       <Card className="border-slate-200 shadow-sm overflow-hidden">
@@ -139,13 +161,14 @@ export default function Customers() {
               <TableRow className="bg-slate-50">
                 <TableHead>Code</TableHead><TableHead>Name</TableHead><TableHead>Contact</TableHead>
                 <TableHead>Type</TableHead><TableHead>City</TableHead><TableHead>Created</TableHead>
+                {isSA && <TableHead className="w-24 text-right">Actions</TableHead>}
               </TableRow>
             </TableHeader>
             <TableBody>
               {rows.map((c) => (
                 <TableRow key={c._id} className="hover:bg-slate-50 cursor-pointer" onClick={() => navigate(`/crm/${c._id}`)} data-testid={`customer-row-${c._id}`}>
                   <TableCell className="font-mono text-xs text-slate-500">{c.customer_code}</TableCell>
-                  <TableCell><div className="font-medium text-slate-900">{c.full_name}</div>
+                  <TableCell><div className="font-medium text-slate-900 flex items-center gap-2">{c.full_name}{c.is_deleted && <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-200 text-[10px]">ARCHIVED</Badge>}</div>
                     <div className="flex gap-1 mt-1">{(c.tags || []).map((t) => <Badge key={t} variant="outline" className="text-[10px] bg-blue-50 text-blue-700 border-blue-200">{t}</Badge>)}</div>
                   </TableCell>
                   <TableCell className="text-slate-600 text-sm">
@@ -155,6 +178,15 @@ export default function Customers() {
                   <TableCell><Badge variant="outline" className="bg-slate-100 text-slate-700">{c.customer_type}</Badge></TableCell>
                   <TableCell className="text-slate-600">{c.city || "—"}</TableCell>
                   <TableCell className="text-slate-500 text-sm">{fmtDate(c.created_at)}</TableCell>
+                  {isSA && (
+                    <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
+                      {c.is_deleted ? (
+                        <Button size="sm" variant="ghost" className="text-emerald-600" onClick={() => restore(c)} data-testid={`restore-customer-${c._id}`}><RotateCcw className="h-4 w-4" /></Button>
+                      ) : (
+                        <Button size="sm" variant="ghost" className="text-red-600" onClick={() => archive(c)} data-testid={`archive-customer-${c._id}`}><Archive className="h-4 w-4" /></Button>
+                      )}
+                    </TableCell>
+                  )}
                 </TableRow>
               ))}
             </TableBody>

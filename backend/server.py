@@ -15,7 +15,7 @@ import bcrypt
 import jwt
 import httpx
 from bson import ObjectId
-from fastapi import FastAPI, APIRouter, Request, HTTPException, Depends, BackgroundTasks
+from fastapi import FastAPI, APIRouter, Request, HTTPException, Depends, BackgroundTasks, Query
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field, EmailStr, BeforeValidator, ConfigDict
@@ -177,7 +177,7 @@ def require_role(*roles: str):
 # ----------------------------------------------------------------------------
 # Audit log
 # ----------------------------------------------------------------------------
-async def log_audit(user, module, action, request: Request, record_id=None, old=None, new=None):
+async def log_audit(user, module, action, request: Request, record_id=None, old=None, new=None, reason=None):
     doc = {
         "user_id": user.get("_id") if user else None,
         "user_name": user.get("name") if user else "system",
@@ -188,11 +188,16 @@ async def log_audit(user, module, action, request: Request, record_id=None, old=
         "record_id": record_id,
         "old_value": old,
         "new_value": new,
+        "reason": reason,
+        "session_id": request.headers.get("x-session-id") if request else None,
         "ip": request.client.host if request and request.client else None,
         "user_agent": request.headers.get("user-agent") if request else None,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
     await db.audit_logs.insert_one(doc)
+
+
+MASTER_STATUSES = ["ACTIVE", "INACTIVE", "ARCHIVED"]
 
 
 def serialize(doc: dict) -> dict:
@@ -384,8 +389,9 @@ async def change_password(body: ChangePasswordRequest, request: Request, user: d
 # USER MANAGEMENT (super admin)
 # ----------------------------------------------------------------------------
 @api_router.get("/users")
-async def list_users(user: dict = Depends(require_permission("users.view"))):
-    users = await db.users.find().sort("created_at", -1).to_list(1000)
+async def list_users(include_archived: bool = False, user: dict = Depends(require_permission("users.view"))):
+    query = {} if include_archived else {"is_deleted": {"$ne": True}}
+    users = await db.users.find(query).sort("created_at", -1).to_list(1000)
     return [serialize(u) for u in users]
 
 
@@ -439,15 +445,28 @@ async def toggle_status(user_id: str, request: Request, user: dict = Depends(req
 
 
 @api_router.delete("/users/{user_id}")
-async def delete_user(user_id: str, request: Request, user: dict = Depends(require_permission("users.manage"))):
+async def delete_user(user_id: str, request: Request, reason: str = Query(""), user: dict = Depends(require_role("super_admin"))):
+    reason = (reason or "").strip()
+    if not reason:
+        raise HTTPException(status_code=400, detail="Reason is required to archive a user")
     existing = await db.users.find_one({"_id": ObjectId(user_id)})
     if not existing:
         raise HTTPException(status_code=404, detail="User not found")
     if str(existing["_id"]) == user["_id"]:
-        raise HTTPException(status_code=400, detail="You cannot delete your own account")
-    await db.users.delete_one({"_id": ObjectId(user_id)})
-    await log_audit(user, "user", "delete_user", request, record_id=user_id, old=serialize(dict(existing)))
-    return {"message": "User deleted"}
+        raise HTTPException(status_code=400, detail="You cannot archive your own account")
+    await db.users.update_one({"_id": ObjectId(user_id)}, {"$set": {"is_deleted": True, "status": "ARCHIVED", "archived_by": user["name"], "archived_at": now_iso()}})
+    await log_audit(user, "user", "archive_user", request, record_id=user_id, old=serialize(dict(existing)), new={"status": "ARCHIVED"}, reason=reason)
+    return {"message": "User archived", "status": "ARCHIVED"}
+
+
+@api_router.post("/users/{user_id}/restore")
+async def restore_user(user_id: str, request: Request, user: dict = Depends(require_role("super_admin"))):
+    existing = await db.users.find_one({"_id": ObjectId(user_id)})
+    if not existing:
+        raise HTTPException(status_code=404, detail="User not found")
+    await db.users.update_one({"_id": ObjectId(user_id)}, {"$set": {"is_deleted": False, "status": "active"}})
+    await log_audit(user, "user", "restore_user", request, record_id=user_id, new={"status": "active"})
+    return {"message": "User restored"}
 
 
 # ----------------------------------------------------------------------------
@@ -490,11 +509,24 @@ async def update_role_permissions(role: str, body: RolePermissionsUpdate, reques
 # AUDIT LOG
 # ----------------------------------------------------------------------------
 @api_router.get("/audit-logs")
-async def get_audit_logs(module: Optional[str] = None, user: dict = Depends(require_permission("audit.view"))):
+async def get_audit_logs(module: Optional[str] = None, action: Optional[str] = None,
+                         user_q: Optional[str] = None, date_from: Optional[str] = None,
+                         date_to: Optional[str] = None, user: dict = Depends(require_permission("audit.view"))):
     query = {}
     if module and module != "all":
         query["module"] = module
-    logs = await db.audit_logs.find(query).sort("timestamp", -1).to_list(500)
+    if action:
+        query["action"] = {"$regex": action, "$options": "i"}
+    if user_q:
+        query["$or"] = [{"user_name": {"$regex": user_q, "$options": "i"}}, {"user_email": {"$regex": user_q, "$options": "i"}}]
+    if date_from or date_to:
+        tr = {}
+        if date_from:
+            tr["$gte"] = date_from
+        if date_to:
+            tr["$lte"] = date_to + "T23:59:59"
+        query["timestamp"] = tr
+    logs = await db.audit_logs.find(query).sort("timestamp", -1).to_list(1000)
     return [serialize(l) for l in logs]
 
 
@@ -1227,8 +1259,11 @@ async def log_activity(customer_id, lead_id, atype, title, detail, user):
 # ---------- Customers ----------
 @api_router.get("/customers")
 async def list_customers(q: Optional[str] = None, customer_type: Optional[str] = None,
+                         include_archived: bool = False,
                          user: dict = Depends(require_permission("crm.view"))):
     query = owner_filter(user)
+    if not include_archived:
+        query["is_deleted"] = {"$ne": True}
     if customer_type and customer_type != "all":
         query["customer_type"] = customer_type
     if q:
@@ -1285,15 +1320,42 @@ async def update_customer(cid: str, body: CustomerUpdate, request: Request,
 
 
 @api_router.delete("/customers/{cid}")
-async def delete_customer(cid: str, request: Request, user: dict = Depends(require_permission("crm.view"))):
+async def delete_customer(cid: str, request: Request, reason: str = Query(""), user: dict = Depends(require_role("super_admin"))):
+    reason = (reason or "").strip()
+    if not reason:
+        raise HTTPException(status_code=400, detail="Reason is required to archive a customer")
     doc = await db.customers.find_one({"_id": ObjectId(cid)})
     if not doc:
         raise HTTPException(status_code=404, detail="Customer not found")
-    if not can_access_record(user, doc):
-        raise HTTPException(status_code=403, detail="403 Forbidden: not your customer")
-    await db.customers.delete_one({"_id": ObjectId(cid)})
-    await log_audit(user, "customer", "delete_customer", request, record_id=cid)
-    return {"message": "Customer deleted"}
+    await db.customers.update_one({"_id": ObjectId(cid)}, {"$set": {"is_deleted": True, "status": "ARCHIVED", "archived_by": user["name"], "archived_at": now_iso()}})
+    await log_audit(user, "customer", "archive_customer", request, record_id=cid, new={"status": "ARCHIVED"}, reason=reason)
+    return {"message": "Customer archived", "status": "ARCHIVED"}
+
+
+@api_router.post("/customers/{cid}/restore")
+async def restore_customer(cid: str, request: Request, user: dict = Depends(require_role("super_admin"))):
+    doc = await db.customers.find_one({"_id": ObjectId(cid)})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Customer not found")
+    await db.customers.update_one({"_id": ObjectId(cid)}, {"$set": {"is_deleted": False, "status": "ACTIVE"}})
+    await log_audit(user, "customer", "restore_customer", request, record_id=cid, new={"status": "ACTIVE"})
+    return {"message": "Customer restored"}
+
+
+@api_router.patch("/customers/{cid}/status")
+async def set_customer_status(cid: str, body: dict, request: Request, user: dict = Depends(require_role("super_admin"))):
+    status = (body or {}).get("status")
+    reason = ((body or {}).get("reason") or "").strip()
+    if status not in MASTER_STATUSES:
+        raise HTTPException(status_code=400, detail="Invalid status")
+    if not reason:
+        raise HTTPException(status_code=400, detail="Reason is required")
+    doc = await db.customers.find_one({"_id": ObjectId(cid)})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Customer not found")
+    await db.customers.update_one({"_id": ObjectId(cid)}, {"$set": {"status": status, "is_deleted": status == "ARCHIVED"}})
+    await log_audit(user, "customer", "status", request, record_id=cid, old={"status": doc.get("status")}, new={"status": status}, reason=reason)
+    return {"status": status}
 
 
 @api_router.post("/customers/{cid}/notes")
@@ -1396,8 +1458,10 @@ async def customer_360(cid: str, user: dict = Depends(require_permission("crm.vi
 
 # ---------- Leads / Pipeline ----------
 @api_router.get("/leads")
-async def list_leads(status: Optional[str] = None, user: dict = Depends(require_permission("sales.view"))):
+async def list_leads(status: Optional[str] = None, include_archived: bool = False, user: dict = Depends(require_permission("sales.view"))):
     query = owner_filter(user)
+    if not include_archived:
+        query["is_deleted"] = {"$ne": True}
     if status and status != "all":
         query["status"] = status
     docs = await db.leads.find(query).sort("created_at", -1).to_list(2000)
@@ -1508,13 +1572,26 @@ async def move_stage(lid: str, body: StageUpdate, request: Request, user: dict =
 
 
 @api_router.delete("/leads/{lid}")
-async def delete_lead(lid: str, request: Request, user: dict = Depends(require_permission("sales.view"))):
+async def delete_lead(lid: str, request: Request, reason: str = Query(""), user: dict = Depends(require_role("super_admin"))):
+    reason = (reason or "").strip()
+    if not reason:
+        raise HTTPException(status_code=400, detail="Reason is required to archive a lead")
     doc = await db.leads.find_one({"_id": ObjectId(lid)})
-    if not doc or not can_access_record(user, doc):
-        raise HTTPException(status_code=403, detail="403 Forbidden")
-    await db.leads.delete_one({"_id": ObjectId(lid)})
-    await log_audit(user, "lead", "delete_lead", request, record_id=lid)
-    return {"message": "Lead deleted"}
+    if not doc:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    await db.leads.update_one({"_id": ObjectId(lid)}, {"$set": {"is_deleted": True, "status": "ARCHIVED", "archived_by": user["name"], "archived_at": now_iso()}})
+    await log_audit(user, "lead", "archive_lead", request, record_id=lid, new={"status": "ARCHIVED"}, reason=reason)
+    return {"message": "Lead archived", "status": "ARCHIVED"}
+
+
+@api_router.post("/leads/{lid}/restore")
+async def restore_lead(lid: str, request: Request, user: dict = Depends(require_role("super_admin"))):
+    doc = await db.leads.find_one({"_id": ObjectId(lid)})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    await db.leads.update_one({"_id": ObjectId(lid)}, {"$set": {"is_deleted": False, "status": "NEW"}})
+    await log_audit(user, "lead", "restore_lead", request, record_id=lid, new={"status": "NEW"})
+    return {"message": "Lead restored"}
 
 
 # ---------- Follow Ups ----------
@@ -3140,7 +3217,7 @@ async def _recompute_invoice_status(invoice_id: str):
     inv = await db.invoices.find_one({"_id": ObjectId(invoice_id)})
     if not inv:
         return None
-    payments = await db.payments.find({"invoice_id": invoice_id}).to_list(500)
+    payments = await db.payments.find({"invoice_id": invoice_id, "status": {"$ne": "VOID"}}).to_list(500)
     paid = sum(float(p.get("amount") or 0) for p in payments)
     total = float(inv.get("total") or 0)
     today = today_str()
@@ -3235,13 +3312,19 @@ class PaymentCreate(BaseModel):
     attachment_url: Optional[str] = ""
 
 
+@api_router.get("/invoices/{iid}/payments")
+async def list_invoice_payments(iid: str, user: dict = Depends(require_permission("payment.view"))):
+    pays = await db.payments.find({"invoice_id": iid}).sort("created_at", -1).to_list(500)
+    return [serialize(p) for p in pays]
+
+
 @api_router.post("/invoices/{iid}/payments")
 async def record_payment(iid: str, body: PaymentCreate, request: Request, user: dict = Depends(require_permission("payment.manage"))):
     inv = await db.invoices.find_one({"_id": ObjectId(iid)})
     if not inv:
         raise HTTPException(status_code=404, detail="Invoice not found")
     doc = {**body.model_dump(), "invoice_id": iid, "invoice_number": inv.get("invoice_number"),
-           "booking_id": inv.get("booking_id"), "recorded_by": user["name"], "created_at": now_iso()}
+           "booking_id": inv.get("booking_id"), "status": "ACTIVE", "recorded_by": user["name"], "created_at": now_iso()}
     res = await db.payments.insert_one(doc)
     status = await _recompute_invoice_status(iid)
     await log_audit(user, "payment", "record", request, record_id=str(res.inserted_id), new={"amount": body.amount, "invoice_status": status})
@@ -3251,6 +3334,22 @@ async def record_payment(iid: str, body: PaymentCreate, request: Request, user: 
                      link=f"/crm/{inv.get('customer_id')}" if inv.get("customer_id") else "/accounting",
                      user_id=inv.get("sales_pic_id"), ntype="PAYMENT_RECEIVED", priority="normal")
     return serialize(await db.payments.find_one({"_id": res.inserted_id}))
+
+
+@api_router.post("/payments/{pid}/void")
+async def void_payment(pid: str, body: dict, request: Request, user: dict = Depends(require_role("super_admin"))):
+    reason = ((body or {}).get("reason") or "").strip()
+    if not reason:
+        raise HTTPException(status_code=400, detail="Reason is required to void a payment")
+    p = await db.payments.find_one({"_id": ObjectId(pid)})
+    if not p:
+        raise HTTPException(status_code=404, detail="Payment not found")
+    if p.get("status") == "VOID":
+        raise HTTPException(status_code=400, detail="Payment already voided")
+    await db.payments.update_one({"_id": ObjectId(pid)}, {"$set": {"status": "VOID", "void_by": user["name"], "void_at": now_iso(), "void_reason": reason}})
+    status = await _recompute_invoice_status(p["invoice_id"]) if p.get("invoice_id") else None
+    await log_audit(user, "payment", "void", request, record_id=pid, old={"amount": p.get("amount"), "status": "ACTIVE"}, new={"status": "VOID", "invoice_status": status}, reason=reason)
+    return {"message": "Payment voided", "status": "VOID", "invoice_status": status}
 
 
 # ---------- Receivable & Reminders ----------

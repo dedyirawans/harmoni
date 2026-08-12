@@ -1,0 +1,20 @@
+{
+  "summary": "Frontend retest of Phase 9G — Users archive/restore & Void Payment flows + RBAC Sales confirmation. All 3 focus flows PASS.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [],
+  "updated_files": [],
+  "success_rate": {"backend": "n/a (skipped)", "frontend": "100%"},
+  "test_credentials": "Super Admin: dedyirawan18@gmail.com / Admin@123; Sales: sales@safarcrm.com / Sales@123",
+  "seed_data_creation": "None; used pre-seeded dummy9g user and invoice 6a7c6911f21f8ffb9cb4909a (Cash 500k ACTIVE + Bank 1M VOID). After test 2b, Cash 500k is now also VOID with reason 'Refund test' — if next iteration needs an ACTIVE payment again, main agent should re-seed.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "iteration_30 verified: (1) Users /users — user-actions-dummy9g menu + archive-user-dummy9g works; empty reason triggers toast 'Alasan wajib diisi' and no archive; valid reason 'Test archive' archives and removes from default list; users-show-archived toggle reveals user with 'archived' badge; restore-user-dummy9g restores back to default list. (2) BookingDetail /booking/6a7c6911f21f8ffb9cb49099 tab-payments shows payments-list-6a7c6911f21f8ffb9cb4909a with 2 items; VOID one already dicoret with reason 'Salah input nominal' and no Void button; ACTIVE one had void-payment-<pid>; empty reason rejected, 'Refund test' VOIDed successfully with toast 'Pembayaran di-VOID' and status invoice ter-update. (3) RBAC Sales: /customers tidak punya show-archived/archive buttons, /booking tab payments tidak punya void buttons; 403 dari backend juga ter-log.",
+  "rca of the issue": "N/A — retest PASS. Previous iteration_29 failures were due to concurrent edits to server.py causing race and lost edits (GET /invoices/{iid}/payments and delete_user soft-archive). Main agent re-applied fixes; all flows now working end-to-end."
+}
