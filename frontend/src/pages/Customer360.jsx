@@ -16,6 +16,7 @@ import {
   Briefcase, Clock, User as UserIcon,
 } from "lucide-react";
 import { toast } from "sonner";
+import { expiryTone, daysUntil } from "@/components/ExpiringDocsWidget";
 
 export default function Customer360() {
   const { id } = useParams();
@@ -237,13 +238,19 @@ export default function Customer360() {
             </TabsContent>
 
             <TabsContent value="documents">
-              <Rows testid="c360-documents" items={data.documents} empty="No documents." row={(d) => (
+              <Rows testid="c360-documents" items={data.documents} empty="No documents." row={(d) => {
+                const tone = ["PASSPORT", "VISA"].includes(d.doc_type) ? expiryTone(daysUntil(d.expiry_date)) : null;
+                return (
                 <>
-                  <div><p className="font-medium text-slate-900">{d.doc_type}</p>
-                    <p className="text-xs text-slate-500">{bmap[d.booking_id] || d.booking_id || "—"}</p></div>
-                  <Badge variant="outline" className="bg-slate-100 text-slate-700">{d.status}</Badge>
+                  <div><p className="font-medium text-slate-900">{d.doc_type}{d.document_number ? ` · ${d.document_number}` : ""}</p>
+                    <p className="text-xs text-slate-500">{bmap[d.booking_id] || d.booking_id || "—"}{d.expiry_date ? ` · Exp ${(d.expiry_date || "").slice(0, 10)}` : ""}</p></div>
+                  <div className="flex items-center gap-2">
+                    {tone && <Badge variant="outline" className={`${tone.cls} text-[10px]`}>{tone.label}</Badge>}
+                    <Badge variant="outline" className="bg-slate-100 text-slate-700">{d.status}</Badge>
+                  </div>
                 </>
-              )} />
+                );
+              }} />
             </TabsContent>
 
             <TabsContent value="timeline">

@@ -1,0 +1,27 @@
+{
+  "summary": "Phase 9F Document Management frontend end-to-end verified. Widget 'Dokumen Akan Kedaluwarsa' renders on Tasks page and Super Admin Dashboard for Super Admin with expected item (PASSPORT · A1234567, Exp 2026-09-06, badge '25d left' in red/amber tone). BookingDetail (BKG-00016) Jamaah tab: PASSPORT upload button opens metadata dialog (doc-meta-dialog) with all fields (doc-meta-number pre-filled 'A1234567', doc-meta-issue, doc-meta-expiry pre-filled 2026-09-06, doc-meta-file, doc-meta-save). KTP upload does NOT open the metadata dialog (quick upload). Jamaah card PASSPORT row shows 'Uploaded', No. A1234567, Exp 2026-09-06 and expiry badge (doc-expiry-<tid>-PASSPORT = '25d left'). Customer 360 documents tab (customer 6a7c6910f21f8ffb9cb4908f) shows the same PASSPORT · A1234567 with '25d left' badge and 'Exp 2026-09-06'. RBAC verified with Sales (Rina Sales): GET /api/documents/expiring?within=90 returns HTTP 200 with [] (owner-scoped, Sales does not own BKG-00016), widget renders empty state (expiring-docs-empty) on both Tasks and Dashboard - no error.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "BookingDetail Jamaah card header", "issues": ["Traveler subtitle still shows 'No passport' even after PASSPORT document has been uploaded with a document_number. The document card below correctly shows 'A1234567', but the traveler-level passport_no field is not synced. Minor cosmetic - not blocking."]}
+    ]
+  },
+  "test_report_links": [],
+  "action_items": [
+    "(Minor / optional) Consider syncing traveler.passport_no from uploaded PASSPORT document_number so the traveler card subtitle reflects the number instead of 'No passport'."
+  ],
+  "critical_code_review_comments": [
+    "ExpiringDocsWidget correctly gates on RBAC via backend owner-scoping; frontend shows a graceful empty state.",
+    "DocMetaDialog is correctly opened only for META_DOC_TYPES (PASSPORT, VISA); other doc types trigger native file input (verified for KTP)."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "n/a (skipped per request)", "frontend": "100% (all 7 acceptance checks pass)"},
+  "test_credentials": "Super Admin dedyirawan18@gmail.com/Admin@123 ; Sales sales@safarcrm.com/Sales@123",
+  "seed_data_creation": "None - used existing seeded PASSPORT A1234567 on traveler 6a7c8da00bdc45255f0ea4c4 in booking BKG-00016.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Phase 9F fully verified from FE side. Widget testids: expiring-docs-widget/expiring-docs-count/expiring-docs-list/expiring-doc-<id>/expiring-docs-empty. Meta dialog testids: doc-meta-dialog/doc-meta-number/doc-meta-issue/doc-meta-expiry/doc-meta-file/doc-meta-save. Upload buttons: doc-upload-<tid>-<TYPE>. Expiry badge on booking card: doc-expiry-<tid>-<TYPE>. Sales owner-scoping confirmed via /api/documents/expiring returning [] (200).",
+  "rca of the issue": "n/a - no functional issues found."
+}

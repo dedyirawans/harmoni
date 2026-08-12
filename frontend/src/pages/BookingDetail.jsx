@@ -13,6 +13,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { ArrowLeft, Loader2, Plus, Trash2, Upload, FileText, Users, CreditCard, Ban, GitBranch } from "lucide-react";
+import { expiryTone, daysUntil } from "@/components/ExpiringDocsWidget";
 import { toast } from "sonner";
 
 const BOOKING_STATUSES = ["DRAFT", "PENDING", "CONFIRMED", "PARTIAL_PAID", "PAID", "READY", "COMPLETED", "CANCELLED", "REFUNDED"];
@@ -205,11 +206,15 @@ export default function BookingDetail() {
   );
 }
 
+const META_DOC_TYPES = ["PASSPORT", "VISA"];
+
 function TravelerCard({ t, docs, canDoc, canTravel, onChange }) {
+  const [metaFor, setMetaFor] = useState(null);
   const uploaded = {};
   docs.forEach((d) => { uploaded[d.doc_type] = d; });
-  const upload = async (docType, file) => {
+  const upload = async (docType, file, meta) => {
     const fd = new FormData(); fd.append("doc_type", docType); fd.append("file", file);
+    if (meta) { fd.append("document_number", meta.document_number || ""); fd.append("issue_date", meta.issue_date || ""); fd.append("expiry_date", meta.expiry_date || ""); }
     try { await api.post(`/travelers/${t._id}/documents`, fd, { headers: { "Content-Type": "multipart/form-data" } }); toast.success(`${docType} diupload`); onChange(); }
     catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); }
   };
@@ -224,26 +229,68 @@ function TravelerCard({ t, docs, canDoc, canTravel, onChange }) {
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mt-3">
         {DOCUMENT_TYPES.map((dt) => {
           const d = uploaded[dt];
+          const isMeta = META_DOC_TYPES.includes(dt);
+          const tone = isMeta && d ? expiryTone(daysUntil(d.expiry_date)) : null;
           return (
             <div key={dt} className="border border-slate-100 rounded p-2 flex items-center justify-between" data-testid={`doc-${t._id}-${dt}`}>
               <div className="min-w-0">
                 <p className="text-xs font-medium text-slate-700">{dt}</p>
                 <Badge variant="outline" className={`${DOC_STATUS_COLORS[d ? d.status : "Missing"]} text-[10px]`}>{d ? d.status : "Missing"}</Badge>
+                {isMeta && d?.document_number && <p className="text-[10px] text-slate-400 mt-0.5 truncate">No. {d.document_number}</p>}
+                {isMeta && d?.expiry_date && <p className="text-[10px] text-slate-400">Exp {(d.expiry_date || "").slice(0, 10)}</p>}
+                {tone && <Badge variant="outline" className={`${tone.cls} text-[10px] mt-0.5`} data-testid={`doc-expiry-${t._id}-${dt}`}>{tone.label}</Badge>}
               </div>
               {canDoc && (
                 <div className="flex items-center gap-1">
                   {d && <Select value={d.status} onValueChange={(v) => setStatus(d.id, v)}><SelectTrigger className="h-7 w-7 p-0 border-0" data-testid={`doc-status-${t._id}-${dt}`}><span className="sr-only">status</span></SelectTrigger><SelectContent className="bg-white"><SelectItem value="Verified">Verify</SelectItem><SelectItem value="Rejected">Reject</SelectItem><SelectItem value="Uploaded">Reset</SelectItem></SelectContent></Select>}
-                  <label className="cursor-pointer text-blue-600" data-testid={`doc-upload-${t._id}-${dt}`}>
-                    <Upload className="h-4 w-4" />
-                    <input type="file" className="hidden" onChange={(e) => e.target.files[0] && upload(dt, e.target.files[0])} />
-                  </label>
+                  {isMeta ? (
+                    <button type="button" className="cursor-pointer text-blue-600" data-testid={`doc-upload-${t._id}-${dt}`} onClick={() => setMetaFor(dt)}>
+                      <Upload className="h-4 w-4" />
+                    </button>
+                  ) : (
+                    <label className="cursor-pointer text-blue-600" data-testid={`doc-upload-${t._id}-${dt}`}>
+                      <Upload className="h-4 w-4" />
+                      <input type="file" className="hidden" onChange={(e) => e.target.files[0] && upload(dt, e.target.files[0])} />
+                    </label>
+                  )}
                 </div>
               )}
             </div>
           );
         })}
       </div>
+      {metaFor && <DocMetaDialog docType={metaFor} existing={uploaded[metaFor]} onClose={() => setMetaFor(null)}
+        onUpload={async (file, meta) => { await upload(metaFor, file, meta); setMetaFor(null); }} />}
     </div>
+  );
+}
+
+function DocMetaDialog({ docType, existing, onClose, onUpload }) {
+  const [f, setF] = useState({ document_number: existing?.document_number || "", issue_date: (existing?.issue_date || "").slice(0, 10), expiry_date: (existing?.expiry_date || "").slice(0, 10) });
+  const [file, setFile] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const set = (k) => (e) => setF((o) => ({ ...o, [k]: e.target.value }));
+  const submit = async () => {
+    if (!file) return toast.error("Pilih file dokumen dulu");
+    if (!f.expiry_date) return toast.error("Tanggal kedaluwarsa wajib diisi");
+    setSaving(true);
+    try { await onUpload(file, f); } finally { setSaving(false); }
+  };
+  return (
+    <Dialog open onOpenChange={onClose}>
+      <DialogContent className="bg-white max-w-md" data-testid="doc-meta-dialog">
+        <DialogHeader><DialogTitle className="font-display">Upload {docType}</DialogTitle></DialogHeader>
+        <div className="space-y-3 py-2">
+          <div className="space-y-1"><Label className="text-xs">Nomor Dokumen</Label><Input value={f.document_number} onChange={set("document_number")} data-testid="doc-meta-number" placeholder={docType === "PASSPORT" ? "No. Paspor" : "No. Visa"} /></div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1"><Label className="text-xs">Tanggal Terbit</Label><Input type="date" value={f.issue_date} onChange={set("issue_date")} data-testid="doc-meta-issue" /></div>
+            <div className="space-y-1"><Label className="text-xs">Tanggal Kedaluwarsa</Label><Input type="date" value={f.expiry_date} onChange={set("expiry_date")} data-testid="doc-meta-expiry" /></div>
+          </div>
+          <div className="space-y-1"><Label className="text-xs">File Dokumen</Label><Input type="file" onChange={(e) => setFile(e.target.files[0] || null)} data-testid="doc-meta-file" /></div>
+        </div>
+        <DialogFooter><Button onClick={submit} disabled={saving} className="bg-blue-600 hover:bg-blue-700" data-testid="doc-meta-save">{saving ? "Uploading..." : "Upload"}</Button></DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

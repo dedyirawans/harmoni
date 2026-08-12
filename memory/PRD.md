@@ -1,6 +1,13 @@
 # Safar Travel CRM — Product Requirements (Living Doc)
 
-## PHASE 9E — Payment Schedule & Collection Management (2026-06) — DONE
+## PHASE 9F — Document Management (2026-06) — DONE (Backend + Frontend, Verified)
+- **Frontend (Phase 9F UI)**: metadata upload khusus Passport & Visa via `DocMetaDialog` di BookingDetail (input Nomor Dokumen, Tanggal Terbit, Tanggal Kedaluwarsa + file); dokumen lain tetap upload cepat. Kartu jamaah + tab Documents Customer 360 menampilkan nomor dokumen, tanggal exp, dan **badge peringatan expiry** (90/60/30 hari & overdue via helper `expiryTone`/`daysUntil`). Widget **"Dokumen Akan Kedaluwarsa"** (`ExpiringDocsWidget`, fetch `GET /api/documents/expiring?within=90`) ditampilkan di halaman **Tasks** DAN **Dashboard (Sales + Super Admin)**; klik item → navigate ke booking. Sales owner-scoped (empty state bila tidak punya). Upload PASSPORT kini **auto-sync** `traveler.passport_number` & `passport_expiry`.
+- **Verified**: iteration_27.json — Frontend 100% (7/7 acceptance: widget di Tasks & Dashboard, dialog metadata khusus Passport/Visa, KTP quick upload, badge expiry di kartu jamaah & C360, RBAC Sales empty). Backend curl (metadata tersimpan, /documents/expiring days_left=25, passport sync).
+- **Metadata**: upload dokumen (`POST /api/travelers/{tid}/documents`) kini menerima `document_number`, `issue_date`, `expiry_date` (+ doc_type, upload date, uploaded_by, status yang sudah ada). Mendukung dokumen customer (KTP/Passport/KK/Visa/Insurance/Ticket/Other) & transaksi (Quotation/Invoice/Payment Proof/Refund/Supplier Invoice/Booking Confirmation).
+- **Expiry Warning** (Passport/Visa) di 90/60/30 hari + overdue: cron `_run_auto_scan` kirim notifikasi `DOCUMENT_EXPIRY` ke Sales pemilik + Super Admin (idempotent). Endpoint `GET /api/documents/expiring?within=90` (scoped) untuk daftar dokumen akan kedaluwarsa.
+- **Access/Security**: download (`GET /api/documents/{id}/download`) kini RBAC-scoped — Sales hanya dokumen booking miliknya; Accounting hanya `FINANCIAL_DOC_TYPES`; Super Admin full. Storage aman via object storage; download WAJIB autentikasi (Bearer/token), tidak ada public URL.
+- **Verified (curl)**: expiring endpoint (passport days_left 30), cron → DOCUMENT_EXPIRY muncul di notifikasi Super Admin, metadata tersimpan.
+
 - **Payment Plan** (`POST /api/bookings/{id}/payment-plan`, perm payment.manage → accounting/super_admin; Sales 403): FULL (1 item), DP (DP + Pelunasan), INSTALLMENT (N cicilan). Auto-calc sehingga Σ amount = total booking (remainder di item terakhir). Field per item: payment_number, label, due_date, amount, paid_amount, outstanding, status.
 - **Statuses schedule**: PENDING, PARTIAL, PAID, OVERDUE, CANCELLED (auto dari paid_amount + due_date).
 - **Record collection** (`PATCH /api/bookings/{id}/schedule/{n}/record`): tambah paid_amount, hitung outstanding & status item + total booking. Auto naik status booking CONFIRMED→PARTIAL_PAID (ada bayar) dan →PAID saat outstanding=0.

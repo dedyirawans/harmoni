@@ -766,6 +766,25 @@ def _days_ago(n):
 
 async def _run_auto_scan():
     today = today_str()
+    for d in await db.documents.find({"is_deleted": False, "doc_type": {"$in": ["PASSPORT", "Passport", "VISA", "Visa"]}, "expiry_date": {"$nin": ["", None]}}).to_list(5000):
+        exp = (d.get("expiry_date") or "")[:10]
+        try:
+            days = (datetime.fromisoformat(exp).date() - datetime.now(timezone.utc).date()).days
+        except Exception:
+            continue
+        if days > 0 and days not in (90, 60, 30):
+            continue
+        title = (f"Dokumen KEDALUWARSA — {d.get('doc_type')}" if days < 0 else f"Dokumen kedaluwarsa {days} hari — {d.get('doc_type')}")
+        sid = cid = None
+        if d.get("booking_id") and ObjectId.is_valid(d["booking_id"]):
+            bk = await db.bookings.find_one({"_id": ObjectId(d["booking_id"])})
+            if bk:
+                sid, cid = bk.get("sales_pic_id"), bk.get("customer_id")
+        prio = "urgent" if days < 0 else "high"
+        body = f"{d.get('document_number', '')} exp {exp}"
+        link = f"/crm/{cid}" if cid else "/booking"
+        await notify(title, body, link=link, user_id=sid, ntype="DOCUMENT_EXPIRY", priority=prio, dedupe=f"docexp:{d.get('id')}:{today}")
+        await notify(title, body, link="/booking", role="super_admin", ntype="DOCUMENT_EXPIRY", priority=prio, dedupe=f"docexpsa:{d.get('id')}:{today}")
     for f in await db.follow_ups.find({"status": {"$ne": "completed"}}).to_list(5000):
         due = (f.get("due_date") or "")[:10]
         fid = str(f["_id"])
@@ -2929,8 +2948,13 @@ async def delete_traveler(tid: str, user: dict = Depends(require_permission("tra
 
 
 # ---------- Documents ----------
+FINANCIAL_DOC_TYPES = {"Quotation", "Invoice", "Payment Proof", "Refund Document", "Supplier Invoice", "Booking Confirmation"}
+
+
 @api_router.post("/travelers/{tid}/documents")
-async def upload_document(tid: str, doc_type: str = Form(...), file: UploadFile = File(...), user: dict = Depends(require_permission("document.manage"))):
+async def upload_document(tid: str, doc_type: str = Form(...), file: UploadFile = File(...),
+                          document_number: str = Form(""), issue_date: str = Form(""), expiry_date: str = Form(""),
+                          user: dict = Depends(require_permission("document.manage"))):
     t = await db.travelers.find_one({"_id": ObjectId(tid)})
     if not t:
         raise HTTPException(status_code=404, detail="Traveler not found")
@@ -2940,10 +2964,19 @@ async def upload_document(tid: str, doc_type: str = Form(...), file: UploadFile 
     data = await file.read()
     result = put_object(path, data, file.content_type or "application/octet-stream")
     rec = {"id": doc_id, "traveler_id": tid, "booking_id": t.get("booking_id"), "doc_type": doc_type,
+           "document_number": document_number, "issue_date": issue_date, "expiry_date": expiry_date,
            "storage_path": result["path"], "original_filename": file.filename, "content_type": file.content_type,
            "size": result.get("size", len(data)), "status": "Uploaded", "is_deleted": False,
            "uploaded_by": user["name"], "created_at": now_iso()}
     await db.documents.insert_one(rec)
+    if doc_type in ("PASSPORT", "Passport"):
+        tset = {}
+        if document_number:
+            tset["passport_number"] = document_number
+        if expiry_date:
+            tset["passport_expiry"] = expiry_date
+        if tset:
+            await db.travelers.update_one({"_id": ObjectId(tid)}, {"$set": tset})
     return {k: v for k, v in rec.items() if k != "_id"}
 
 
@@ -2966,8 +2999,38 @@ async def download_document(doc_id: str, authorization: str = Header(None), auth
     d = await db.documents.find_one({"id": doc_id, "is_deleted": False})
     if not d:
         raise HTTPException(status_code=404, detail="Document not found")
+    if user["role"] == "accounting" and d.get("doc_type") not in FINANCIAL_DOC_TYPES:
+        raise HTTPException(status_code=403, detail="403 Forbidden")
+    if user["role"] == "sales":
+        bk = await db.bookings.find_one({"_id": ObjectId(d["booking_id"])}) if d.get("booking_id") and ObjectId.is_valid(d["booking_id"]) else None
+        if not bk or bk.get("sales_pic_id") != user["_id"]:
+            raise HTTPException(status_code=403, detail="403 Forbidden")
     data, ct = get_object(d["storage_path"])
     return Response(content=data, media_type=d.get("content_type") or ct)
+
+
+@api_router.get("/documents/expiring")
+async def documents_expiring(within: int = 90, user: dict = Depends(get_current_user)):
+    today = datetime.now(timezone.utc).date()
+    out = []
+    q = {"is_deleted": False, "doc_type": {"$in": ["PASSPORT", "Passport", "VISA", "Visa"]}, "expiry_date": {"$nin": ["", None]}}
+    async for d in db.documents.find(q):
+        exp = (d.get("expiry_date") or "")[:10]
+        try:
+            days = (datetime.fromisoformat(exp).date() - today).days
+        except Exception:
+            continue
+        if days > within:
+            continue
+        if user["role"] == "sales":
+            bk = await db.bookings.find_one({"_id": ObjectId(d["booking_id"])}) if d.get("booking_id") and ObjectId.is_valid(d["booking_id"]) else None
+            if not bk or bk.get("sales_pic_id") != user["_id"]:
+                continue
+        d = serialize(d)
+        d["days_left"] = days
+        out.append(d)
+    out.sort(key=lambda x: x["days_left"])
+    return out
 
 
 # ---------- Invoices ----------

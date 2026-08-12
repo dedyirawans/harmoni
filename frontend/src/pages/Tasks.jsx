@@ -11,6 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogTrigger } from "@/components/ui/dialog";
 import { toast } from "sonner";
 import { CheckSquare, Plus, CalendarClock, Loader2 } from "lucide-react";
+import ExpiringDocsWidget from "@/components/ExpiringDocsWidget";
 
 const STATUSES = ["TODO", "IN_PROGRESS", "COMPLETED", "CANCELLED"];
 const PRIORITIES = ["LOW", "MEDIUM", "HIGH", "URGENT"];
@@ -119,6 +120,8 @@ export default function Tasks() {
             </div>
           )}
       </CardContent></Card>
+
+      <ExpiringDocsWidget within={90} />
     </div>
   );
 }
