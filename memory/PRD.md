@@ -1,5 +1,13 @@
 # Safar Travel CRM — Product Requirements (Living Doc)
 
+## Phase 8B — Sales Dashboard (2026-06) — DONE
+- **Sales Dashboard** di route `/` (Dashboard.jsx branch `role==='sales'` → SalesDashboard.jsx; Super Admin & Accounting tetap dashboard lama — tidak diubah).
+- **KPI** (owner-scoped): Lead (new/active/qualified/lost), Quotation (total/outstanding/converted/conversion rate), Booking (total/pax/sales/avg pax), Follow Up (due today/upcoming/overdue/completed), Commission bulan ini (pax/tier/estimated/approved/paid).
+- **My Outstanding**: tiles klik → navigasi (lead belum follow up→/sales, quotation→/quotations, follow up→/follow-ups, payment→/booking, upcoming departure→/booking).
+- **Charts** (Recharts): Sales Trend (line 6 bln), Lead Funnel (Lead→Qualified→Quotation→Negotiation→Booking→Paid), Booking & Pax Trend, Lead Source, Package Performance (tabel top 10).
+- Backend: GET /api/sales-dashboard (require sales.view, owner-scoped sales_pic_id; super_admin bisa ?sales_id=). **Security**: Sales hanya data sendiri, tidak ada HPP/cost/profit/margin.
+- **Tests**: iteration_19.json (frontend 100%: 15 KPI real owner-scoped, 6 outstanding tiles clickable, 4 charts + package table; regression Super Admin/Accounting tetap dashboard lama). Fix route slugs + rename testid duplikat.
+
 ## Phase 8A — New Lead & Package Integration (2026-06) — DONE
 - **My Sales → New Lead**: field "Interested Package" kini **searchable dropdown** (PackageCombobox) dari Package Master, hanya status **ACTIVE** (Tour + Umrah). Cari by package name/code/type/destination; opsi menampilkan name, code, type, destination, duration, departure terdekat, selling price, available seat.
 - **Auto Destination**: dipilih package → Destination terisi otomatis & **READ-ONLY** (tidak bisa diketik); ganti package → destination ikut berubah.

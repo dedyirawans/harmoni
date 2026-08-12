@@ -7,6 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { TrendingUp } from "lucide-react";
+import SalesDashboard from "@/pages/SalesDashboard";
 import {
   ResponsiveContainer, BarChart, Bar, AreaChart, Area, PieChart, Pie, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend,
@@ -28,6 +29,8 @@ export default function Dashboard() {
     api.get("/dashboard/charts").then((r) => setCharts(r.data)).catch(() => setCharts(null));
     if (isSales) api.get("/sales/dashboard").then((r) => setSales(r.data)).catch(() => setSales(null));
   }, [isSales]);
+
+  if (user.role === "sales") return <SalesDashboard />;
 
   const salesCards = sales && [
     { label: "New Leads", value: sales.new_leads },
@@ -55,7 +58,7 @@ export default function Dashboard() {
       </div>
 
       {isSales ? (
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4" data-testid="sales-dashboard">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4" data-testid="sales-stats-grid">
           {!salesCards
             ? Array.from({ length: 10 }).map((_, i) => <Skeleton key={i} className="h-24 rounded-md" />)
             : salesCards.map((c) => (

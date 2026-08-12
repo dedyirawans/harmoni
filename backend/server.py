@@ -4097,6 +4097,132 @@ async def report_deduction_breakdown(user: dict = Depends(require_permission("re
     return {"breakdown": [{"type": k, "amount": v} for k, v in sorted(agg.items(), key=lambda i: -i[1])]}
 
 
+@api_router.get("/sales-dashboard")
+async def sales_dashboard_v2(sales_id: Optional[str] = None, user: dict = Depends(require_permission("sales.view"))):
+    if user["role"] == "super_admin":
+        base = {"sales_pic_id": sales_id} if sales_id else {}
+    else:
+        base = {"sales_pic_id": user["_id"]}
+    leads = await db.leads.find(base).to_list(5000)
+    quotes = await db.quotations.find(base).to_list(5000)
+    bookings = await db.bookings.find(base).to_list(5000)
+    fups = await db.follow_ups.find(base).to_list(5000)
+
+    def cnt(items, pred):
+        return sum(1 for x in items if pred(x))
+    active_stages = {"NEW", "CONTACTED", "QUALIFIED", "QUOTATION", "NEGOTIATION", "BOOKING"}
+    total_q = len(quotes)
+    converted_q = cnt(quotes, lambda q: q.get("status") == "ACCEPTED" or q.get("converted_booking_id"))
+    outstanding_q = cnt(quotes, lambda q: q.get("status") in ("DRAFT", "SENT"))
+    total_pax = sum(int(b.get("pax") or 0) for b in bookings if b.get("status") != "CANCELLED")
+    total_sales = sum(float(b.get("total") or 0) for b in bookings if b.get("status") != "CANCELLED")
+    today = today_str()
+
+    def fu_stat(f):
+        if f.get("status") == "completed":
+            return "completed"
+        dd = (f.get("due_date") or "")[:10]
+        if not dd:
+            return "upcoming"
+        return "overdue" if dd < today else ("due_today" if dd == today else "upcoming")
+    fu_counts = {"due_today": 0, "upcoming": 0, "overdue": 0, "completed": 0}
+    for f in fups:
+        fu_counts[fu_stat(f)] += 1
+
+    # trends (last 6 months)
+    from datetime import date
+    months = []
+    y, m = date.fromisoformat(today).year, date.fromisoformat(today).month
+    for i in range(5, -1, -1):
+        mm = m - i
+        yy = y
+        while mm <= 0:
+            mm += 12
+            yy -= 1
+        months.append(f"{yy:04d}-{mm:02d}")
+    sales_trend, booking_trend, pax_trend = [], [], []
+    for mo in months:
+        mb = [b for b in bookings if (b.get("created_at") or "")[:7] == mo and b.get("status") != "CANCELLED"]
+        sales_trend.append({"month": mo, "value": sum(float(b.get("total") or 0) for b in mb)})
+        booking_trend.append({"month": mo, "count": len(mb)})
+        pax_trend.append({"month": mo, "pax": sum(int(b.get("pax") or 0) for b in mb)})
+
+    # lead funnel
+    order = ["QUALIFIED", "QUOTATION", "NEGOTIATION", "BOOKING", "PAID"]
+    idx = {s: i for i, s in enumerate(LEAD_STAGES)}
+    funnel = [{"stage": "Lead", "count": len(leads)}]
+    for s in order:
+        si = idx.get(s, 99)
+        funnel.append({"stage": s.title(), "count": cnt(leads, lambda x: idx.get(x.get("status"), -1) >= si and x.get("status") != "LOST")})
+
+    # package performance
+    perf = {}
+    for lst, key in ((leads, "lead"), (quotes, "quotation"), (bookings, "booking")):
+        for x in lst:
+            name = x.get("package_name") or x.get("interested_package") or "—"
+            perf.setdefault(name, {"package": name, "lead": 0, "quotation": 0, "booking": 0, "pax": 0, "sales_value": 0})
+            perf[name][key] += 1
+            if key == "booking" and x.get("status") != "CANCELLED":
+                perf[name]["pax"] += int(x.get("pax") or 0)
+                perf[name]["sales_value"] += float(x.get("total") or 0)
+    package_performance = sorted(perf.values(), key=lambda p: -p["sales_value"])[:10]
+
+    # lead source
+    src = {}
+    for x in leads:
+        s = x.get("source") or "Other"
+        src[s] = src.get(s, 0) + 1
+    lead_source = [{"source": k, "count": v} for k, v in sorted(src.items(), key=lambda i: -i[1])]
+
+    # commission (current month)
+    now = datetime.now(timezone.utc)
+    period = f"{now.year:04d}-{now.month:02d}"
+    comm_sid = sales_id if (user["role"] == "super_admin" and sales_id) else (None if user["role"] == "super_admin" else user["_id"])
+    try:
+        clines, _ = await _compute_period(period, only_sales_id=comm_sid)
+    except Exception:
+        clines = []
+    cur = clines[0] if clines else {"total_pax": 0, "tier": "-", "total_commission": 0}
+    lq = {"sales_pic_id": comm_sid} if comm_sid else {}
+    approved_c = paid_c = 0
+    for ln in await db.commission_lines.find(lq).to_list(2000):
+        clo = await db.commission_closings.find_one({"period": ln["period"]})
+        st = (clo or {}).get("status")
+        if st in ("APPROVED", "CLOSED", "PAID"):
+            approved_c += float(ln.get("final_commission") or 0)
+        if ln.get("payment_status") == "PAID":
+            paid_c += float(ln.get("final_commission") or 0)
+
+    # payment outstanding: invoices with outstanding balance in scope
+    b_ids = [str(b["_id"]) for b in bookings if b.get("status") != "CANCELLED"]
+    payment_outstanding = await db.invoices.count_documents({"booking_id": {"$in": b_ids}, "outstanding": {"$gt": 0}}) if b_ids else 0
+
+    return {
+        "kpi": {
+            "lead": {"new": cnt(leads, lambda x: x.get("status") == "NEW"),
+                     "active": cnt(leads, lambda x: x.get("status") in active_stages),
+                     "qualified": cnt(leads, lambda x: x.get("status") == "QUALIFIED"),
+                     "lost": cnt(leads, lambda x: x.get("status") == "LOST")},
+            "quotation": {"total": total_q, "outstanding": outstanding_q, "converted": converted_q,
+                          "conversion_rate": round(converted_q / total_q * 100, 1) if total_q else 0},
+            "booking": {"total": len([b for b in bookings if b.get("status") != "CANCELLED"]), "total_pax": total_pax, "total_sales": total_sales},
+            "follow_up": fu_counts,
+            "commission": {"current_pax": cur.get("total_pax", 0), "tier": cur.get("tier", "-"),
+                           "estimated": cur.get("total_commission", 0), "approved": approved_c, "paid": paid_c},
+        },
+        "outstanding": {
+            "leads_no_followup": cnt(leads, lambda x: not x.get("next_follow_up") and x.get("status") not in ("PAID", "COMPLETED", "LOST")),
+            "quotation_outstanding": outstanding_q,
+            "booking_outstanding": cnt(bookings, lambda b: b.get("status") in ("PENDING",)),
+            "payment_outstanding": payment_outstanding,
+            "upcoming_departure": cnt(bookings, lambda b: (b.get("departure_date") or "") >= today and b.get("status") not in ("CANCELLED",)),
+        },
+        "trends": {"sales": sales_trend, "booking": booking_trend, "pax": pax_trend},
+        "funnel": funnel, "package_performance": package_performance, "lead_source": lead_source,
+        "period": period,
+    }
+
+
 app.include_router(api_router)
 
 app.add_middleware(

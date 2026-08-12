@@ -1,0 +1,33 @@
+{
+  "summary": "Frontend-only validation of PHASE 8B Sales Dashboard. Sales user landing at /dashboard renders the new SalesDashboard with header 'Sales Dashboard' and subtitle 'Performa & follow up milik Rina Sales'. All 15 KPI tiles (lead new/active/qualified/lost, quotation total/outstanding/converted/conversion, booking total/pax/sales, commission pax/tier/est/paid) render with real owner-scoped values (e.g. lead new=2, active=5, quotation total=16 conv=100%, booking total=13, pax=33, sales=Rp 1127.7jt, commission est=Rp 400.000). My Outstanding shows all 6 clickable tiles (out-leads, out-quotation, out-fu-today, out-fu-overdue, out-payment, out-departure) and all 4 charts render (recharts SVG count=4: Sales Trend line, Lead Funnel bar, Booking&Pax bar, Lead Source bar) plus package-performance table. No HPP/profit/cost/margin text present in Sales dashboard. Regression: Super Admin still lands on dashboard-page (original admin dashboard); Accounting also lands on dashboard-page and NOT sales-dashboard.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "SalesDashboard My Outstanding tiles", "issue": "out-quotation navigated to /quotation (singular) and out-fu-today/out-fu-overdue navigated to /followups — routes don't exist so wildcard sent user back to /dashboard. Actual routes are /quotations and /follow-ups. FIXED in this iteration by testing agent.", "selector": "[data-testid='out-quotation'], [data-testid='out-fu-today'], [data-testid='out-fu-overdue']", "priority": "HIGH"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Sales Dashboard Booking group", "issues": ["4th slot placeholder shows a literal em dash (—) with empty value — cosmetic, should be removed or replaced with a real KPI"]}
+    ]
+  },
+  "test_report_links": ["/app/frontend/src/pages/SalesDashboard.jsx"],
+  "action_items": [
+    "Dashboard.jsx (regression concern): the fallback `isSales` block for non-sales users who still hold sales.view (e.g. Super Admin) renders an inner grid with data-testid=\"sales-dashboard\". This DUPLICATES the testid used by the new SalesDashboard.jsx. For Super Admin the page now has BOTH data-testid='dashboard-page' AND data-testid='sales-dashboard'. Since super_admin has all perms including sales.view, this may cause future test-id collisions. Recommend renaming the inner div (e.g. data-testid='sales-stats-grid') so only real Sales users show the top-level sales-dashboard.",
+    "Consider removing the empty '—' KPI placeholder in the Booking group of SalesDashboard.jsx or replacing it with a meaningful metric."
+  ],
+  "critical_code_review_comments": [
+    "SalesDashboard.jsx hard-coded route strings (/quotation, /followups) did not match actual router paths (/quotations, /follow-ups). Suggest centralising route constants to avoid drift.",
+    "Duplicate data-testid='sales-dashboard' between Dashboard.jsx (inline sales-stats grid for isSales) and new SalesDashboard.jsx root causes ambiguous selectors for super_admin.",
+    "SalesDashboard.jsx uses `useAuth().user.name` without null-guard; safe today because the effect runs only after auth resolves, but a defensive fallback (`user?.name || ''`) would be safer.",
+    "No loading skeleton for chart cards — a single global spinner blocks the whole page; consider partial skeletons like Dashboard.jsx.",
+    "Sales dashboard error path returns 'Gagal memuat dashboard.' but no retry button."
+  ],
+  "updated_files": ["/app/frontend/src/pages/SalesDashboard.jsx"],
+  "success_rate": {"backend": "N/A (skipped)", "frontend": "100% after route fix"},
+  "test_credentials": "Sales: sales@safarcrm.com/Sales@123, Super Admin: dedyirawan18@gmail.com/Admin@123, Accounting: accounting@safarcrm.com/Account@123",
+  "seed_data_creation": "None",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "PHASE 8B validated end-to-end from UI. All KPI/outstanding testids present. Fixed navigation routes in SalesDashboard.jsx (/quotation->/quotations, /followups->/follow-ups). One remaining concern: Dashboard.jsx still uses data-testid='sales-dashboard' on the admin fallback grid (for users with sales.view), which duplicates the id used by SalesDashboard.jsx. Not blocking, but rename recommended.",
+  "rca of the issue": "Root cause: The My Outstanding tiles used route slugs (/quotation, /followups) that don't match the app's registered React Router paths (/quotations, /follow-ups). React Router's catch-all wildcard `<Route path=\"*\" element={<Navigate to=\"/dashboard\" replace />}/>` intercepted the unknown paths and redirected users back to the dashboard, making clicks appear as no-ops. Reproduction: login as sales, click Quotation outstanding tile, observe URL remains /dashboard. Mitigation: use exact route paths as defined in /app/frontend/src/config/nav.js (already applied)."
+}
