@@ -23,6 +23,7 @@ import FollowUps from "@/pages/FollowUps";
 import Products from "@/pages/Products";
 import ProductDetail from "@/pages/ProductDetail";
 import Departures from "@/pages/Departures";
+import Operations from "@/pages/Operations";
 import Quotations from "@/pages/Quotations";
 import Bookings from "@/pages/Bookings";
 import BookingDetail from "@/pages/BookingDetail";
@@ -48,6 +49,7 @@ const PAGES = {
   "/products": Products,
   "/packages": Products,
   "/departures": Departures,
+  "/operations": Operations,
   "/quotations": Quotations,
   "/booking": Bookings,
   "/accounting": Accounting,

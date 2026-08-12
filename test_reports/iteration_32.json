@@ -1,0 +1,25 @@
+{
+  "summary": "Phase 9I Operations → Departure Management UI verified end-to-end. Super Admin sees 'Operations' menu, /operations renders (data-testid=operations-page). Upcoming filter buttons within-all/7/14/30/60 all present; default 'Semua' lists departures. Target departure 6a7a9abd743c2458fcee9eba visible with '1/20 seat · sisa 19' (TOUR TEST_P3_pkg 2026-06-01). Clicking it renders departure-detail with alerts-panel containing alert-PAYMENT_DUE + alert-DOCS_INCOMPLETE. Tab Dashboard shows Total Seat=20, Booked=1, Available=19, Paid=0, Partial=1, Unpaid=0, Docs Complete=0, Docs Missing=1 plus 'Dokumen wajib' list. Tab Passengers shows passenger-table with row for 'Test Jamaah 9F' (Male, A1234567, PARTIAL, INCOMPLETE, CONFIRMED). Tab Rooming: entered Room=102, Group=A, Bus=1, clicked Simpan → toast 'Rooming disimpan'; values persisted after tab re-open (room:102 group:A bus:1). RBAC: Sales login → no 'Operations' item in sidebar; direct /operations navigation renders shell but API returns 403 → departures-empty state shown gracefully (no crash).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Dashboard (global)", "issues": ["Recharts warnings 'width(-1) and height(-1)' still appearing repeatedly on dashboard chart mount — non-blocking noise, unchanged since iteration 31"]}
+    ]
+  },
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Operations.jsx (~200 lines) is fine; RoomingTab could show validation feedback for room_type (currently free-text). Consider dropdown for room_type (SINGLE/DOUBLE/TRIPLE/QUAD).",
+    "Empty state for Sales (403) shows generic 'Tidak ada keberangkatan pada rentang ini' — could be more informative ('Access denied') but acceptable since menu is hidden for Sales.",
+    "Recharts responsive container width/height warnings persist across dashboard – add minWidth/minHeight to ResponsiveContainer."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "n/a (skipped as requested)", "frontend": "100%"},
+  "test_credentials": "dedyirawan18@gmail.com/Admin@123 and sales@safarcrm.com/Sales@123 both worked.",
+  "seed_data_creation": "Traveler 6a7c8da00bdc45255f0ea4c4 rooming updated to room=102, group=A, bus=1 during test.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Operations page testids: operations-page, upcoming-filter, within-{all|7|14|30|60}, departures-list, departure-<id>, departure-detail, alerts-panel, alert-<TYPE>, tab-dashboard/passengers/rooming, departure-dashboard, passenger-table, passenger-<tid>, rooming-table, rooming-{room_type|room|group|bus}-<tid>, rooming-save-<tid>. Target departure with data: 6a7a9abd743c2458fcee9eba; passenger traveler id: 6a7c8da00bdc45255f0ea4c4."
+}

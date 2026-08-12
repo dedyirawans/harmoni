@@ -30,7 +30,7 @@ export const DOC_STATUS_COLORS = {
   Rejected: "bg-red-50 text-red-700 border-red-200",
 };
 export const BOOKING_SOURCES = ["SALES", "AUTO SALES", "ADMIN", "AGENT", "PARTNER", "WEBSITE", "OTHER"];
-export const DOCUMENT_TYPES = ["KTP", "PASSPORT", "PHOTO", "VISA", "MARRIAGE_BOOK", "OTHER"];
+export const DOCUMENT_TYPES = ["KTP", "KK", "PASSPORT", "PHOTO", "VISA", "VISA_TRANSIT", "VACCINE_CERT", "SISKOPATUH", "MARRIAGE_BOOK", "OTHER"];
 export const DOC_STATUSES = ["Missing", "Uploaded", "Verified", "Rejected"];
 export const P4_ROOM_TYPES = ["QUAD", "TRIPLE", "DOUBLE", "SUITE"];
 export const PAYMENT_TYPES = ["DP", "INSTALLMENT", "FINAL_PAYMENT", "CUSTOM"];

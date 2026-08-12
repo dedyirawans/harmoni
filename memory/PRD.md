@@ -1,5 +1,14 @@
 # Safar Travel CRM — Product Requirements (Living Doc)
 
+## PHASE 9I — Departure Management / Operations (2026-06) — DONE (Verified iteration_32, Frontend 100% + backend curl)
+- **Akses**: HANYA Super Admin + Accounting (`require_role("super_admin","accounting")`). Menu "Operations" muncul untuk 2 role tsb; Sales tidak melihatnya (API 403).
+- **Endpoint baru** (`server.py`): `GET /operations/departures?within=all|7|14|30|60` (list + Total/Booked/Available Seat + Status + filter Upcoming); `GET /operations/departures/{did}` (Dashboard: total/booked/available, paid/partial/unpaid, documents_complete/missing, required_docs; Passenger List: customer, gender, passport(+expired), payment/document/booking status; Alerts); `PATCH /operations/travelers/{tid}/rooming` (room/group/bus/room_type per jamaah).
+- **Booked seat** dihitung dari sum(pax) booking non-CANCELLED. **Alerts**: SEAT_ALMOST_FULL/SEAT_FULL, PAYMENT_DUE, PASSPORT_EXPIRED, DOCS_INCOMPLETE, DEPARTURE_APPROACHING(≤14 hari).
+- **Dokumen wajib per paket**: UMROH/UMROH_PLUS = KTP,KK,PASSPORT,PHOTO,VISA,VACCINE_CERT,SISKOPATUH; TOUR = KTP,PASSPORT. DOCUMENT_TYPES frontend diperluas: +KK, VISA_TRANSIT, VACCINE_CERT, SISKOPATUH.
+- **Frontend**: `Operations.jsx` (master-detail): daftar departure + filter Upcoming; detail dengan panel Alerts + tab Dashboard / Passengers / Rooming (edit & simpan room/group/bus). Route `/operations`.
+- Backlog kecil: room_type sebaiknya dropdown; Recharts ResponsiveContainer warning (kosmetik) di Dashboard.
+
+
 ## PHASE 9H — Data Validation & Duplicate Prevention (2026-06) — DONE (Verified iteration_31, Frontend 100% + backend curl)
 - **Customer Duplicate** (non-blocking warning): `GET /api/customers/check-duplicate?phone&whatsapp&email&passport_number` (didaftarkan DI ATAS `/customers/{cid}` agar tak ter-shadow). UI Add Customer: `useEffect` debounce 400ms → kotak `customer-dup-warning` menampilkan kandidat + field yang cocok; user tetap bisa lanjut.
 - **N8N Duplicate / Idempotency**: `convert_to_booking` menerima `idempotency_key`/`external_order_id`/`n8n_workflow_id`; jika idempotency_key sudah dipakai → kembalikan booking sama (dedupe lintas-quotation, tanpa double-reserve). Terverifikasi curl.

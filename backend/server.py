@@ -2125,6 +2125,137 @@ async def save_costing(pid: str, body: CostingModel, request: Request, user: dic
     return serialize(doc)
 
 
+# ---- Operations: Departure Management (Phase 9I) ----
+UMRAH_REQUIRED_DOCS = ["KTP", "KK", "PASSPORT", "PHOTO", "VISA", "VACCINE_CERT", "SISKOPATUH"]
+TOUR_REQUIRED_DOCS = ["KTP", "PASSPORT"]
+
+
+def _required_docs(product_type):
+    return TOUR_REQUIRED_DOCS if (product_type or "").upper() == "TOUR" else UMRAH_REQUIRED_DOCS
+
+
+async def _dep_payment_map(bookings):
+    paid = partial = unpaid = 0
+    bmap = {}
+    for b in bookings:
+        invs = await db.invoices.find({"booking_id": str(b["_id"])}).to_list(50)
+        tot = sum(float(i.get("total") or i.get("amount") or 0) for i in invs)
+        pd = sum(float(i.get("paid_amount") or 0) for i in invs)
+        if invs and tot > 0 and pd >= tot:
+            st = "PAID"; paid += 1
+        elif pd > 0:
+            st = "PARTIAL"; partial += 1
+        else:
+            st = "UNPAID"; unpaid += 1
+        bmap[str(b["_id"])] = {"payment_status": st, "outstanding": max(tot - pd, 0)}
+    return bmap, paid, partial, unpaid
+
+
+@api_router.get("/operations/departures")
+async def operations_departures(within: str = "all", user: dict = Depends(require_role("super_admin", "accounting"))):
+    from datetime import date, timedelta
+    today = date.today()
+    q = {}
+    if within in ("7", "14", "30", "60"):
+        end = (today + timedelta(days=int(within))).isoformat()
+        q = {"departure_date": {"$gte": today.isoformat(), "$lte": end}}
+    deps = await db.departures.find(q).sort("departure_date", 1).to_list(500)
+    pkgs = {str(p["_id"]): p for p in await db.packages.find({}).to_list(1000)}
+    out = []
+    for d in deps:
+        did = str(d["_id"])
+        pkg = pkgs.get(d.get("package_id"))
+        bookings = await db.bookings.find({"departure_id": did, "status": {"$ne": "CANCELLED"}}).to_list(1000)
+        booked = sum(int(b.get("pax") or 0) for b in bookings)
+        total_seat = int(d.get("quota") or 0)
+        cd = compute_departure(serialize(d))
+        out.append({"id": did, "_id": did, "package_id": d.get("package_id"),
+                    "package_name": (pkg or {}).get("package_name", ""), "product_type": (pkg or {}).get("product_type", ""),
+                    "departure_date": d.get("departure_date"), "return_date": d.get("return_date"),
+                    "total_seat": total_seat, "booked_seat": booked, "available_seat": max(total_seat - booked, 0),
+                    "status": cd.get("status"), "flight": d.get("flight"), "hotel": d.get("hotel")})
+    return out
+
+
+@api_router.get("/operations/departures/{did}")
+async def operations_departure_detail(did: str, user: dict = Depends(require_role("super_admin", "accounting"))):
+    dep = await db.departures.find_one({"_id": ObjectId(did)}) if ObjectId.is_valid(did) else None
+    if not dep:
+        raise HTTPException(status_code=404, detail="Departure not found")
+    pkg = await db.packages.find_one({"_id": ObjectId(dep["package_id"])}) if ObjectId.is_valid(dep.get("package_id") or "") else None
+    ptype = (pkg or {}).get("product_type", "TOUR")
+    required = _required_docs(ptype)
+    bookings = await db.bookings.find({"departure_id": did, "status": {"$ne": "CANCELLED"}}).to_list(1000)
+    booked = sum(int(b.get("pax") or 0) for b in bookings)
+    total_seat = int(dep.get("quota") or 0)
+    available = max(total_seat - booked, 0)
+    bmap, paid, partial, unpaid = await _dep_payment_map(bookings)
+    bids = [str(b["_id"]) for b in bookings]
+    travelers = await db.travelers.find({"booking_id": {"$in": bids}}).to_list(2000)
+    dep_date = (dep.get("departure_date") or "")[:10]
+    docs_complete = docs_missing = passport_expired_cnt = 0
+    passengers = []
+    for t in travelers:
+        tid = str(t["_id"])
+        tdocs = await db.documents.find({"traveler_id": tid, "is_deleted": {"$ne": True}}).to_list(50)
+        have = {d.get("doc_type") for d in tdocs}
+        missing = [r for r in required if r not in have]
+        complete = len(missing) == 0
+        docs_complete += 1 if complete else 0
+        docs_missing += 0 if complete else 1
+        pexp = (t.get("passport_expiry") or "")[:10]
+        expired = bool(pexp and dep_date and pexp < dep_date)
+        passport_expired_cnt += 1 if expired else 0
+        b = next((x for x in bookings if str(x["_id"]) == t.get("booking_id")), None)
+        pinfo = bmap.get(t.get("booking_id"), {})
+        passengers.append({"traveler_id": tid, "booking_id": t.get("booking_id"),
+                           "customer_name": (b or {}).get("customer_name", t.get("full_name", "")),
+                           "full_name": t.get("full_name"), "gender": t.get("gender"),
+                           "passport_number": t.get("passport_number"), "passport_expiry": pexp, "passport_expired": expired,
+                           "payment_status": pinfo.get("payment_status", "UNPAID"), "booking_status": (b or {}).get("status", ""),
+                           "document_status": "COMPLETE" if complete else "INCOMPLETE", "missing_docs": missing,
+                           "room": t.get("room", ""), "group": t.get("group", ""), "bus": t.get("bus", ""), "room_type": t.get("room_type", "")})
+    days_to = None
+    if dep_date:
+        from datetime import date as _d
+        try:
+            days_to = (_d.fromisoformat(dep_date) - _d.today()).days
+        except Exception:
+            days_to = None
+    alerts = []
+    if total_seat and 0 < available <= max(1, round(total_seat * 0.1)):
+        alerts.append({"type": "SEAT_ALMOST_FULL", "severity": "warning", "message": f"Seat hampir penuh: sisa {available} dari {total_seat}"})
+    if total_seat and available == 0:
+        alerts.append({"type": "SEAT_FULL", "severity": "info", "message": "Seat penuh"})
+    if unpaid + partial > 0:
+        alerts.append({"type": "PAYMENT_DUE", "severity": "warning", "message": f"{unpaid + partial} booking belum lunas ({unpaid} unpaid, {partial} partial)"})
+    if passport_expired_cnt > 0:
+        alerts.append({"type": "PASSPORT_EXPIRED", "severity": "danger", "message": f"{passport_expired_cnt} paspor kedaluwarsa sebelum keberangkatan"})
+    if docs_missing > 0:
+        alerts.append({"type": "DOCS_INCOMPLETE", "severity": "warning", "message": f"{docs_missing} jamaah dokumen belum lengkap"})
+    if days_to is not None and 0 <= days_to <= 14:
+        alerts.append({"type": "DEPARTURE_APPROACHING", "severity": "info", "message": f"Keberangkatan dalam {days_to} hari"})
+    return {"departure": {**serialize(dep), "package_name": (pkg or {}).get("package_name", ""), "product_type": ptype,
+                          "total_seat": total_seat, "booked_seat": booked, "available_seat": available, "days_to": days_to},
+            "dashboard": {"total_seat": total_seat, "booked": booked, "available": available, "paid": paid, "partial": partial,
+                          "unpaid": unpaid, "documents_complete": docs_complete, "documents_missing": docs_missing, "required_docs": required},
+            "passengers": passengers, "alerts": alerts}
+
+
+@api_router.patch("/operations/travelers/{tid}/rooming")
+async def set_traveler_rooming(tid: str, body: dict, request: Request, user: dict = Depends(require_role("super_admin", "accounting"))):
+    if not ObjectId.is_valid(tid):
+        raise HTTPException(status_code=404, detail="Traveler not found")
+    upd = {k: body.get(k) for k in ("room", "group", "bus", "room_type") if k in body}
+    if not upd:
+        raise HTTPException(status_code=400, detail="No rooming fields provided")
+    r = await db.travelers.update_one({"_id": ObjectId(tid)}, {"$set": upd})
+    if not r.matched_count:
+        raise HTTPException(status_code=404, detail="Traveler not found")
+    await log_audit(user, "booking", "rooming", request, record_id=tid, new=upd)
+    return {"success": True, **upd}
+
+
 # ---- Departures ----
 @api_router.get("/packages/{pid}/departures")
 async def package_departures(pid: str, user: dict = Depends(require_any_permission("product.view", "packages.view", "departures.view", "hpp.view"))):
