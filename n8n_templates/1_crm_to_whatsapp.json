@@ -1,0 +1,77 @@
+{
+  "name": "Safar CRM -> WhatsApp (Outbound)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "safar-crm",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "a1b2c3d4-0001-0001-0001-000000000001",
+      "name": "Webhook (CRM Event)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300],
+      "webhookId": "safar-crm"
+    },
+    {
+      "parameters": {
+        "jsCode": "const b=$json.body||$json;\nconst e=b.event;\nconst d=b.data||{};\nconst name=d.customer_name||d.customer||'Pelanggan';\nlet msg='';\nif(e==='booking.created'){msg=`Halo ${name}, booking ${d.booking_number||''} Anda sudah DIKONFIRMASI. Terima kasih telah memesan bersama kami! 🕋`;}\nelse if(e==='invoice.created'){msg=`Halo ${name}, invoice ${d.invoice_number||''} sebesar ${d.total||d.amount||''} telah terbit. Mohon lakukan pembayaran sebelum ${d.due_date||'jatuh tempo'}.`;}\nelse if(e==='payment.recorded'||e==='payment.created'){msg=`Halo ${name}, pembayaran sebesar ${d.amount||''} telah kami TERIMA. Terima kasih ✅`;}\nelse if(e==='payment.reminder'){msg=d.message||`Halo ${name}, pengingat pembayaran invoice ${d.invoice_number||''} (sisa ${d.outstanding||''}), jatuh tempo ${d.due_date||''}.`;}\nelse if(e==='order.confirmation'){msg=`Halo ${name}, pesanan ${d.booking_number||''} untuk paket ${d.package||''} telah dibuat. Total ${d.total||''}. Tim kami akan segera menghubungi Anda 🙏`;}\nelse if(e==='conversation.reply'){msg=d.message||'';}\nelse{msg=`Notifikasi: ${e}`;}\nconst phone=d.customer_phone||d.whatsapp||d.phone||'';\nreturn [{json:{phone,message:msg,event:e}}];"
+      },
+      "id": "a1b2c3d4-0001-0001-0001-000000000002",
+      "name": "Compose WA Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [480, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://GANTI-DENGAN-URL-PROVIDER-WHATSAPP-ANDA/api/send",
+        "sendHeaders": true,
+        "specifyHeaders": "keypair",
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" },
+            { "name": "Authorization", "value": "Bearer GANTI_TOKEN_PROVIDER_WA" }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "keypair",
+        "bodyParameters": {
+          "parameters": [
+            { "name": "to", "value": "={{ $json.phone }}" },
+            { "name": "message", "value": "={{ $json.message }}" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a1b2c3d4-0001-0001-0001-000000000003",
+      "name": "Send WhatsApp",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [720, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "OK"
+      },
+      "id": "a1b2c3d4-0001-0001-0001-000000000004",
+      "name": "Respond OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [960, 300]
+    }
+  ],
+  "connections": {
+    "Webhook (CRM Event)": { "main": [[{ "node": "Compose WA Message", "type": "main", "index": 0 }]] },
+    "Compose WA Message": { "main": [[{ "node": "Send WhatsApp", "type": "main", "index": 0 }]] },
+    "Send WhatsApp": { "main": [[{ "node": "Respond OK", "type": "main", "index": 0 }]] }
+  },
+  "active": false,
+  "settings": {},
+  "pinData": {}
+}
