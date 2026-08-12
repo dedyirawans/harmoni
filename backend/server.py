@@ -1742,6 +1742,127 @@ async def sales_dashboard(user: dict = Depends(require_permission("sales.view"))
     }
 
 
+# ============================================================================
+# PHASE 9K — SALES ACTIVITY & PERFORMANCE
+# ============================================================================
+SALES_ACTIVITY_TYPES = ["Call", "WhatsApp", "Email", "Meeting"]
+ACTIVITY_TYPES_ALL = ["Call", "WhatsApp", "Email", "Meeting", "Follow Up", "Quotation", "Booking"]
+ACTIVITY_SCORE_WEIGHTS = {"Call": 1, "WhatsApp": 1, "Email": 1, "Meeting": 3, "Follow Up": 2, "Quotation": 5, "Booking": 10}
+
+
+class SalesActivityCreate(BaseModel):
+    activity_type: str
+    customer_id: Optional[str] = None
+    lead_id: Optional[str] = None
+    notes: Optional[str] = ""
+    sales_id: Optional[str] = None  # super admin may log on behalf of a sales
+
+
+@api_router.post("/sales/activities")
+async def create_sales_activity(body: SalesActivityCreate, user: dict = Depends(require_permission("sales.view"))):
+    if body.activity_type not in SALES_ACTIVITY_TYPES:
+        raise HTTPException(status_code=400, detail=f"activity_type harus salah satu dari {SALES_ACTIVITY_TYPES}")
+    pic_id, pic_name, branch = await resolve_pic(user, body.sales_id)
+    cust = await db.customers.find_one({"_id": ObjectId(body.customer_id)}) if (body.customer_id and ObjectId.is_valid(body.customer_id)) else None
+    doc = {"activity_type": body.activity_type, "customer_id": body.customer_id,
+           "customer_name": (cust or {}).get("full_name", ""), "lead_id": body.lead_id,
+           "notes": body.notes or "", "sales_pic_id": pic_id, "sales_pic_name": pic_name,
+           "branch": branch, "timestamp": now_iso()}
+    res = await db.sales_activities.insert_one(doc)
+    return serialize(await db.sales_activities.find_one({"_id": res.inserted_id}))
+
+
+@api_router.get("/sales/activities")
+async def list_sales_activities(sales_id: Optional[str] = None, activity_type: Optional[str] = None,
+                                frm: Optional[str] = None, to: Optional[str] = None, limit: int = 100,
+                                user: dict = Depends(require_permission("sales.view"))):
+    scope = {"sales_pic_id": user["_id"]} if user["role"] == "sales" else ({"sales_pic_id": sales_id} if sales_id else {})
+    feed = []
+    mq = dict(scope)
+    if activity_type and activity_type in SALES_ACTIVITY_TYPES:
+        mq["activity_type"] = activity_type
+    for a in await db.sales_activities.find(mq).sort("timestamp", -1).to_list(3000):
+        if _in_range(a.get("timestamp"), frm, to):
+            feed.append({"id": str(a["_id"]), "activity_type": a.get("activity_type"), "sales": a.get("sales_pic_name"),
+                         "sales_pic_id": a.get("sales_pic_id"), "customer_name": a.get("customer_name", ""),
+                         "detail": a.get("notes", ""), "timestamp": a.get("timestamp")})
+    show_all = not activity_type
+    if show_all or activity_type == "Follow Up":
+        for f in await db.follow_ups.find(scope).to_list(3000):
+            ts = f.get("created_at") or f.get("due_date")
+            if _in_range(ts, frm, to):
+                feed.append({"id": str(f["_id"]), "activity_type": "Follow Up", "sales": f.get("sales_pic_name"),
+                             "sales_pic_id": f.get("sales_pic_id"), "customer_name": f.get("customer_name", ""),
+                             "detail": f"{f.get('activity_type', '')} — {f.get('notes', '')}".strip(" —"), "timestamp": ts})
+    if show_all or activity_type == "Quotation":
+        for qd in await db.quotations.find(scope).to_list(3000):
+            if _in_range(qd.get("created_at"), frm, to):
+                feed.append({"id": str(qd["_id"]), "activity_type": "Quotation", "sales": qd.get("sales_pic_name"),
+                             "sales_pic_id": qd.get("sales_pic_id"), "customer_name": qd.get("customer_name", ""),
+                             "detail": f"{qd.get('package_name', '')} · {qd.get('pax', 0)} pax", "timestamp": qd.get("created_at")})
+    if show_all or activity_type == "Booking":
+        for bd in await db.bookings.find({**scope, "status": {"$ne": "CANCELLED"}}).to_list(3000):
+            if _in_range(bd.get("created_at"), frm, to):
+                feed.append({"id": str(bd["_id"]), "activity_type": "Booking", "sales": bd.get("sales_pic_name"),
+                             "sales_pic_id": bd.get("sales_pic_id"), "customer_name": bd.get("customer_name", ""),
+                             "detail": f"{bd.get('package_name', '')} · {bd.get('pax', 0)} pax", "timestamp": bd.get("created_at")})
+    feed.sort(key=lambda x: x.get("timestamp") or "", reverse=True)
+    return feed[:max(1, min(limit, 500))]
+
+
+@api_router.get("/sales/performance")
+async def sales_performance(frm: Optional[str] = None, to: Optional[str] = None, sales_id: Optional[str] = None,
+                            user: dict = Depends(require_permission("sales.view"))):
+    susers = await db.users.find({"role": "sales"}).to_list(500)
+    if user["role"] == "sales":
+        susers = [u for u in susers if str(u["_id"]) == user["_id"]]
+    elif sales_id:
+        susers = [u for u in susers if str(u["_id"]) == sales_id]
+
+    leads = await db.leads.find({}).to_list(20000)
+    quotes = await db.quotations.find({}).to_list(20000)
+    bks = [b for b in await db.bookings.find({}).to_list(20000) if b.get("status") != "CANCELLED" and _in_range(b.get("created_at"), frm, to)]
+    fus = await db.follow_ups.find({}).to_list(20000)
+    lines = await db.commission_lines.find({}).to_list(20000)
+    acts = [a for a in await db.sales_activities.find({}).to_list(50000) if _in_range(a.get("timestamp"), frm, to)]
+
+    rows = []
+    for u in susers:
+        sid = str(u["_id"])
+        ul = [l for l in leads if l.get("sales_pic_id") == sid and _in_range(l.get("created_at"), frm, to)]
+        uq = [x for x in quotes if x.get("sales_pic_id") == sid and _in_range(x.get("created_at"), frm, to)]
+        conv = [x for x in uq if x.get("status") == "ACCEPTED" or x.get("converted_booking_id")]
+        ub = [b for b in bks if b.get("sales_pic_id") == sid]
+        ufu = [f for f in fus if f.get("sales_pic_id") == sid and _in_range(f.get("created_at") or f.get("due_date"), frm, to)]
+        ua = [a for a in acts if a.get("sales_pic_id") == sid]
+        breakdown = {t: 0 for t in ACTIVITY_TYPES_ALL}
+        for a in ua:
+            if a.get("activity_type") in breakdown:
+                breakdown[a["activity_type"]] += 1
+        breakdown["Follow Up"] = len(ufu)
+        breakdown["Quotation"] = len(uq)
+        breakdown["Booking"] = len(ub)
+        activity_score = sum(breakdown[t] * ACTIVITY_SCORE_WEIGHTS.get(t, 0) for t in breakdown)
+        rows.append({
+            "sales_id": sid, "sales": u.get("name"),
+            "leads": len(ul), "follow_up": len(ufu), "quotation": len(uq),
+            "converted": len(conv), "conversion_rate": _pct(len(conv), len(uq)),
+            "booking": len(ub), "pax": sum(int(b.get("pax") or 0) for b in ub),
+            "revenue": sum(float(b.get("total") or 0) for b in ub),
+            "commission": sum(float(c.get("final_commission") or 0) for c in lines if c.get("sales_pic_id") == sid),
+            "activity_breakdown": breakdown, "total_activities": sum(breakdown.values()),
+            "activity_score": activity_score,
+        })
+
+    def top(k):
+        return [{"sales_id": r["sales_id"], "sales": r["sales"], "value": r[k]} for r in sorted(rows, key=lambda r: -(r[k] or 0))]
+
+    return {"title": "Sales Activity & Performance", "period": {"from": frm, "to": to},
+            "score_weights": ACTIVITY_SCORE_WEIGHTS, "rows": rows,
+            "rankings": {"by_revenue": top("revenue"), "by_pax": top("pax"), "by_booking": top("booking"),
+                         "by_conversion": top("conversion_rate"), "by_activity": top("activity_score")}}
+
+
 # ---------- Global Search ----------
 @api_router.get("/search")
 async def global_search(q: str, user: dict = Depends(require_permission("crm.view"))):

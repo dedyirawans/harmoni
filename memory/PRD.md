@@ -1,5 +1,15 @@
 # Safar Travel CRM — Product Requirements (Living Doc)
 
+## PHASE 9K — Sales Activity & Performance (2026-06) — DONE (Verified: curl RBAC + scoping, screenshots admin+sales)
+- **Akses**: `require_permission("sales.view")` → Super Admin (lihat semua sales) + Sales (lihat diri sendiri). Accounting diblok (403, terverifikasi). Menu "Sales Activity" (super_admin) / "My Activity" (sales), route `/sales-activity`.
+- **Activity Tracking** (7 tipe): Call, WhatsApp, Email, Meeting (manual via `sales_activities`), Follow Up/Quotation/Booking (dihitung otomatis dari koleksi masing-masing).
+- **Endpoints**: `POST /api/sales/activities` (log manual; super admin bisa `sales_id` on-behalf), `GET /api/sales/activities` (feed timeline gabungan, owner-scoped, filter type/frm/to), `GET /api/sales/performance?frm&to&sales_id` → KPI per sales (leads, follow_up, quotation, conversion, booking, pax, revenue, commission) + activity_breakdown + **activity_score** + rankings.
+- **Activity Score** (supporting KPI, BUKAN pengganti revenue): Call=1, WhatsApp=1, Email=1, Meeting=3, Follow Up=2, Quotation=5, Booking=10.
+- **Ranking**: by_revenue, by_pax, by_booking, by_conversion, by_activity.
+- **Frontend** `SalesActivity.jsx`: admin → tabel KPI + breakdown + ranking (tabs) + feed; sales → KPI cards diri + breakdown + feed. Tombol "Log Activity" (Sales & Super Admin). Filter bulan + filter sales (admin).
+- Collection baru: `sales_activities`.
+
+
 ## PHASE 9J — Supplier Management (2026-06) — DONE (Verified iteration_35, Frontend 100% + backend 18/18 after fix)
 - **Akses**: HANYA Super Admin + Accounting (`_SUP_ROLE = require_role("super_admin","accounting")`). Menu "Suppliers" (route `/suppliers`, perm `hpp.view`) muncul untuk 2 role tsb; Sales → 403.
 - **Suppliers tab**: Supplier Master CRUD (name, type[Airline/Hotel/Transport/Visa/…], contact, email, phone, address, tax_info/NPWP, bank_account, status). Endpoints `POST/GET/PATCH /api/suppliers`, `DELETE` (soft-archive, super_admin only, reason wajib).

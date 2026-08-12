@@ -19,6 +19,7 @@ import Placeholder from "@/pages/Placeholder";
 import Customers from "@/pages/Customers";
 import Customer360 from "@/pages/Customer360";
 import SalesPipeline from "@/pages/SalesPipeline";
+import SalesActivity from "@/pages/SalesActivity";
 import FollowUps from "@/pages/FollowUps";
 import Products from "@/pages/Products";
 import ProductDetail from "@/pages/ProductDetail";
@@ -46,6 +47,7 @@ const PAGES = {
   "/hpp": HPP,
   "/crm": Customers,
   "/sales": SalesPipeline,
+  "/sales-activity": SalesActivity,
   "/follow-ups": FollowUps,
   "/products": Products,
   "/packages": Products,

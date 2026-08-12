@@ -1,7 +1,7 @@
 import {
   LayoutDashboard, Users2, Briefcase, Package, CalendarCheck, Calculator,
   Receipt, Percent, FileBarChart, Plug, UserCog, Settings, ScrollText,
-  Plane, PlaneTakeoff, Bell, Wallet, TrendingUp, ListChecks, FileText, ShieldCheck, CheckSquare, Building2,
+  Plane, PlaneTakeoff, Bell, Wallet, TrendingUp, ListChecks, FileText, ShieldCheck, CheckSquare, Building2, Activity,
 } from "lucide-react";
 
 // Route -> permission required (mirrors backend). null = any authenticated user.
@@ -9,6 +9,7 @@ export const ROUTE_PERMS = {
   "/dashboard": null,
   "/crm": "crm.view",
   "/sales": "sales.view",
+  "/sales-activity": "sales.view",
   "/quotations": "quotation.view",
   "/products": ["product.view", "hpp.view"],
   "/booking": "booking.view",
@@ -39,6 +40,7 @@ export const MENUS = {
     { label: "Dashboard", path: "/dashboard", icon: LayoutDashboard },
     { label: "CRM", path: "/crm", icon: Users2 },
     { label: "Sales Management", path: "/sales", icon: Briefcase },
+    { label: "Sales Activity", path: "/sales-activity", icon: Activity },
     { label: "Quotations", path: "/quotations", icon: FileText },
     { label: "Follow Ups", path: "/follow-ups", icon: ListChecks },
     { label: "My Tasks", path: "/tasks", icon: CheckSquare },
@@ -62,6 +64,7 @@ export const MENUS = {
     { label: "My Dashboard", path: "/dashboard", icon: LayoutDashboard },
     { label: "My CRM", path: "/crm", icon: Users2 },
     { label: "My Sales", path: "/sales", icon: Briefcase },
+    { label: "My Activity", path: "/sales-activity", icon: Activity },
     { label: "Follow Ups", path: "/follow-ups", icon: ListChecks },
     { label: "My Tasks", path: "/tasks", icon: CheckSquare },
     { label: "Quotations", path: "/quotations", icon: FileText },
