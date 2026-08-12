@@ -1,3 +1,10 @@
+## PHASE 9L — Customer Portal (2026-06) — DONE (Verified curl E2E + screenshot)
+- **Portal terpisah** (`/portal/login`, `/portal`), token JWT khusus (`type=customer_access`, klaim `customer_id`, exp 7 hari). Token staff & portal saling ditolak (401) — terverifikasi.
+- **Login OTP** (Email via Emergent email; WhatsApp via n8n webhook `portal.otp`; jika n8n nonaktif OTP tetap dibuat & di-log + `debug_otp` di response untuk preview). OTP 6 digit, exp 5 menit, maks 5 percobaan, bisa kirim ulang. Tanpa self-registration (hanya customer terdaftar; email tak dikenal tak membocorkan keberadaan).
+- **Endpoints**: `POST /api/portal/auth/request-otp`, `POST /api/portal/auth/verify-otp`, `GET /api/portal/me`, `GET /api/portal/dashboard`. Koleksi `customer_otps`.
+- **Portal view (read-only, scoped ke customer)**: Profile, Booking (+Package, Departure, Payment Schedule dgn status/outstanding), Invoice, Documents, Refund Status, Ringkasan Pembayaran (Total/Paid/Outstanding/Next Due). Online payment disiapkan tahap berikutnya (view-only).
+
+
 # Safar Travel CRM — Product Requirements (Living Doc)
 
 ## PHASE 9K.3 — Target 1 Tahun + Edit (2026-06) — DONE (Verified curl + screenshot)

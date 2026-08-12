@@ -1491,6 +1491,208 @@ async def customer_360(cid: str, user: dict = Depends(require_permission("crm.vi
     }
 
 
+# ============================================================================
+# PHASE 9L — CUSTOMER PORTAL (OTP login · read-only)
+# ============================================================================
+import random as _random
+
+
+def _norm_phone(s):
+    d = "".join(ch for ch in str(s or "") if ch.isdigit())
+    return d.lstrip("0")
+
+
+def create_customer_token(customer_id: str, identifier: str) -> str:
+    payload = {"sub": customer_id, "customer_id": customer_id, "identifier": identifier,
+               "type": "customer_access", "exp": datetime.now(timezone.utc) + timedelta(days=7)}
+    return jwt.encode(payload, os.environ["JWT_SECRET"], algorithm=JWT_ALGORITHM)
+
+
+async def get_current_customer(request: Request) -> dict:
+    token = request.cookies.get("portal_token")
+    if not token:
+        ah = request.headers.get("Authorization", "")
+        if ah.startswith("Bearer "):
+            token = ah[7:]
+    if not token:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    try:
+        payload = jwt.decode(token, os.environ["JWT_SECRET"], algorithms=[JWT_ALGORITHM])
+        if payload.get("type") != "customer_access":
+            raise HTTPException(status_code=401, detail="Invalid token type")
+        cust = await db.customers.find_one({"_id": ObjectId(payload["customer_id"])})
+        if not cust or cust.get("is_deleted"):
+            raise HTTPException(status_code=401, detail="Customer not found")
+        return cust
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token expired")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+
+async def _find_customer_by_identifier(channel: str, identifier: str):
+    if channel == "email":
+        return await db.customers.find_one({"email": identifier.strip().lower(), "is_deleted": {"$ne": True}})
+    target = _norm_phone(identifier)
+    if not target:
+        return None
+    for c in await db.customers.find({"is_deleted": {"$ne": True}}).to_list(20000):
+        cand = _norm_phone(c.get("whatsapp") or c.get("phone"))
+        if cand and (cand == target or cand.endswith(target[-8:]) or target.endswith(cand[-8:])):
+            return c
+    return None
+
+
+class PortalOtpRequest(BaseModel):
+    channel: str
+    identifier: str
+
+
+class PortalOtpVerify(BaseModel):
+    channel: str
+    identifier: str
+    otp: str
+
+
+@api_router.post("/portal/auth/request-otp")
+async def portal_request_otp(body: PortalOtpRequest, request: Request):
+    channel = (body.channel or "").lower()
+    if channel not in ("email", "whatsapp"):
+        raise HTTPException(status_code=400, detail="channel harus 'email' atau 'whatsapp'")
+    ident = (body.identifier or "").strip()
+    if not ident:
+        raise HTTPException(status_code=400, detail="Identifier wajib diisi")
+    cust = await _find_customer_by_identifier(channel, ident)
+    resp = {"sent": True, "channel": channel}
+    if not cust:
+        # Hindari user enumeration: tetap balas sukses tanpa OTP
+        return resp
+    key = ident.lower() if channel == "email" else _norm_phone(ident)
+    otp = f"{_random.randint(0, 999999):06d}"
+    await db.customer_otps.delete_many({"channel": channel, "key": key})
+    await db.customer_otps.insert_one({
+        "channel": channel, "key": key, "otp_hash": hash_password(otp),
+        "customer_id": str(cust["_id"]), "attempts": 0,
+        "expires_at": (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat(),
+        "created_at": now_iso()})
+    logger.info(f"[PORTAL OTP] {channel}:{key} -> {otp}")
+    delivered = False
+    if channel == "email" and EMAIL_KEY and cust.get("email"):
+        html = f"""
+        <table width="100%" cellpadding="0" cellspacing="0" style="font-family:Arial,sans-serif;background:#f1f5f9;padding:32px"><tr><td align="center">
+        <table width="440" style="background:#fff;border-radius:12px;border:1px solid #e2e8f0;overflow:hidden">
+          <tr><td style="background:#0f172a;padding:20px 28px"><span style="color:#fbbf24;font-size:18px;font-weight:700">Safar Customer Portal</span></td></tr>
+          <tr><td style="padding:28px">
+            <p style="color:#475569">Halo {cust.get('full_name','')}, berikut kode OTP login portal Anda:</p>
+            <p style="font-size:32px;letter-spacing:8px;font-weight:800;color:#0f172a;margin:16px 0">{otp}</p>
+            <p style="color:#94a3b8;font-size:12px">Berlaku 5 menit. Jangan bagikan kode ini kepada siapa pun.</p>
+          </td></tr>
+        </table></td></tr></table>"""
+        await send_email(cust.get("email"), "Kode OTP Customer Portal", html)
+        delivered = True
+    elif channel == "whatsapp":
+        try:
+            trigger_n8n("portal.otp", {"customer_id": str(cust["_id"]), "customer_name": cust.get("full_name"),
+                                       "phone": cust.get("whatsapp") or cust.get("phone"), "otp": otp})
+        except Exception:
+            pass
+    resp["delivered"] = delivered
+    # Preview/non-produksi: tampilkan OTP agar dapat diuji (terutama saat pengiriman belum aktif)
+    resp["debug_otp"] = otp
+    return resp
+
+
+@api_router.post("/portal/auth/verify-otp")
+async def portal_verify_otp(body: PortalOtpVerify, request: Request):
+    channel = (body.channel or "").lower()
+    key = (body.identifier or "").strip().lower() if channel == "email" else _norm_phone(body.identifier)
+    rec = await db.customer_otps.find_one({"channel": channel, "key": key})
+    if not rec:
+        raise HTTPException(status_code=400, detail="OTP tidak ditemukan. Minta kirim ulang.")
+    if rec.get("expires_at", "") < datetime.now(timezone.utc).isoformat():
+        await db.customer_otps.delete_one({"_id": rec["_id"]})
+        raise HTTPException(status_code=400, detail="OTP kedaluwarsa. Minta kirim ulang.")
+    if rec.get("attempts", 0) >= 5:
+        await db.customer_otps.delete_one({"_id": rec["_id"]})
+        raise HTTPException(status_code=429, detail="Terlalu banyak percobaan salah. Minta kirim ulang OTP.")
+    if not verify_password((body.otp or "").strip(), rec["otp_hash"]):
+        await db.customer_otps.update_one({"_id": rec["_id"]}, {"$inc": {"attempts": 1}})
+        left = 5 - (rec.get("attempts", 0) + 1)
+        raise HTTPException(status_code=400, detail=f"OTP salah. Sisa {max(left, 0)} percobaan.")
+    await db.customer_otps.delete_one({"_id": rec["_id"]})
+    cust = await db.customers.find_one({"_id": ObjectId(rec["customer_id"])})
+    if not cust:
+        raise HTTPException(status_code=404, detail="Customer tidak ditemukan")
+    token = create_customer_token(str(cust["_id"]), key)
+    return {"token": token, "customer": {"id": str(cust["_id"]), "full_name": cust.get("full_name"),
+                                         "email": cust.get("email"), "whatsapp": cust.get("whatsapp")}}
+
+
+@api_router.get("/portal/me")
+async def portal_me(cust: dict = Depends(get_current_customer)):
+    return {"id": str(cust["_id"]), "full_name": cust.get("full_name"), "email": cust.get("email"),
+            "whatsapp": cust.get("whatsapp"), "phone": cust.get("phone"), "city": cust.get("city"),
+            "customer_code": cust.get("customer_code"), "customer_type": cust.get("customer_type")}
+
+
+@api_router.get("/portal/dashboard")
+async def portal_dashboard(cust: dict = Depends(get_current_customer)):
+    cid = str(cust["_id"])
+    raw_bookings = await db.bookings.find({"customer_id": cid}).sort("created_at", -1).to_list(1000)
+    booking_ids = [str(b["_id"]) for b in raw_bookings]
+    today = today_str()
+    dep_ids = [ObjectId(b["departure_id"]) for b in raw_bookings if b.get("departure_id") and ObjectId.is_valid(b.get("departure_id"))]
+    deps = {str(d["_id"]): d for d in (await db.departures.find({"_id": {"$in": dep_ids}}).to_list(1000) if dep_ids else [])}
+    bookings = []
+    for b in raw_bookings:
+        sched = b.get("payment_schedule") or []
+        for it in sched:
+            it["status"] = _sched_item_status(it, today)
+            it["outstanding"] = round(float(it.get("amount") or 0) - float(it.get("paid_amount") or 0), 2)
+        dep = deps.get(str(b.get("departure_id"))) if b.get("departure_id") else None
+        bookings.append({
+            "id": str(b["_id"]), "booking_number": b.get("booking_number"), "package_name": b.get("package_name"),
+            "package_id": b.get("package_id"), "pax": b.get("pax"), "status": b.get("status"),
+            "total": b.get("total"), "room_type": b.get("room_type"), "created_at": b.get("created_at"),
+            "departure": ({"date": dep.get("departure_date"), "return_date": dep.get("return_date"), "flight": dep.get("flight")} if dep else None),
+            "payment_schedule": sched})
+    raw_invoices = await db.invoices.find({"customer_id": cid}).sort("created_at", -1).to_list(1000)
+    invoices = [{"id": str(i["_id"]), "invoice_number": i.get("invoice_number"),
+                 "total": i.get("total") if i.get("total") is not None else i.get("amount"),
+                 "outstanding": i.get("outstanding"), "status": i.get("status"),
+                 "due_date": i.get("due_date"), "created_at": i.get("created_at"),
+                 "booking_number": i.get("booking_number")} for i in raw_invoices]
+    inv_ids = [str(i["_id"]) for i in raw_invoices]
+    payments = await db.payments.find({"$or": [{"invoice_id": {"$in": inv_ids}}, {"booking_id": {"$in": booking_ids}}]}).to_list(2000)
+    refunds = [{"refund_number": r.get("refund_number"), "status": r.get("status"),
+                "amount": r.get("approved_refund") or r.get("proposed_refund") or 0,
+                "created_at": r.get("created_at"), "booking_number": r.get("booking_number")}
+               for r in await db.refund_requests.find({"$or": [{"customer_id": cid}, {"booking_id": {"$in": booking_ids}}]}).sort("created_at", -1).to_list(500)]
+    documents = [{"doc_type": d.get("doc_type"), "status": d.get("status"),
+                  "file_url": d.get("file_url") or d.get("url"), "expiry_date": d.get("expiry_date"),
+                  "booking_id": d.get("booking_id"), "created_at": d.get("created_at") or d.get("uploaded_at")}
+                 for d in await db.documents.find({"$or": [{"booking_id": {"$in": booking_ids}}, {"customer_id": cid}], "is_deleted": {"$ne": True}}).to_list(2000)]
+    total = sum(float(b.get("total") or 0) for b in raw_bookings if b.get("status") != "CANCELLED")
+    paid = sum(float(p.get("amount") or 0) for p in payments)
+    outstanding = sum(float(i.get("outstanding") or 0) for i in raw_invoices)
+    if outstanding <= 0:
+        outstanding = max(total - paid, 0)
+    next_due = None
+    for b in bookings:
+        for it in (b["payment_schedule"] or []):
+            if it.get("status") in ("PENDING", "PARTIAL", "OVERDUE") and it.get("due_date"):
+                cand = {"date": (it.get("due_date") or "")[:10], "amount": it.get("outstanding"), "booking_number": b["booking_number"]}
+                if next_due is None or cand["date"] < next_due["date"]:
+                    next_due = cand
+    profile = {"id": cid, "full_name": cust.get("full_name"), "email": cust.get("email"),
+               "whatsapp": cust.get("whatsapp"), "phone": cust.get("phone"), "city": cust.get("city"),
+               "customer_code": cust.get("customer_code"), "customer_type": cust.get("customer_type")}
+    return {"profile": profile, "bookings": bookings, "invoices": invoices, "refunds": refunds, "documents": documents,
+            "summary": {"total": round(total, 2), "paid": round(paid, 2), "outstanding": round(outstanding, 2),
+                        "next_due": next_due, "bookings_count": len([b for b in raw_bookings if b.get('status') != 'CANCELLED'])}}
+
+
+
 # ---------- Leads / Pipeline ----------
 @api_router.get("/leads")
 async def list_leads(status: Optional[str] = None, include_archived: bool = False, user: dict = Depends(require_permission("sales.view"))):

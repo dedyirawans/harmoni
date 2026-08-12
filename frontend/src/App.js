@@ -9,6 +9,8 @@ import { Toaster } from "@/components/ui/sonner";
 
 import Login from "@/pages/Login";
 import ResetPassword from "@/pages/ResetPassword";
+import PortalLogin from "@/pages/portal/PortalLogin";
+import PortalDashboard from "@/pages/portal/PortalDashboard";
 import Forbidden from "@/pages/Forbidden";
 import Dashboard from "@/pages/Dashboard";
 import Users from "@/pages/Users";
@@ -76,6 +78,8 @@ function App() {
           <Routes>
             <Route path="/login" element={<Login />} />
             <Route path="/reset-password" element={<ResetPassword />} />
+            <Route path="/portal/login" element={<PortalLogin />} />
+            <Route path="/portal" element={<PortalDashboard />} />
 
             {Object.entries(ROUTE_PERMS).map(([path, perm]) => {
               const Page = PAGES[path] || Placeholder;
