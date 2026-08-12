@@ -1687,7 +1687,12 @@ async def portal_dashboard(cust: dict = Depends(get_current_customer)):
     profile = {"id": cid, "full_name": cust.get("full_name"), "email": cust.get("email"),
                "whatsapp": cust.get("whatsapp"), "phone": cust.get("phone"), "city": cust.get("city"),
                "customer_code": cust.get("customer_code"), "customer_type": cust.get("customer_type")}
+    receipts = [{"id": str(r["_id"]), "receipt_number": r.get("receipt_number"), "amount": r.get("amount"),
+                 "booking_number": r.get("booking_number"), "label": r.get("label"),
+                 "created_at": r.get("created_at")}
+                for r in await db.schedule_payments.find({"customer_id": cid}).sort("created_at", -1).to_list(500)]
     return {"profile": profile, "bookings": bookings, "invoices": invoices, "refunds": refunds, "documents": documents,
+            "receipts": receipts,
             "summary": {"total": round(total, 2), "paid": round(paid, 2), "outstanding": round(outstanding, 2),
                         "next_due": next_due, "bookings_count": len([b for b in raw_bookings if b.get('status') != 'CANCELLED'])}}
 
@@ -3949,6 +3954,100 @@ async def receipt_pdf(rid: str, user: dict = Depends(require_permission("booking
     doc.build(el)
     return Response(content=buf.getvalue(), media_type="application/pdf",
                     headers={"Content-Disposition": f"inline; filename=kwitansi-{r.get('receipt_number', '')}.pdf"})
+
+
+# ---- Customer Portal: uploads & PDF downloads (Phase 9L.1) ----
+PORTAL_DOC_TYPES = ["PASSPORT", "KTP", "KK", "PHOTO", "VISA", "VACCINE_CERT", "OTHER"]
+
+
+async def _portal_customer_from_token(token):
+    if not token:
+        return None
+    try:
+        payload = jwt.decode(token, os.environ["JWT_SECRET"], algorithms=[JWT_ALGORITHM])
+        if payload.get("type") != "customer_access":
+            return None
+        return await db.customers.find_one({"_id": ObjectId(payload["customer_id"])})
+    except jwt.InvalidTokenError:
+        return None
+
+
+@api_router.post("/portal/documents")
+async def portal_upload_document(doc_type: str = Form(...), file: UploadFile = File(...),
+                                 document_number: str = Form(""), expiry_date: str = Form(""),
+                                 cust: dict = Depends(get_current_customer)):
+    dtype = (doc_type or "OTHER").upper()
+    if dtype not in PORTAL_DOC_TYPES:
+        dtype = "OTHER"
+    cid = str(cust["_id"])
+    data = await file.read()
+    if len(data) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Ukuran file maksimal 10MB")
+    ext = file.filename.split(".")[-1].lower() if file.filename and "." in file.filename else "bin"
+    doc_id = str(_uuid.uuid4())
+    path = f"{_APP_NAME}/documents/customer/{cid}/{doc_id}.{ext}"
+    result = put_object(path, data, file.content_type or "application/octet-stream")
+    rec = {"id": doc_id, "traveler_id": None, "booking_id": None, "customer_id": cid, "doc_type": dtype,
+           "document_number": document_number, "issue_date": "", "expiry_date": expiry_date,
+           "storage_path": result["path"], "original_filename": file.filename, "content_type": file.content_type,
+           "size": result.get("size", len(data)), "status": "Uploaded", "is_deleted": False,
+           "uploaded_by": (cust.get("full_name") or "customer") + " (portal)", "source": "portal", "created_at": now_iso()}
+    await db.documents.insert_one(rec)
+    return {"success": True, "id": doc_id, "doc_type": dtype, "status": "Uploaded"}
+
+
+@api_router.get("/portal/invoices/{iid}/pdf")
+async def portal_invoice_pdf(iid: str, authorization: str = Header(None), auth: str = Query(None)):
+    token = authorization[7:] if (authorization or "").startswith("Bearer ") else auth
+    cust = await _portal_customer_from_token(token)
+    if not cust:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    if not ObjectId.is_valid(iid):
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    inv = await db.invoices.find_one({"_id": ObjectId(iid)})
+    if not inv or str(inv.get("customer_id")) != str(cust["_id"]):
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    company = await db.company_settings.find_one({"key": "company"}) or {}
+    data = {**inv, "number": inv.get("invoice_number"), "subtotal": inv.get("amount"),
+            "per_pax_price": round(float(inv.get("amount") or 0) / max(int(inv.get("pax") or 1), 1)), "gross": inv.get("amount"), "addons": []}
+    pdf = build_document_pdf("INVOICE", data, company)
+    return Response(content=pdf, media_type="application/pdf",
+                    headers={"Content-Disposition": f"inline; filename={inv.get('invoice_number')}.pdf"})
+
+
+@api_router.get("/portal/receipts/{rid}/pdf")
+async def portal_receipt_pdf(rid: str, authorization: str = Header(None), auth: str = Query(None)):
+    token = authorization[7:] if (authorization or "").startswith("Bearer ") else auth
+    cust = await _portal_customer_from_token(token)
+    if not cust:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    if not ObjectId.is_valid(rid):
+        raise HTTPException(status_code=404, detail="Kwitansi tidak ditemukan")
+    r = await db.schedule_payments.find_one({"_id": ObjectId(rid)})
+    if not r or str(r.get("customer_id")) != str(cust["_id"]):
+        raise HTTPException(status_code=404, detail="Kwitansi tidak ditemukan")
+    settings = await get_settings_dict()
+    company = (settings.get("company") or {}).get("name", "Travel CRM")
+
+    def rp(n):
+        return "Rp " + f"{float(n or 0):,.0f}".replace(",", ".")
+
+    buf = BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4, topMargin=20 * mm, bottomMargin=20 * mm)
+    styles = getSampleStyleSheet()
+    rows = [["No. Kwitansi", r.get("receipt_number", "")], ["Tanggal", (r.get("created_at") or "")[:16].replace("T", " ")],
+            ["Booking", r.get("booking_number", "")], ["Customer", r.get("customer_name", "")],
+            ["Termin", f"#{r.get('payment_number')} {r.get('label', '')}"], ["Jumlah Dibayar", rp(r.get("amount"))],
+            ["Sisa Termin", rp(r.get("outstanding_after"))], ["Sisa Total Booking", rp(r.get("outstanding_total"))]]
+    t = Table(rows, colWidths=[55 * mm, 110 * mm])
+    t.setStyle(TableStyle([("GRID", (0, 0), (-1, -1), 0.5, colors.grey), ("BACKGROUND", (0, 0), (0, -1), colors.whitesmoke),
+                           ("FONTSIZE", (0, 0), (-1, -1), 10), ("TOPPADDING", (0, 0), (-1, -1), 6), ("BOTTOMPADDING", (0, 0), (-1, -1), 6)]))
+    el = [Paragraph(f"<b>{company}</b>", styles["Title"]), Paragraph("KWITANSI PEMBAYARAN", styles["Heading2"]),
+          Spacer(1, 8), t, Spacer(1, 20), Paragraph("Terima kasih atas pembayaran Anda.", styles["Normal"])]
+    doc.build(el)
+    return Response(content=buf.getvalue(), media_type="application/pdf",
+                    headers={"Content-Disposition": f"inline; filename=kwitansi-{r.get('receipt_number', '')}.pdf"})
+
 
 
 # ---------- Travelers ----------

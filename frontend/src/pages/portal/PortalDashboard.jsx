@@ -1,31 +1,40 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import portalApi from "@/lib/portalApi";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Loader2, Plane, LogOut, User, CalendarCheck, Receipt, FileText, Wallet, RotateCcw, MapPin } from "lucide-react";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Loader2, Plane, LogOut, User, CalendarCheck, Receipt, FileText, Wallet, RotateCcw, MapPin, Download, UploadCloud } from "lucide-react";
 import { toast } from "sonner";
 
+const BASE = process.env.REACT_APP_BACKEND_URL;
 const idr = (n) => "Rp " + Number(n || 0).toLocaleString("id-ID");
 const dt = (s) => (s ? new Date(s).toLocaleDateString("id-ID", { day: "2-digit", month: "short", year: "numeric" }) : "—");
 const SCHED = { PAID: "bg-emerald-50 text-emerald-700 border-emerald-200", PARTIAL: "bg-amber-50 text-amber-700 border-amber-200", OVERDUE: "bg-red-50 text-red-700 border-red-200", PENDING: "bg-slate-100 text-slate-500 border-slate-200", CANCELLED: "bg-slate-100 text-slate-400 border-slate-200" };
 const BST = { CONFIRMED: "bg-blue-50 text-blue-700 border-blue-200", COMPLETED: "bg-emerald-50 text-emerald-700 border-emerald-200", CANCELLED: "bg-red-50 text-red-700 border-red-200", READY: "bg-indigo-50 text-indigo-700 border-indigo-200" };
+const UP_TYPES = ["PASSPORT", "KTP", "KK", "PHOTO", "VISA", "VACCINE_CERT", "OTHER"];
 
 export default function PortalDashboard() {
   const navigate = useNavigate();
   const [d, setD] = useState(null);
+  const token = localStorage.getItem("portal_token");
 
   const logout = useCallback(() => { localStorage.removeItem("portal_token"); navigate("/portal/login"); }, [navigate]);
-
-  useEffect(() => {
-    if (!localStorage.getItem("portal_token")) { navigate("/portal/login"); return; }
+  const load = useCallback(() => {
     portalApi.get("/portal/dashboard").then((r) => setD(r.data)).catch((e) => {
-      if (e.response?.status === 401) { toast.error("Sesi berakhir, silакан login lagi"); logout(); }
+      if (e.response?.status === 401) { toast.error("Sesi berakhir, silakan login lagi"); logout(); }
       else { toast.error("Gagal memuat data"); setD(false); }
     });
-  }, [navigate, logout]);
+  }, [logout]);
+
+  useEffect(() => {
+    if (!token) { navigate("/portal/login"); return; }
+    load();
+  }, [token, navigate, load]);
+
+  const openPdf = (url) => window.open(`${BASE}/api${url}?auth=${encodeURIComponent(token)}`, "_blank");
 
   if (d === null) return <div className="min-h-screen bg-slate-50 flex items-center justify-center"><Loader2 className="h-6 w-6 animate-spin text-blue-600" /></div>;
   if (d === false) return <div className="min-h-screen bg-slate-50 flex items-center justify-center text-slate-400">Gagal memuat data.</div>;
@@ -44,7 +53,6 @@ export default function PortalDashboard() {
       </header>
 
       <main className="max-w-5xl mx-auto px-4 py-6 space-y-6">
-        {/* Profile + summary */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
           <Card className="border-slate-200" data-testid="portal-profile">
             <CardHeader className="pb-2"><CardTitle className="text-base font-display flex items-center gap-2"><User className="h-4 w-4 text-blue-600" />Profil</CardTitle></CardHeader>
@@ -67,7 +75,6 @@ export default function PortalDashboard() {
           </Card>
         </div>
 
-        {/* Bookings */}
         <Card className="border-slate-200" data-testid="portal-bookings">
           <CardHeader className="pb-2"><CardTitle className="text-base font-display flex items-center gap-2"><CalendarCheck className="h-4 w-4 text-blue-600" />Booking Saya ({d.bookings.length})</CardTitle></CardHeader>
           <CardContent className="space-y-4">
@@ -80,10 +87,7 @@ export default function PortalDashboard() {
                       <p className="text-xs text-slate-500">{b.booking_number} · {b.pax} pax · {b.room_type || "-"}</p>
                       {b.departure && <p className="text-xs text-slate-500 flex items-center gap-1 mt-0.5"><MapPin className="h-3 w-3" />{dt(b.departure.date)} → {dt(b.departure.return_date)} {b.departure.flight ? `· ${b.departure.flight}` : ""}</p>}
                     </div>
-                    <div className="text-right">
-                      <Badge variant="outline" className={BST[b.status] || "bg-slate-100"}>{b.status}</Badge>
-                      <p className="text-sm font-bold text-slate-900 mt-1">{idr(b.total)}</p>
-                    </div>
+                    <div className="text-right"><Badge variant="outline" className={BST[b.status] || "bg-slate-100"}>{b.status}</Badge><p className="text-sm font-bold text-slate-900 mt-1">{idr(b.total)}</p></div>
                   </div>
                   {(b.payment_schedule || []).length > 0 && (
                     <div className="mt-3">
@@ -106,23 +110,22 @@ export default function PortalDashboard() {
         </Card>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          {/* Invoices */}
           <Card className="border-slate-200" data-testid="portal-invoices">
             <CardHeader className="pb-2"><CardTitle className="text-base font-display flex items-center gap-2"><Receipt className="h-4 w-4 text-indigo-600" />Invoice ({d.invoices.length})</CardTitle></CardHeader>
             <CardContent>
               {d.invoices.length === 0 ? <p className="text-sm text-slate-400">Belum ada invoice.</p>
-                : <Table><TableHeader><TableRow className="bg-slate-50"><TableHead>No.</TableHead><TableHead className="text-right">Total</TableHead><TableHead className="text-right">Sisa</TableHead><TableHead>Status</TableHead></TableRow></TableHeader>
+                : <Table><TableHeader><TableRow className="bg-slate-50"><TableHead>No.</TableHead><TableHead className="text-right">Total</TableHead><TableHead className="text-right">Sisa</TableHead><TableHead>Status</TableHead><TableHead></TableHead></TableRow></TableHeader>
                     <TableBody>{d.invoices.map((i) => (
                       <TableRow key={i.id} data-testid={`invoice-${i.id}`}>
                         <TableCell className="text-slate-700">{i.invoice_number || "—"}</TableCell>
                         <TableCell className="text-right">{idr(i.total)}</TableCell>
                         <TableCell className="text-right text-red-600">{idr(i.outstanding)}</TableCell>
                         <TableCell><Badge variant="outline" className={i.outstanding > 0 ? "bg-amber-50 text-amber-700 border-amber-200" : "bg-emerald-50 text-emerald-700 border-emerald-200"}>{i.status || (i.outstanding > 0 ? "UNPAID" : "PAID")}</Badge></TableCell>
+                        <TableCell className="text-right"><Button size="icon" variant="ghost" className="text-indigo-600" onClick={() => openPdf(`/portal/invoices/${i.id}/pdf`)} data-testid={`invoice-pdf-${i.id}`}><Download className="h-4 w-4" /></Button></TableCell>
                       </TableRow>))}</TableBody></Table>}
             </CardContent>
           </Card>
 
-          {/* Refunds */}
           <Card className="border-slate-200" data-testid="portal-refunds">
             <CardHeader className="pb-2"><CardTitle className="text-base font-display flex items-center gap-2"><RotateCcw className="h-4 w-4 text-amber-600" />Status Refund ({d.refunds.length})</CardTitle></CardHeader>
             <CardContent>
@@ -136,23 +139,78 @@ export default function PortalDashboard() {
           </Card>
         </div>
 
-        {/* Documents */}
-        <Card className="border-slate-200" data-testid="portal-documents">
-          <CardHeader className="pb-2"><CardTitle className="text-base font-display flex items-center gap-2"><FileText className="h-4 w-4 text-slate-600" />Dokumen ({d.documents.length})</CardTitle></CardHeader>
+        {/* Kwitansi */}
+        <Card className="border-slate-200" data-testid="portal-receipts">
+          <CardHeader className="pb-2"><CardTitle className="text-base font-display flex items-center gap-2"><Receipt className="h-4 w-4 text-emerald-600" />Kwitansi ({(d.receipts || []).length})</CardTitle></CardHeader>
           <CardContent>
-            {d.documents.length === 0 ? <p className="text-sm text-slate-400">Belum ada dokumen.</p>
-              : <div className="flex flex-wrap gap-2">{d.documents.map((doc, i) => (
-                  <a key={i} href={doc.file_url || "#"} target="_blank" rel="noreferrer" onClick={(e) => !doc.file_url && e.preventDefault()}
-                    className="flex items-center gap-2 border border-slate-200 rounded-lg px-3 py-2 text-sm hover:bg-slate-50" data-testid={`doc-${i}`}>
-                    <FileText className="h-4 w-4 text-slate-400" />
-                    <span className="text-slate-700">{doc.doc_type}</span>
-                    <Badge variant="outline" className={doc.status === "VERIFIED" || doc.status === "COMPLETE" ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-slate-100 text-slate-500"}>{doc.status || "—"}</Badge>
-                  </a>))}</div>}
+            {(d.receipts || []).length === 0 ? <p className="text-sm text-slate-400">Belum ada kwitansi.</p>
+              : <Table><TableHeader><TableRow className="bg-slate-50"><TableHead>No. Kwitansi</TableHead><TableHead>Booking</TableHead><TableHead>Tanggal</TableHead><TableHead className="text-right">Jumlah</TableHead><TableHead></TableHead></TableRow></TableHeader>
+                  <TableBody>{d.receipts.map((r) => (
+                    <TableRow key={r.id} data-testid={`receipt-${r.id}`}>
+                      <TableCell className="text-slate-700">{r.receipt_number}</TableCell>
+                      <TableCell className="text-slate-600">{r.booking_number}</TableCell>
+                      <TableCell className="text-slate-600">{dt(r.created_at)}</TableCell>
+                      <TableCell className="text-right text-emerald-700">{idr(r.amount)}</TableCell>
+                      <TableCell className="text-right"><Button size="icon" variant="ghost" className="text-emerald-600" onClick={() => openPdf(`/portal/receipts/${r.id}/pdf`)} data-testid={`receipt-pdf-${r.id}`}><Download className="h-4 w-4" /></Button></TableCell>
+                    </TableRow>))}</TableBody></Table>}
           </CardContent>
         </Card>
+
+        {/* Documents + Upload */}
+        <DocumentsCard docs={d.documents} onUploaded={load} />
 
         <p className="text-center text-xs text-slate-400 pb-6">Pembayaran online akan tersedia pada tahap berikutnya.</p>
       </main>
     </div>
+  );
+}
+
+function DocumentsCard({ docs, onUploaded }) {
+  const fileRef = useRef(null);
+  const [dtype, setDtype] = useState("PASSPORT");
+  const [uploading, setUploading] = useState(false);
+
+  const onPick = async (e) => {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    if (f.size > 10 * 1024 * 1024) { toast.error("Maksimal 10MB"); return; }
+    const fd = new FormData();
+    fd.append("doc_type", dtype);
+    fd.append("file", f);
+    setUploading(true);
+    try {
+      await portalApi.post("/portal/documents", fd, { headers: { "Content-Type": "multipart/form-data" } });
+      toast.success(`Dokumen ${dtype} terunggah`);
+      onUploaded();
+    } catch (err) { toast.error(err.response?.data?.detail || "Gagal mengunggah"); }
+    finally { setUploading(false); if (fileRef.current) fileRef.current.value = ""; }
+  };
+
+  return (
+    <Card className="border-slate-200" data-testid="portal-documents">
+      <CardHeader className="pb-2 flex flex-row items-center justify-between">
+        <CardTitle className="text-base font-display flex items-center gap-2"><FileText className="h-4 w-4 text-slate-600" />Dokumen ({docs.length})</CardTitle>
+        <div className="flex items-center gap-2">
+          <Select value={dtype} onValueChange={setDtype}>
+            <SelectTrigger className="w-36 h-9" data-testid="upload-doc-type"><SelectValue /></SelectTrigger>
+            <SelectContent className="bg-white">{UP_TYPES.map((t) => <SelectItem key={t} value={t}>{t}</SelectItem>)}</SelectContent>
+          </Select>
+          <input ref={fileRef} type="file" className="hidden" accept="image/*,.pdf" onChange={onPick} data-testid="upload-doc-input" />
+          <Button size="sm" className="bg-blue-600 hover:bg-blue-700" disabled={uploading} onClick={() => fileRef.current?.click()} data-testid="upload-doc-btn">
+            {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <><UploadCloud className="h-4 w-4 mr-1" />Unggah</>}
+          </Button>
+        </div>
+      </CardHeader>
+      <CardContent>
+        {docs.length === 0 ? <p className="text-sm text-slate-400">Belum ada dokumen. Unggah paspor/KTP Anda.</p>
+          : <div className="flex flex-wrap gap-2">{docs.map((doc, i) => (
+              <a key={i} href={doc.file_url || "#"} target="_blank" rel="noreferrer" onClick={(e) => !doc.file_url && e.preventDefault()}
+                className="flex items-center gap-2 border border-slate-200 rounded-lg px-3 py-2 text-sm hover:bg-slate-50" data-testid={`doc-${i}`}>
+                <FileText className="h-4 w-4 text-slate-400" />
+                <span className="text-slate-700">{doc.doc_type}</span>
+                <Badge variant="outline" className={doc.status === "VERIFIED" || doc.status === "COMPLETE" ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-slate-100 text-slate-500"}>{doc.status || "—"}</Badge>
+              </a>))}</div>}
+      </CardContent>
+    </Card>
   );
 }

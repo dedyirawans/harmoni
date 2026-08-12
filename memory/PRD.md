@@ -1,3 +1,9 @@
+## PHASE 9L.1 — Portal Upload Dokumen + Unduh Invoice/Kwitansi PDF (2026-06) — DONE (Verified curl + screenshot)
+- **Upload dokumen dari portal**: `POST /api/portal/documents` (multipart doc_type+file, maks 10MB) → Emergent Object Storage, scoped ke `customer_id` token (source=portal). Tipe: PASSPORT/KTP/KK/PHOTO/VISA/VACCINE_CERT/OTHER. UI: pilih tipe + tombol Unggah di kartu Dokumen.
+- **Unduh PDF**: `GET /api/portal/invoices/{id}/pdf` & `GET /api/portal/receipts/{id}/pdf` (auth via header atau `?auth=` token; ownership-checked). Reuse `build_document_pdf` (invoice) & builder kwitansi. Dashboard payload kini menyertakan `receipts` (dari `db.schedule_payments`).
+- Keamanan terverifikasi: token staff → 401 pada endpoint portal; tanpa token → 401; PDF valid (`%PDF-`).
+
+
 ## PHASE 9L — Customer Portal (2026-06) — DONE (Verified curl E2E + screenshot)
 - **Portal terpisah** (`/portal/login`, `/portal`), token JWT khusus (`type=customer_access`, klaim `customer_id`, exp 7 hari). Token staff & portal saling ditolak (401) — terverifikasi.
 - **Login OTP** (Email via Emergent email; WhatsApp via n8n webhook `portal.otp`; jika n8n nonaktif OTP tetap dibuat & di-log + `debug_otp` di response untuk preview). OTP 6 digit, exp 5 menit, maks 5 percobaan, bisa kirim ulang. Tanpa self-registration (hanya customer terdaftar; email tak dikenal tak membocorkan keberadaan).
