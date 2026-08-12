@@ -1,6 +1,15 @@
 # Safar Travel CRM — Product Requirements (Living Doc)
 
-## PHASE 9D — Booking Timeline & Workflow Control (2026-06) — DONE
+## PHASE 9E — Payment Schedule & Collection Management (2026-06) — DONE
+- **Payment Plan** (`POST /api/bookings/{id}/payment-plan`, perm payment.manage → accounting/super_admin; Sales 403): FULL (1 item), DP (DP + Pelunasan), INSTALLMENT (N cicilan). Auto-calc sehingga Σ amount = total booking (remainder di item terakhir). Field per item: payment_number, label, due_date, amount, paid_amount, outstanding, status.
+- **Statuses schedule**: PENDING, PARTIAL, PAID, OVERDUE, CANCELLED (auto dari paid_amount + due_date).
+- **Record collection** (`PATCH /api/bookings/{id}/schedule/{n}/record`): tambah paid_amount, hitung outstanding & status item + total booking. Auto naik status booking CONFIRMED→PARTIAL_PAID (ada bayar) dan →PAID saat outstanding=0.
+- **Full Payment → Commission Eligibility**: saat outstanding total = 0 → payment_status=PAID, full_payment_date=today, commission_eligible=True + notifikasi COMMISSION_ELIGIBLE ke sales (mengikuti Full Payment Date; payout month rule via engine existing).
+- **Reminder** (cron `_run_auto_scan`): per item schedule pada 7/3/1 hari sebelum, due date, & overdue → notifikasi ke Sales + kirim WhatsApp via n8n (event `payment.reminder`) + **tercatat di Conversation History** (OUTBOUND SYSTEM/AUTO), idempotent per hari.
+- **Security**: Sales tak bisa ubah amount/plan (403); Accounting mengelola; Super Admin adjustment via Approval Center (Phase 9C).
+- **UI**: tab "Payment Schedule" di BookingDetail (ringkasan Total/Paid/Outstanding, tabel jadwal + status, Generate Plan & Record per item untuk yang berhak).
+- **Verified (curl + screenshot)**: DP auto-calc, OVERDUE/PENDING auto, Sales 403, record→PARTIAL_PAID, lunas→PAID+commission_eligible+full_payment_date.
+
 - **Booking Timeline** (`GET /api/bookings/{id}/timeline`): jalur normal Lead→Quotation→Quotation Converted→Booking→Payment→Documents→Departure→Completed; jalur cancellation Booking→Cancellation Requested→Super Admin Approval→Refund Calculation→Refund Approved→Refund Paid. Tiap step punya flag done + tanggal/detail. UI: tab "Timeline" di BookingDetail (stepper vertikal + Status Audit).
 - **Booking statuses**: DRAFT, PENDING, CONFIRMED, PARTIAL_PAID, PAID, READY, COMPLETED, CANCELLED, REFUNDED.
 - **Workflow validation** (`PATCH /api/bookings/{id}/status`, perm booking.manage): transisi dibatasi `BOOKING_TRANSITIONS` (mis. DRAFT tak bisa langsung PAID; CONFIRMED→COMPLETED ditolak). Ke PARTIAL_PAID/PAID **wajib ada transaksi payment**. Kontrol status via dropdown di BookingDetail (super_admin/booking.manage), minta alasan.

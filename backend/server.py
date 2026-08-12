@@ -823,6 +823,41 @@ async def _run_auto_scan():
                 assigned_user_id=b.get("sales_pic_id"), assigned_user_name=b.get("sales_pic_name", ""),
                 customer_id=b.get("customer_id"), booking_id=bid, due_date=today, priority="MEDIUM",
                 notes="Booking membutuhkan dokumen jamaah", created_by="system", source="auto_document", dedupe=f"autodoc:{bid}")
+        for it in (b.get("payment_schedule") or []):
+            st = it.get("status")
+            if st in ("PAID", "CANCELLED"):
+                continue
+            due = (it.get("due_date") or "")[:10]
+            if not due:
+                continue
+            offset = (datetime.fromisoformat(due).date() - datetime.now(timezone.utc).date()).days
+            stage = None
+            if due < today:
+                stage = "Overdue"
+            elif offset == 0:
+                stage = "Due Today"
+            elif offset in (1, 3, 7):
+                stage = f"{offset} hari lagi"
+            if not stage:
+                continue
+            key = f"payrem:{bid}:{it.get('payment_number')}:{today}"
+            out = it.get("outstanding", it.get("amount"))
+            if b.get("sales_pic_id"):
+                await notify(f"Payment Reminder ({stage})",
+                    f"{b.get('booking_number', '')} • {b.get('customer_name', '')} • Rp {out} jatuh tempo {due}",
+                    link=f"/crm/{b.get('customer_id')}" if b.get("customer_id") else "/accounting",
+                    user_id=b.get("sales_pic_id"), ntype="PAYMENT_OVERDUE" if stage == "Overdue" else "PAYMENT_DUE",
+                    priority="urgent" if stage == "Overdue" else "high", dedupe=key)
+            # N8N WhatsApp reminder + log to conversation history
+            phone = await _cust_phone(b.get("customer_id"))
+            if phone and not await db.conversations.find_one({"dedupe": key}):
+                msg = f"Assalamualaikum {b.get('customer_name', '')}, pengingat pembayaran {b.get('booking_number', '')} sebesar Rp {out}, jatuh tempo {due} ({stage}). Terima kasih."
+                trigger_n8n("payment.reminder", {"booking_number": b.get("booking_number"), "customer_id": b.get("customer_id"),
+                    "customer_phone": phone, "outstanding": out, "due_date": due, "stage": stage, "message": msg})
+                await db.conversations.insert_one({"conversation_id": str(_uuid.uuid4()), "customer_id": b.get("customer_id"),
+                    "customer_name": b.get("customer_name", ""), "whatsapp": phone, "channel": "WHATSAPP", "direction": "OUTBOUND",
+                    "message": msg, "message_type": "TEXT", "sender_type": "SYSTEM", "ai_or_human": "AUTO", "status": "SENT",
+                    "dedupe": key, "timestamp": now_iso(), "created_at": now_iso()})
 
 
 @api_router.post("/cron/notifications-tasks")
@@ -2684,6 +2719,120 @@ async def set_payment_schedule(bid: str, body: dict, request: Request, user: dic
         raise HTTPException(status_code=403, detail="403 Forbidden")
     schedule = body.get("schedule", [])
     await db.bookings.update_one({"_id": ObjectId(bid)}, {"$set": {"payment_schedule": schedule}})
+    return serialize(await db.bookings.find_one({"_id": ObjectId(bid)}))
+
+
+PAY_PLAN_TYPES = ["FULL", "DP", "INSTALLMENT"]
+
+
+def _sched_item_status(item, today):
+    amt = float(item.get("amount") or 0)
+    paid = float(item.get("paid_amount") or 0)
+    if item.get("status") == "CANCELLED":
+        return "CANCELLED"
+    if paid >= amt and amt > 0:
+        return "PAID"
+    if (item.get("due_date") or "")[:10] and (item.get("due_date") or "")[:10] < today and paid < amt:
+        return "OVERDUE"
+    if paid > 0:
+        return "PARTIAL"
+    return "PENDING"
+
+
+def _add_days(base_iso, n):
+    try:
+        d = datetime.fromisoformat((base_iso or now_iso())[:10])
+    except Exception:
+        d = datetime.now(timezone.utc)
+    return (d + timedelta(days=n)).date().isoformat()
+
+
+@api_router.post("/bookings/{bid}/payment-plan")
+async def generate_payment_plan(bid: str, body: dict, request: Request, user: dict = Depends(require_permission("payment.manage"))):
+    b = await db.bookings.find_one({"_id": ObjectId(bid)})
+    if not b:
+        raise HTTPException(status_code=404, detail="Booking not found")
+    total = round(float(b.get("total") or 0), 2)
+    if total <= 0:
+        raise HTTPException(status_code=400, detail="Total booking belum tersedia")
+    plan = (body.get("plan_type") or "FULL").upper()
+    if plan not in PAY_PLAN_TYPES:
+        raise HTTPException(status_code=400, detail="Plan tidak valid")
+    first_due = body.get("first_due") or today_str()
+    items = []
+    if plan == "FULL":
+        items = [{"payment_number": 1, "label": "Full Payment", "due_date": first_due, "amount": total}]
+    elif plan == "DP":
+        dp = round(float(body.get("dp_amount") or 0), 2)
+        if dp <= 0 or dp >= total:
+            raise HTTPException(status_code=400, detail="DP harus > 0 dan < total")
+        interval = int(body.get("interval_days") or 30)
+        items = [{"payment_number": 1, "label": "DP", "due_date": first_due, "amount": dp},
+                 {"payment_number": 2, "label": "Pelunasan", "due_date": _add_days(first_due, interval), "amount": round(total - dp, 2)}]
+    else:  # INSTALLMENT
+        n = int(body.get("installments") or 3)
+        if n < 2:
+            raise HTTPException(status_code=400, detail="Installment minimal 2")
+        interval = int(body.get("interval_days") or 30)
+        base = round(total / n, 2)
+        for i in range(n):
+            amt = round(total - base * (n - 1), 2) if i == n - 1 else base
+            items.append({"payment_number": i + 1, "label": f"Installment {i + 1}", "due_date": _add_days(first_due, interval * i), "amount": amt})
+    today = today_str()
+    for it in items:
+        it.update({"paid_amount": 0, "outstanding": it["amount"], "status": _sched_item_status(it, today)})
+    await db.bookings.update_one({"_id": ObjectId(bid)}, {"$set": {"payment_plan": plan, "payment_schedule": items}})
+    await log_audit(user, "booking", "payment_plan", request, record_id=bid, new={"plan": plan, "items": len(items)})
+    return serialize(await db.bookings.find_one({"_id": ObjectId(bid)}))
+
+
+@api_router.patch("/bookings/{bid}/schedule/{pnum}/record")
+async def record_schedule_payment(bid: str, pnum: int, body: dict, request: Request, user: dict = Depends(require_permission("payment.manage"))):
+    b = await db.bookings.find_one({"_id": ObjectId(bid)})
+    if not b:
+        raise HTTPException(status_code=404, detail="Booking not found")
+    sched = b.get("payment_schedule") or []
+    amount = round(float(body.get("amount") or 0), 2)
+    if amount <= 0:
+        raise HTTPException(status_code=400, detail="Amount pembayaran wajib > 0")
+    today = today_str()
+    found = False
+    for it in sched:
+        if int(it.get("payment_number")) == int(pnum):
+            it["paid_amount"] = round(float(it.get("paid_amount") or 0) + amount, 2)
+            it["outstanding"] = max(round(float(it.get("amount") or 0) - it["paid_amount"], 2), 0)
+            it["status"] = _sched_item_status(it, today)
+            it["last_paid_at"] = now_iso()
+            found = True
+            break
+    if not found:
+        raise HTTPException(status_code=404, detail="Jadwal pembayaran tidak ditemukan")
+    total = round(sum(float(i.get("amount") or 0) for i in sched if i.get("status") != "CANCELLED"), 2)
+    paid_total = round(sum(float(i.get("paid_amount") or 0) for i in sched), 2)
+    outstanding = max(round(total - paid_total, 2), 0)
+    upd = {"payment_schedule": sched, "paid_total": paid_total, "outstanding_total": outstanding}
+    if outstanding <= 0 and total > 0:
+        upd["payment_status"] = "PAID"
+        upd["full_payment_date"] = today
+        if b.get("status") in ("CONFIRMED", "PARTIAL_PAID"):
+            hist = b.get("status_history", []) + [{"old_status": b.get("status"), "new_status": "PAID", "user": user["name"], "role": user["role"], "reason": "Full payment (schedule lunas)", "at": now_iso()}]
+            upd["status"] = "PAID"
+            upd["status_history"] = hist
+        # Commission Eligibility: mark eligible on full payment date + notify sales
+        upd["commission_eligible"] = True
+        upd["commission_eligible_date"] = today
+        if b.get("sales_pic_id"):
+            await notify("Commission Eligible", f"{b.get('booking_number', '')} lunas — komisi eligible ({today})",
+                         link=f"/crm/{b.get('customer_id')}" if b.get("customer_id") else "/commission",
+                         user_id=b.get("sales_pic_id"), ntype="COMMISSION_ELIGIBLE", priority="high")
+    elif paid_total > 0:
+        upd["payment_status"] = "PARTIAL"
+        if b.get("status") == "CONFIRMED":
+            hist = b.get("status_history", []) + [{"old_status": "CONFIRMED", "new_status": "PARTIAL_PAID", "user": user["name"], "role": user["role"], "reason": "DP/cicilan diterima", "at": now_iso()}]
+            upd["status"] = "PARTIAL_PAID"
+            upd["status_history"] = hist
+    await db.bookings.update_one({"_id": ObjectId(bid)}, {"$set": upd})
+    await log_audit(user, "booking", "schedule_payment", request, record_id=bid, new={"payment_number": pnum, "amount": amount, "outstanding_total": outstanding})
     return serialize(await db.bookings.find_one({"_id": ObjectId(bid)}))
 
 

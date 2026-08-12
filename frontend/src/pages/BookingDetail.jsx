@@ -16,6 +16,7 @@ import { ArrowLeft, Loader2, Plus, Trash2, Upload, FileText, Users, CreditCard, 
 import { toast } from "sonner";
 
 const BOOKING_STATUSES = ["DRAFT", "PENDING", "CONFIRMED", "PARTIAL_PAID", "PAID", "READY", "COMPLETED", "CANCELLED", "REFUNDED"];
+const SCHED_COLORS = { PENDING: "bg-slate-100 text-slate-600", PARTIAL: "bg-amber-50 text-amber-700 border-amber-200", PAID: "bg-emerald-50 text-emerald-700 border-emerald-200", OVERDUE: "bg-red-50 text-red-700 border-red-200", CANCELLED: "bg-slate-100 text-slate-400" };
 
 export default function BookingDetail() {
   const { id } = useParams();
@@ -56,6 +57,25 @@ export default function BookingDetail() {
     catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); }
   };
 
+  const sched = b?.payment_schedule || [];
+  const schedTotals = { total: sched.reduce((a, s) => a + Number(s.amount || 0), 0), paid: sched.reduce((a, s) => a + Number(s.paid_amount || 0), 0) };
+  schedTotals.out = Math.max(schedTotals.total - schedTotals.paid, 0);
+  const genPlan = async () => {
+    const plan = (window.prompt("Plan type: FULL / DP / INSTALLMENT", "DP") || "").toUpperCase();
+    if (!["FULL", "DP", "INSTALLMENT"].includes(plan)) return;
+    const body = { plan_type: plan, first_due: new Date().toISOString().slice(0, 10) };
+    if (plan === "DP") body.dp_amount = Number(window.prompt("DP amount (Rp):", "5000000") || 0);
+    if (plan === "INSTALLMENT") body.installments = Number(window.prompt("Jumlah cicilan:", "3") || 3);
+    try { await api.post(`/bookings/${id}/payment-plan`, body); toast.success("Payment plan dibuat"); load(); }
+    catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); }
+  };
+  const recSched = async (s) => {
+    const amt = Number(window.prompt(`Bayar untuk #${s.payment_number} (sisa Rp ${s.outstanding}):`, s.outstanding) || 0);
+    if (amt <= 0) return;
+    try { await api.patch(`/bookings/${id}/schedule/${s.payment_number}/record`, { amount: amt }); toast.success("Pembayaran dicatat"); load(); }
+    catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); }
+  };
+
   return (
     <div className="space-y-6" data-testid="booking-detail-page">
       <button onClick={() => navigate("/booking")} className="flex items-center gap-2 text-sm text-slate-500 hover:text-slate-900"><ArrowLeft className="h-4 w-4" />Back to bookings</button>
@@ -82,6 +102,7 @@ export default function BookingDetail() {
           <TabsTrigger value="travelers" data-testid="tab-travelers"><Users className="h-4 w-4 mr-1" />Jamaah</TabsTrigger>
           <TabsTrigger value="payments" data-testid="tab-payments"><CreditCard className="h-4 w-4 mr-1" />Invoice & Payment</TabsTrigger>
           <TabsTrigger value="timeline" data-testid="tab-timeline"><GitBranch className="h-4 w-4 mr-1" />Timeline</TabsTrigger>
+          <TabsTrigger value="schedule" data-testid="tab-schedule"><CreditCard className="h-4 w-4 mr-1" />Payment Schedule</TabsTrigger>
         </TabsList>
 
         <TabsContent value="travelers">
@@ -140,6 +161,28 @@ export default function BookingDetail() {
                 </ul>
               )}
             </div>
+          </CardContent></Card>
+        </TabsContent>
+
+        <TabsContent value="schedule">
+          <Card className="border-slate-200"><CardContent className="p-5" data-testid="payment-schedule">
+            <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+              <div className="text-sm text-slate-600">Plan: <b>{b.payment_plan || "—"}</b> · Total <b>{fmtIDR(schedTotals.total)}</b> · Terbayar <b className="text-emerald-600">{fmtIDR(schedTotals.paid)}</b> · Outstanding <b className="text-red-600">{fmtIDR(schedTotals.out)}</b></div>
+              {canPay && <Button size="sm" onClick={genPlan} data-testid="generate-plan-btn">Generate / Reset Plan</Button>}
+            </div>
+            {sched.length === 0 ? <p className="text-sm text-slate-400 text-center py-6">Belum ada jadwal pembayaran.{canPay ? " Klik Generate Plan." : ""}</p> : (
+              <table className="w-full text-sm" data-testid="schedule-table">
+                <thead><tr className="text-left text-slate-400 border-b border-slate-100"><th className="py-2">#</th><th>Label</th><th>Due</th><th>Amount</th><th>Paid</th><th>Outstanding</th><th>Status</th><th></th></tr></thead>
+                <tbody>{sched.map((s) => (
+                  <tr key={s.payment_number} className="border-b border-slate-50" data-testid={`schedule-row-${s.payment_number}`}>
+                    <td className="py-2">{s.payment_number}</td><td>{s.label}</td><td>{(s.due_date || "").slice(0, 10)}</td>
+                    <td>{fmtIDR(s.amount)}</td><td>{fmtIDR(s.paid_amount)}</td><td>{fmtIDR(s.outstanding)}</td>
+                    <td><Badge variant="outline" className={SCHED_COLORS[s.status]}>{s.status}</Badge></td>
+                    <td className="text-right">{canPay && !["PAID", "CANCELLED"].includes(s.status) && <Button size="sm" variant="outline" onClick={() => recSched(s)} data-testid={`record-schedule-${s.payment_number}`}>Record</Button>}</td>
+                  </tr>))}
+                </tbody>
+              </table>
+            )}
           </CardContent></Card>
         </TabsContent>
       </Tabs>
