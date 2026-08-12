@@ -2582,6 +2582,99 @@ async def get_booking(bid: str, user: dict = Depends(require_permission("booking
     return {"booking": serialize(b), "travelers": travelers, "documents": docs, "invoices": invoices}
 
 
+BOOKING_STATUSES = ["DRAFT", "PENDING", "CONFIRMED", "PARTIAL_PAID", "PAID", "READY", "COMPLETED", "CANCELLED", "REFUNDED"]
+BOOKING_TRANSITIONS = {
+    "DRAFT": ["PENDING", "CONFIRMED", "CANCELLED"],
+    "PENDING": ["CONFIRMED", "CANCELLED"],
+    "CONFIRMED": ["PARTIAL_PAID", "PAID", "CANCELLED"],
+    "PARTIAL_PAID": ["PAID", "CANCELLED"],
+    "PAID": ["READY", "CANCELLED"],
+    "READY": ["COMPLETED", "CANCELLED"],
+    "COMPLETED": [],
+    "CANCELLED": ["REFUNDED"],
+    "REFUNDED": [],
+}
+
+
+async def _booking_payments(bid):
+    inv_ids = [str(i["_id"]) for i in await db.invoices.find({"booking_id": bid}).to_list(200)]
+    return await db.payments.find({"$or": [{"booking_id": bid}, {"invoice_id": {"$in": inv_ids}}]}).sort("created_at", 1).to_list(500)
+
+
+@api_router.patch("/bookings/{bid}/status")
+async def update_booking_status(bid: str, body: dict, request: Request, user: dict = Depends(require_permission("booking.manage"))):
+    b = await db.bookings.find_one({"_id": ObjectId(bid)})
+    if not b:
+        raise HTTPException(status_code=404, detail="Booking not found")
+    if not can_access_record(user, b):
+        raise HTTPException(status_code=403, detail="403 Forbidden")
+    old = b.get("status", "DRAFT")
+    new = (body.get("status") or "").upper()
+    reason = (body.get("reason") or "").strip()
+    if new not in BOOKING_STATUSES:
+        raise HTTPException(status_code=400, detail="Status tidak valid")
+    if new == old:
+        return serialize(b)
+    allowed = BOOKING_TRANSITIONS.get(old, [])
+    if new not in allowed:
+        raise HTTPException(status_code=400, detail=f"Transisi {old} → {new} tidak diizinkan. Pilihan: {', '.join(allowed) or '-'}")
+    if new in ("PARTIAL_PAID", "PAID") and not await _booking_payments(bid):
+        raise HTTPException(status_code=400, detail="Tidak bisa ke status pembayaran tanpa transaksi payment tercatat")
+    entry = {"old_status": old, "new_status": new, "user": user["name"], "role": user["role"], "reason": reason, "at": now_iso()}
+    hist = b.get("status_history", []) + [entry]
+    await db.bookings.update_one({"_id": ObjectId(bid)}, {"$set": {"status": new, "status_history": hist, "updated_at": now_iso()}})
+    await log_audit(user, "booking", "status_change", request, record_id=bid, old={"status": old}, new={"status": new, "reason": reason})
+    trigger_n8n("booking.updated", {"id": bid, "booking_number": b.get("booking_number"), "status": new})
+    return serialize(await db.bookings.find_one({"_id": ObjectId(bid)}))
+
+
+@api_router.get("/bookings/{bid}/timeline")
+async def booking_timeline(bid: str, user: dict = Depends(require_permission("booking.view"))):
+    b = await db.bookings.find_one({"_id": ObjectId(bid)})
+    if not b:
+        raise HTTPException(status_code=404, detail="Booking not found")
+    if not can_access_record(user, b):
+        raise HTTPException(status_code=403, detail="403 Forbidden")
+    status = b.get("status", "DRAFT")
+    quo = None
+    if b.get("quotation_id") and ObjectId.is_valid(b["quotation_id"]):
+        quo = await db.quotations.find_one({"_id": ObjectId(b["quotation_id"])})
+    pays = await _booking_payments(bid)
+    tids = [t["_id"] for t in await db.travelers.find({"booking_id": bid}).to_list(200)]
+    doc_count = await db.documents.count_documents({"traveler_id": {"$in": tids}, "is_deleted": False}) if tids else 0
+    today = today_str()
+
+    def step(name, done, at=None, detail=""):
+        return {"step": name, "done": bool(done), "at": at, "detail": detail}
+
+    if status in ("CANCELLED", "REFUNDED"):
+        cx = await db.cancellation_requests.find_one({"booking_id": bid}, sort=[("created_at", -1)])
+        rf = await db.refund_requests.find_one({"booking_id": bid}, sort=[("created_at", -1)])
+        cs = (cx or {}).get("status", "")
+        rs = (rf or {}).get("status", "")
+        steps = [
+            step("Booking", True, b.get("created_at"), b.get("booking_number")),
+            step("Cancellation Requested", bool(cx), (cx or {}).get("created_at"), (cx or {}).get("cancellation_number", "")),
+            step("Super Admin Approval", cs == "APPROVED", None, cs),
+            step("Refund Calculation", bool(rf), (rf or {}).get("created_at"), (rf or {}).get("refund_number", "")),
+            step("Refund Approved", rs in ("APPROVED", "PROCESSING", "PARTIALLY_REFUNDED", "REFUNDED"), None, rs),
+            step("Refund Paid", rs in ("REFUNDED", "PARTIALLY_REFUNDED"), None, rs),
+        ]
+        return {"branch": "cancellation", "status": status, "steps": steps, "allowed_next": BOOKING_TRANSITIONS.get(status, [])}
+    dep_done = status in ("READY", "COMPLETED") or bool(b.get("departure_date") and (b.get("departure_date") or "")[:10] <= today)
+    steps = [
+        step("Lead", bool(b.get("lead_id") or (quo and quo.get("lead_id"))), None, ""),
+        step("Quotation", bool(quo), (quo or {}).get("created_at"), (quo or {}).get("quotation_number", "")),
+        step("Quotation Converted", bool(quo and quo.get("status") == "CONVERTED"), None, ""),
+        step("Booking", True, b.get("created_at"), b.get("booking_number")),
+        step("Payment", len(pays) > 0, (pays[0].get("created_at") if pays else None), f"{len(pays)} payment"),
+        step("Documents", doc_count > 0, None, f"{doc_count} dokumen"),
+        step("Departure", dep_done, b.get("departure_date"), ""),
+        step("Completed", status == "COMPLETED", None, ""),
+    ]
+    return {"branch": "normal", "status": status, "steps": steps, "allowed_next": BOOKING_TRANSITIONS.get(status, [])}
+
+
 @api_router.put("/bookings/{bid}/payment-schedule")
 async def set_payment_schedule(bid: str, body: dict, request: Request, user: dict = Depends(require_permission("booking.manage"))):
     b = await db.bookings.find_one({"_id": ObjectId(bid)})

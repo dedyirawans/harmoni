@@ -1,6 +1,13 @@
 # Safar Travel CRM — Product Requirements (Living Doc)
 
-## PHASE 9C — Central Approval Center (2026-06) — DONE
+## PHASE 9D — Booking Timeline & Workflow Control (2026-06) — DONE
+- **Booking Timeline** (`GET /api/bookings/{id}/timeline`): jalur normal Lead→Quotation→Quotation Converted→Booking→Payment→Documents→Departure→Completed; jalur cancellation Booking→Cancellation Requested→Super Admin Approval→Refund Calculation→Refund Approved→Refund Paid. Tiap step punya flag done + tanggal/detail. UI: tab "Timeline" di BookingDetail (stepper vertikal + Status Audit).
+- **Booking statuses**: DRAFT, PENDING, CONFIRMED, PARTIAL_PAID, PAID, READY, COMPLETED, CANCELLED, REFUNDED.
+- **Workflow validation** (`PATCH /api/bookings/{id}/status`, perm booking.manage): transisi dibatasi `BOOKING_TRANSITIONS` (mis. DRAFT tak bisa langsung PAID; CONFIRMED→COMPLETED ditolak). Ke PARTIAL_PAID/PAID **wajib ada transaksi payment**. Kontrol status via dropdown di BookingDetail (super_admin/booking.manage), minta alasan.
+- **Audit**: setiap perubahan status disimpan di `booking.status_history` {old_status, new_status, user, role, reason, at} + `log_audit` + trigger n8n `booking.updated`.
+- **Verified (curl + screenshot)**: timeline normal/cancellation, CONFIRMED→PAID tanpa payment=400, CONFIRMED→COMPLETED skip=400 (pesan pilihan valid), CONFIRMED→CANCELLED sukses + audit tercatat, UI cancellation-branch + Status Audit.
+- Catatan: aksi Refund/Cancellation tetap via flow existing; detail Commission/Conversation di BookingDetail belum ditambah (tersedia di Customer 360).
+
 - **Menu Approval Center** (`/approval-center`) — RBAC: Super Admin full; Accounting subset finance; Sales blocked (403).
 - **Aggregated read** (`GET /api/approval-center?type=&status=`): normalisasi lintas sumber — REFUND (refund_requests), CANCELLATION (cancellation_requests), COMMISSION (commission_closings, super_admin saja), + generic adjustments (PRICE/PAYMENT/ACCOUNTING_ADJUSTMENT/OTHER dari koleksi `approvals`). Kolom: approval #, type, reference, customer, amount, requested by, date, status, action.
 - **Dashboard** (`GET /api/approval-center/stats`): Pending, Approved Today, Rejected Today, Total This Month.

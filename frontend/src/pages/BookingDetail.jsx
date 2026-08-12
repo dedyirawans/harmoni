@@ -12,8 +12,10 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
-import { ArrowLeft, Loader2, Plus, Trash2, Upload, FileText, Users, CreditCard, Ban } from "lucide-react";
+import { ArrowLeft, Loader2, Plus, Trash2, Upload, FileText, Users, CreditCard, Ban, GitBranch } from "lucide-react";
 import { toast } from "sonner";
+
+const BOOKING_STATUSES = ["DRAFT", "PENDING", "CONFIRMED", "PARTIAL_PAID", "PAID", "READY", "COMPLETED", "CANCELLED", "REFUNDED"];
 
 export default function BookingDetail() {
   const { id } = useParams();
@@ -29,9 +31,11 @@ export default function BookingDetail() {
   const [travOpen, setTravOpen] = useState(false);
   const [payFor, setPayFor] = useState(null);
   const [cancelOpen, setCancelOpen] = useState(false);
+  const [timeline, setTimeline] = useState({ steps: [] });
 
   const load = useCallback(() => {
     api.get(`/bookings/${id}`).then((r) => setData(r.data)).catch(() => setData(null));
+    api.get(`/bookings/${id}/timeline`).then((r) => setTimeline(r.data || { steps: [] })).catch(() => {});
   }, [id]);
   useEffect(() => { load(); }, [load]);
 
@@ -45,6 +49,13 @@ export default function BookingDetail() {
     catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); }
   };
 
+  const changeStatus = async (v) => {
+    if (v === b.status) return;
+    const reason = window.prompt(`Alasan perubahan status ke ${v} (opsional):`) || "";
+    try { await api.patch(`/bookings/${id}/status`, { status: v, reason }); toast.success(`Status → ${v}`); load(); }
+    catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); }
+  };
+
   return (
     <div className="space-y-6" data-testid="booking-detail-page">
       <button onClick={() => navigate("/booking")} className="flex items-center gap-2 text-sm text-slate-500 hover:text-slate-900"><ArrowLeft className="h-4 w-4" />Back to bookings</button>
@@ -55,6 +66,14 @@ export default function BookingDetail() {
         </div>
         <div className="text-right"><p className="font-display text-2xl font-bold text-slate-900">{fmtIDR(b.total)}</p><p className="text-xs text-slate-400">{b.pax} pax · diskon {b.discount_percent}%</p>
           {canCancel && !["CANCELLED"].includes(b.status) && <Button size="sm" variant="outline" className="mt-2 text-red-600 border-red-200" onClick={() => setCancelOpen(true)} data-testid="request-cancellation-button"><Ban className="h-4 w-4 mr-1" />Request Cancellation</Button>}
+          {canSchedule && !["COMPLETED", "REFUNDED"].includes(b.status) && (
+            <div className="mt-2 flex justify-end" data-testid="booking-status-control">
+              <Select value={b.status} onValueChange={changeStatus}>
+                <SelectTrigger className="w-44 h-8" data-testid="booking-status-select"><SelectValue /></SelectTrigger>
+                <SelectContent>{BOOKING_STATUSES.map((s) => <SelectItem key={s} value={s}>{s.replace("_", " ")}</SelectItem>)}</SelectContent>
+              </Select>
+            </div>
+          )}
         </div>
       </div>
 
@@ -62,6 +81,7 @@ export default function BookingDetail() {
         <TabsList>
           <TabsTrigger value="travelers" data-testid="tab-travelers"><Users className="h-4 w-4 mr-1" />Jamaah</TabsTrigger>
           <TabsTrigger value="payments" data-testid="tab-payments"><CreditCard className="h-4 w-4 mr-1" />Invoice & Payment</TabsTrigger>
+          <TabsTrigger value="timeline" data-testid="tab-timeline"><GitBranch className="h-4 w-4 mr-1" />Timeline</TabsTrigger>
         </TabsList>
 
         <TabsContent value="travelers">
@@ -92,6 +112,33 @@ export default function BookingDetail() {
                   </div>
                 </div>
               ))}
+            </div>
+          </CardContent></Card>
+        </TabsContent>
+
+        <TabsContent value="timeline">
+          <Card className="border-slate-200"><CardContent className="p-5" data-testid="booking-timeline">
+            {timeline.branch === "cancellation" && <p className="text-xs font-medium text-red-600 mb-3">Cancellation flow</p>}
+            <ol className="relative border-l-2 border-slate-200 ml-2 space-y-4">
+              {(timeline.steps || []).map((s, i) => (
+                <li key={i} className="ml-5" data-testid={`timeline-step-${i}`}>
+                  <span className={`absolute -left-[9px] h-4 w-4 rounded-full border-2 border-white ${s.done ? "bg-emerald-500" : "bg-slate-300"}`} />
+                  <div className="flex items-center justify-between">
+                    <p className={`text-sm font-medium ${s.done ? "text-slate-900" : "text-slate-400"}`}>{s.step}</p>
+                    {s.at && <span className="text-xs text-slate-400">{(s.at || "").slice(0, 10)}</span>}
+                  </div>
+                  {s.detail && <p className="text-xs text-slate-500">{s.detail}</p>}
+                </li>
+              ))}
+            </ol>
+            <div className="mt-6"><p className="font-semibold text-sm text-slate-800 mb-1">Status Audit</p>
+              {(b.status_history || []).length === 0 ? <p className="text-xs text-slate-400">Belum ada perubahan status.</p> : (
+                <ul className="space-y-1 text-xs" data-testid="booking-status-audit">
+                  {b.status_history.map((h, i) => (
+                    <li key={i} className="text-slate-600"><b>{h.old_status} → {h.new_status}</b> · {h.user} ({h.role}) · {(h.at || "").replace("T", " ").slice(0, 16)}{h.reason ? ` · ${h.reason}` : ""}</li>
+                  ))}
+                </ul>
+              )}
             </div>
           </CardContent></Card>
         </TabsContent>
