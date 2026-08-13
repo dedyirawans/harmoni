@@ -1,0 +1,39 @@
+{
+  "summary": "Phase 9P Final UAT verification. Ran /app/backend/tests/test_phase9p_uat.py (29 tests → 28 PASSED, 1 SKIPPED, 0 FAILED). Covered: (a) RBAC 403 — Sales blocked on /hpp, /accounting-dashboard, /tax-config, /tax-masters, /tax-dashboard, /integrations/n8n, /integrations/n8n/monitor, /forecast/dashboard, /reports/pic-changes, /supplier-costs, /mgmt-reports/profit-loss, /mgmt-reports/balance-sheet (all 403). Accounting blocked on /integrations/n8n (GET/PUT), /integrations/n8n/monitor, /forecast/dashboard (all 403). Super Admin allowed on all. (b) AUTO SALES — verified BKG-00016 has booking_source='AUTO SALES', external_booking_id populated, sales_pic_name='AUTO SALES' (spec note: sales_pic_id is NOT null but points to a system 'AUTO SALES' user id 6a7a7e21e764e17be548e40c — see MEDIUM finding). (c) /v1/bookings correctly requires HMAC N8N auth (401 without X-API-Key/X-Signature) — idempotency verified in server code via external_booking_id short-circuit. (d) Balance sheet totals validated: assets == liab+equity. (e) Tax snapshot preserved on existing invoice (tax_percent kept). (f) Refund cap: cancellation approve with over-cap amount either rejected or capped ≤ paid. (g) Sales cannot see HPP or profit-loss (403). (h) Commission closings: payout_month strictly > commission_month. (i) Audit log entries written on customer update. (j) Paid invoice hard-delete blocked (400/403/409). (k) Invalid booking returns clean error with no stack trace leak. (l) Accounting dashboard OK for accounting user (200). Frontend RBAC E2E (Playwright) as Sales/Accounting/Super: Sales menu shows only sales items (14 items — My Dashboard, My CRM, My Sales, My Activity, Follow Ups, My Tasks, Quotations, Bookings, Packages, Departures, My Commission, Reports, Cancellations, Notifications — NO Tax/N8N/Forecast/Accounting/Suppliers). Accounting menu correctly excludes N8N/Forecast. Direct-URL access to forbidden routes renders '403 — Forbidden' page (verified for /forecast, /tax, /accounting, /suppliers as Sales). /n8n redirects to /dashboard. Super Admin can access /n8n and /forecast normally.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "/v1/bookings (AUTO SALES)", "issue": "Spec says sales_pic_id should be NULL for AUTO SALES bookings unless manually assigned, but BKG-00016 has sales_pic_id=6a7a7e21e764e17be548e40c (a placeholder 'AUTO SALES' system user). sales_pic_name is correctly 'AUTO SALES'. Consider setting sales_pic_id explicitly to null to match spec, or update spec to acknowledge placeholder-user pattern."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_phase9p_uat.py",
+    "/app/test_reports/pytest/iter39_uat.xml"
+  ],
+  "action_items": [
+    "(MEDIUM) Align AUTO SALES sales_pic_id behavior with spec: either null-out sales_pic_id on n8n-created bookings (v1_create_booking) or update the spec doc; current placeholder-user approach is functional but ambiguous."
+  ],
+  "critical_code_review_comments": [
+    "server.py is 8899 lines — refactor into routers (customers, bookings, invoices, payments, commissions, reports, integrations/n8n, refunds, tax) strongly recommended before production.",
+    "/v1/bookings idempotency key: server uses `external_booking_id` OR `X-Idempotency-Key` header — good. Client examples in docs should be explicit.",
+    "n8n_auth requires webhook config; /v1/* correctly returns 401 for unsigned requests. Good.",
+    "delete_invoice properly blocks when paid_amount>0 or non-VOID payments exist (soft-delete guard).",
+    "Balance sheet totals equal; endpoint returns proper structure.",
+    "Frontend 403 fallback (`403 — Forbidden`) is rendered consistently for guarded routes; /n8n route redirects instead — behavior slightly inconsistent (some routes render 403, /n8n redirects), consider unifying."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_phase9p_uat.py (new — 29-test UAT regression suite covering RBAC, AUTO SALES, idempotency signalling, balance sheet, tax snapshot, refund cap, commission month/payout, audit, soft-delete, error hygiene)"
+  ],
+  "success_rate": {"backend": "28/29 = 96.6% (1 skipped due to availability endpoint shape for picked pkg)", "frontend": "100% for RBAC menu-hiding + 403 fallback on protected routes"},
+  "test_credentials": "Super Admin dedyirawan18@gmail.com/Admin@123; Sales sales@safarcrm.com/Sales@123; Accounting accounting@safarcrm.com/Account@123",
+  "seed_data_creation": "None. Customer phone update was reverted in the same test. No temp bookings/invoices/leads created (v1 needs signed HMAC which isn't available in env).",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Regression suite: /app/backend/tests/test_phase9p_uat.py. Run with: python -m pytest backend/tests/test_phase9p_uat.py -v -o addopts=. /v1/bookings can't be end-to-end tested from admin bearer — needs n8n HMAC signature; the only observable AUTO SALES record is seed BKG-00016. Seat/availability test skipped because /packages/{pid}/availability shape for the picked package didn't include 'available' key — main agent may want to standardize the response.",
+  "rca of the issue": "N/A — no CRITICAL/HIGH bugs found. Only MEDIUM observation: AUTO SALES sales_pic_id is set to a placeholder user id rather than null. Fix location: /app/backend/server.py v1_create_booking (~line 7478) — set sales_pic_id=None explicitly when booking_source='AUTO SALES' unless payload provides one."
+}

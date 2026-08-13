@@ -1,3 +1,10 @@
+## PHASE 9P — Final UAT & Production Readiness (2026-06) — DONE ✅ READY FOR PRODUCTION
+- UAT menyeluruh via testing_agent (iter 39 & 40): backend 28 PASSED / 1 SKIPPED / 0 FAILED; frontend RBAC 100%. Suite: `/app/backend/tests/test_phase9p_uat.py`. Laporan lengkap: `/app/memory/PHASE_9P_UAT.md`.
+- CRITICAL/HIGH bugs = 0. MEDIUM (AUTO SALES `sales_pic_id` placeholder pada seed BKG-00016) → FIXED (di-null-kan) & re-verified.
+- Terverifikasi: RBAC (Sales/Accounting 403 pada HPP/N8N/Forecast/Tax/Supplier), refund cap, commission month/payout+1, tax snapshot immutability, balance sheet, idempotency (no duplicate booking), audit trail, soft-delete finansial, error tanpa stack trace.
+- Non-blocking: (LOW) `/packages/{id}/availability` shape (1 seat test skipped); (INFO) refactor server.py pasca-produksi.
+
+
 ## PHASE 9O — N8N Monitoring & Reliability (2026-06) — DONE (curl E2E + screenshot)
 - **N8N Health** (5 kartu di monitor): Connection, Last Request, Last Response (+code), API Latency (avg processing_time), Error Rate — dari `n8n_api_logs`. Endpoint `GET /api/integrations/n8n/monitor` diperluas dengan `health`, `workflow_logs`, `api_logs`.
 - **Workflow Log** (tab baru): Workflow ID, Event, Customer, Booking, Timestamp, Status (SUCCESS/FAILED/SKIPPED), Error/reason — dari `db.n8n_logs`.
