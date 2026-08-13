@@ -1638,6 +1638,7 @@ async def portal_me(cust: dict = Depends(get_current_customer)):
 @api_router.get("/portal/dashboard")
 async def portal_dashboard(cust: dict = Depends(get_current_customer)):
     cid = str(cust["_id"])
+    tpl = await _get_doc_template()
     raw_bookings = await db.bookings.find({"customer_id": cid}).sort("created_at", -1).to_list(1000)
     booking_ids = [str(b["_id"]) for b in raw_bookings]
     today = today_str()
@@ -1661,6 +1662,7 @@ async def portal_dashboard(cust: dict = Depends(get_current_customer)):
                  "total": i.get("total") if i.get("total") is not None else i.get("amount"),
                  "outstanding": i.get("outstanding"), "status": i.get("status"),
                  "due_date": i.get("due_date"), "created_at": i.get("created_at"),
+                 "public_url": _public_pdf_url(tpl, "invoice", str(i["_id"])),
                  "booking_number": i.get("booking_number")} for i in raw_invoices]
     inv_ids = [str(i["_id"]) for i in raw_invoices]
     payments = await db.payments.find({"$or": [{"invoice_id": {"$in": inv_ids}}, {"booking_id": {"$in": booking_ids}}]}).to_list(2000)
@@ -1689,6 +1691,7 @@ async def portal_dashboard(cust: dict = Depends(get_current_customer)):
                "customer_code": cust.get("customer_code"), "customer_type": cust.get("customer_type")}
     receipts = [{"id": str(r["_id"]), "receipt_number": r.get("receipt_number"), "amount": r.get("amount"),
                  "booking_number": r.get("booking_number"), "label": r.get("label"),
+                 "public_url": _public_pdf_url(tpl, "receipt", str(r["_id"])),
                  "created_at": r.get("created_at")}
                 for r in await db.schedule_payments.find({"customer_id": cid}).sort("created_at", -1).to_list(500)]
     return {"profile": profile, "bookings": bookings, "invoices": invoices, "refunds": refunds, "documents": documents,
@@ -3183,6 +3186,98 @@ async def get_settings_dict():
 
 
 # ============================================================================
+# DOCUMENT TEMPLATE (Invoice / Quotation / Kwitansi) — Super Admin configurable
+# ============================================================================
+DOC_TEMPLATE_DEFAULTS = {
+    "primary_color": "#1d4ed8", "accent_color": "#f59e0b", "font": "Helvetica",
+    "logo_url": "", "company_name": "", "address": "", "phone": "", "email": "", "website": "",
+    "footer_text": "Terima kasih atas kepercayaan Anda.",
+    "invoice_title": "INVOICE", "quotation_title": "QUOTATION", "receipt_title": "KWITANSI PEMBAYARAN",
+    "show_qr": True, "paid_stamp_text": "PAID", "public_base_url": "",
+}
+_FRONTEND_BASE_CACHE = None
+
+
+def _read_frontend_base():
+    global _FRONTEND_BASE_CACHE
+    if _FRONTEND_BASE_CACHE is not None:
+        return _FRONTEND_BASE_CACHE
+    val = ""
+    try:
+        with open("/app/frontend/.env") as f:
+            for line in f:
+                if line.strip().startswith("REACT_APP_BACKEND_URL="):
+                    val = line.split("=", 1)[1].strip()
+                    break
+    except Exception:
+        val = ""
+    _FRONTEND_BASE_CACHE = val
+    return val
+
+
+async def _get_doc_template():
+    doc = await db.company_settings.find_one({"key": "doc_template"}) or {}
+    tpl = {**DOC_TEMPLATE_DEFAULTS}
+    for k in DOC_TEMPLATE_DEFAULTS:
+        if doc.get(k) not in (None, ""):
+            tpl[k] = doc.get(k)
+    company = await db.company_settings.find_one({"key": "company"}) or {}
+    # fallback company identity fields
+    tpl["company_name"] = tpl["company_name"] or company.get("company_name") or "Safar Travel"
+    tpl["address"] = tpl["address"] or company.get("address", "")
+    tpl["phone"] = tpl["phone"] or company.get("phone", "")
+    tpl["email"] = tpl["email"] or company.get("email", "")
+    tpl["logo_url"] = tpl["logo_url"] or company.get("logo", "")
+    return tpl
+
+
+def _public_base(tpl):
+    return (tpl.get("public_base_url") or os.environ.get("PUBLIC_BASE_URL") or _read_frontend_base() or "").rstrip("/")
+
+
+def _doc_sig(kind, doc_id):
+    msg = f"{kind}:{doc_id}".encode()
+    return _hmac.new(os.environ["JWT_SECRET"].encode(), msg, _hashlib.sha256).hexdigest()[:32]
+
+
+def _public_pdf_url(tpl, kind, doc_id):
+    return f"{_public_base(tpl)}/api/public/documents/{kind}/{doc_id}?sig={_doc_sig(kind, doc_id)}"
+
+
+class DocTemplateUpdate(BaseModel):
+    primary_color: Optional[str] = None
+    accent_color: Optional[str] = None
+    font: Optional[str] = None
+    logo_url: Optional[str] = None
+    company_name: Optional[str] = None
+    address: Optional[str] = None
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    website: Optional[str] = None
+    footer_text: Optional[str] = None
+    invoice_title: Optional[str] = None
+    quotation_title: Optional[str] = None
+    receipt_title: Optional[str] = None
+    show_qr: Optional[bool] = None
+    paid_stamp_text: Optional[str] = None
+    public_base_url: Optional[str] = None
+
+
+@api_router.get("/doc-template")
+async def get_doc_template(user: dict = Depends(require_permission("settings.view"))):
+    return await _get_doc_template()
+
+
+@api_router.put("/doc-template")
+async def update_doc_template(body: DocTemplateUpdate, request: Request, user: dict = Depends(require_permission("settings.manage"))):
+    updates = {k: v for k, v in body.dict().items() if v is not None}
+    updates["key"] = "doc_template"
+    await db.company_settings.update_one({"key": "doc_template"}, {"$set": updates}, upsert=True)
+    await log_audit(user, "settings", "doc_template", request, new=updates)
+    return await _get_doc_template()
+
+
+# ============================================================================
 # PHASE 6 — INTEGRATIONS (n8n webhooks + WhatsApp dispatched via n8n)
 # ============================================================================
 N8N_EVENTS = ["lead.created", "lead.updated", "quotation.created", "quotation.sent", "quotation.accepted",
@@ -3364,67 +3459,207 @@ def _money(v):
         return "Rp 0"
 
 
-def build_document_pdf(kind: str, data: dict, company: dict, itineraries=None) -> bytes:
+def _pdf_fonts(tpl):
+    return {"Helvetica": ("Helvetica", "Helvetica-Bold"), "Times-Roman": ("Times-Roman", "Times-Bold"),
+            "Courier": ("Courier", "Courier-Bold")}.get(tpl.get("font") or "Helvetica", ("Helvetica", "Helvetica-Bold"))
+
+
+def _img_from_src(src, max_w_mm, max_h_mm):
+    try:
+        if not src:
+            return None
+        if src.startswith("data:"):
+            import base64
+            raw = base64.b64decode(src.split(",", 1)[1])
+        elif src.startswith("http"):
+            raw = _requests.get(src, timeout=10).content
+        else:
+            return None
+        im = RLImage(BytesIO(raw))
+        ratio = min(max_w_mm * mm / im.imageWidth, max_h_mm * mm / im.imageHeight)
+        im.drawWidth = im.imageWidth * ratio
+        im.drawHeight = im.imageHeight * ratio
+        return im
+    except Exception:
+        return None
+
+
+def _qr_image(url, size_mm=22):
+    try:
+        import qrcode
+        img = qrcode.make(url)
+        b = BytesIO()
+        img.save(b, format="PNG")
+        b.seek(0)
+        return RLImage(b, width=size_mm * mm, height=size_mm * mm)
+    except Exception:
+        return None
+
+
+def build_document_pdf(kind: str, data: dict, company: dict, itineraries=None, tpl=None, qr_url=None, paid=False) -> bytes:
+    tpl = tpl or DOC_TEMPLATE_DEFAULTS
+    primary = colors.HexColor(tpl.get("primary_color") or "#1d4ed8")
+    accent = colors.HexColor(tpl.get("accent_color") or "#f59e0b")
+    base_font, bold_font = _pdf_fonts(tpl)
+    title = {"INVOICE": tpl.get("invoice_title", "INVOICE"), "QUOTATION": tpl.get("quotation_title", "QUOTATION")}.get(kind, kind)
     buf = BytesIO()
-    doc = SimpleDocTemplate(buf, pagesize=A4, topMargin=18 * mm, bottomMargin=18 * mm, leftMargin=18 * mm, rightMargin=18 * mm)
+    doc = SimpleDocTemplate(buf, pagesize=A4, topMargin=18 * mm, bottomMargin=20 * mm, leftMargin=18 * mm, rightMargin=18 * mm)
     styles = getSampleStyleSheet()
-    h = ParagraphStyle("h", parent=styles["Heading1"], textColor=colors.HexColor("#1d4ed8"), fontSize=18)
-    small = ParagraphStyle("s", parent=styles["Normal"], fontSize=9, textColor=colors.HexColor("#475569"))
+    h = ParagraphStyle("h", parent=styles["Heading1"], textColor=primary, fontSize=18, fontName=bold_font)
+    small = ParagraphStyle("s", parent=styles["Normal"], fontSize=9, textColor=colors.HexColor("#475569"), fontName=base_font)
+    boldn = ParagraphStyle("b", parent=styles["Normal"], fontName=bold_font)
     el = []
-    logo = _logo_flowable(company)
+    logo = _img_from_src(tpl.get("logo_url") or company.get("logo", ""), 34, 18)
     header_left = []
     if logo:
         header_left.append(logo)
-    header_left.append(Paragraph(f"<b>{company.get('company_name','Safar Travel')}</b>", styles["Normal"]))
-    header_left.append(Paragraph(company.get("address", ""), small))
-    header_left.append(Paragraph(f"{company.get('phone','')} · {company.get('email','')}", small))
-    right = [Paragraph(f"<b>{kind}</b>", h),
-             Paragraph(f"No: {data.get('number','')}", small),
+    header_left.append(Paragraph(f"<b>{tpl.get('company_name') or company.get('company_name', 'Safar Travel')}</b>", boldn))
+    header_left.append(Paragraph(tpl.get("address") or company.get("address", ""), small))
+    header_left.append(Paragraph(f"{tpl.get('phone') or company.get('phone', '')} · {tpl.get('email') or company.get('email', '')}", small))
+    right = [Paragraph(f"<b>{title}</b>", h), Paragraph(f"No: {data.get('number', '')}", small),
              Paragraph(f"Tanggal: {(data.get('created_at') or '')[:10]}", small)]
-    el.append(Table([[header_left, right]], colWidths=[95 * mm, 75 * mm], style=TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP")])))
+    if tpl.get("show_qr", True) and qr_url:
+        qr = _qr_image(qr_url, 22)
+        if qr:
+            right += [Spacer(1, 2 * mm), qr, Paragraph("Scan untuk PDF", ParagraphStyle("qs", parent=small, fontSize=7))]
+    el.append(Table([[header_left, right]], colWidths=[100 * mm, 70 * mm], style=TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP")])))
     el.append(Spacer(1, 8 * mm))
-    el.append(Table([[Paragraph(f"<b>Customer</b><br/>{data.get('customer_name','')}", small),
-                      Paragraph(f"<b>Sales PIC</b><br/>{data.get('sales_pic_name','')}", small),
-                      Paragraph(f"<b>Package</b><br/>{data.get('package_name','')} (v{data.get('package_version',1)})", small)]],
+    el.append(Table([[Paragraph(f"<b>Customer</b><br/>{data.get('customer_name', '')}", small),
+                      Paragraph(f"<b>Sales PIC</b><br/>{data.get('sales_pic_name', '')}", small),
+                      Paragraph(f"<b>Package</b><br/>{data.get('package_name', '')} (v{data.get('package_version', 1)})", small)]],
                      colWidths=[56 * mm, 56 * mm, 58 * mm]))
     el.append(Spacer(1, 6 * mm))
     rows = [["Deskripsi", "Qty", "Harga", "Jumlah"]]
-    rows.append([f"{data.get('package_name','')} — {data.get('room_type','') or 'Standard'}", str(data.get("pax", 1)), _money(data.get("per_pax_price")), _money(data.get("gross"))])
+    rows.append([f"{data.get('package_name', '')} — {data.get('room_type', '') or 'Standard'}", str(data.get("pax", 1)), _money(data.get("per_pax_price")), _money(data.get("gross"))])
     for a in (data.get("addons") or []):
-        rows.append([f"Add-on: {a.get('name','')}", "1", _money(a.get("amount")), _money(a.get("amount"))])
+        rows.append([f"Add-on: {a.get('name', '')}", "1", _money(a.get("amount")), _money(a.get("amount"))])
     t = Table(rows, colWidths=[92 * mm, 18 * mm, 30 * mm, 30 * mm])
-    t.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1d4ed8")),
-        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-        ("FONTSIZE", (0, 0), (-1, -1), 9),
-        ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#cbd5e1")),
-        ("ALIGN", (1, 0), (-1, -1), "RIGHT"),
-    ]))
+    t.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, 0), primary), ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                           ("FONTNAME", (0, 0), (-1, 0), bold_font), ("FONTNAME", (0, 1), (-1, -1), base_font),
+                           ("FONTSIZE", (0, 0), (-1, -1), 9), ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#cbd5e1")),
+                           ("ALIGN", (1, 0), (-1, -1), "RIGHT")]))
     el.append(t)
     el.append(Spacer(1, 4 * mm))
     summ = [["Subtotal", _money(data.get("subtotal"))],
-            [f"Discount ({data.get('discount_percent',0)}%)", "- " + _money(data.get("discount_amount"))],
-            [f"Pajak ({data.get('tax_percent',0)}%)", _money(data.get("tax_amount"))],
+            [f"Discount ({data.get('discount_percent', 0)}%)", "- " + _money(data.get("discount_amount"))],
+            [f"Pajak ({data.get('tax_percent', 0)}%)", _money(data.get("tax_amount"))],
             ["TOTAL", _money(data.get("total"))]]
     ts = Table(summ, colWidths=[140 * mm, 30 * mm])
-    ts.setStyle(TableStyle([("ALIGN", (0, 0), (-1, -1), "RIGHT"), ("FONTSIZE", (0, 0), (-1, -1), 10),
-                            ("LINEABOVE", (0, -1), (-1, -1), 0.6, colors.HexColor("#1d4ed8")),
-                            ("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold")]))
+    ts.setStyle(TableStyle([("ALIGN", (0, 0), (-1, -1), "RIGHT"), ("FONTSIZE", (0, 0), (-1, -1), 10), ("FONTNAME", (0, 0), (-1, -1), base_font),
+                            ("LINEABOVE", (0, -1), (-1, -1), 0.6, primary), ("FONTNAME", (0, -1), (-1, -1), bold_font)]))
     el.append(ts)
     if itineraries:
         el.append(Spacer(1, 6 * mm))
-        el.append(Paragraph("<b>Itinerary</b>", styles["Normal"]))
+        el.append(Paragraph("<b>Itinerary</b>", boldn))
         for i, it in enumerate(itineraries):
-            el.append(Paragraph(f"Day {it.get('day', i + 1)}: {it.get('location','')} — {it.get('activity','')}", small))
+            el.append(Paragraph(f"Day {it.get('day', i + 1)}: {it.get('location', '')} — {it.get('activity', '')}", small))
     if data.get("terms"):
         el.append(Spacer(1, 6 * mm))
-        el.append(Paragraph("<b>Terms & Conditions</b>", styles["Normal"]))
+        el.append(Paragraph("<b>Terms & Conditions</b>", boldn))
         el.append(Paragraph(str(data.get("terms")), small))
     if kind == "INVOICE" and data.get("due_date"):
         el.append(Spacer(1, 4 * mm))
-        el.append(Paragraph(f"<b>Jatuh Tempo:</b> {data.get('due_date')} · <b>Status:</b> {data.get('status','')}", small))
-    doc.build(el)
+        el.append(Paragraph(f"<b>Jatuh Tempo:</b> {data.get('due_date')} · <b>Status:</b> {data.get('status', '')}", small))
+    if tpl.get("footer_text"):
+        el.append(Spacer(1, 8 * mm))
+        el.append(Paragraph(tpl.get("footer_text"), ParagraphStyle("f", parent=small, textColor=accent)))
+
+    def _stamp(canvas, _d):
+        if not paid:
+            return
+        canvas.saveState()
+        canvas.translate(150 * mm, 55 * mm)
+        canvas.rotate(30)
+        canvas.setFont(bold_font, 64)
+        canvas.setFillColor(colors.Color(0.13, 0.7, 0.4, alpha=0.28))
+        canvas.drawCentredString(0, 0, tpl.get("paid_stamp_text", "PAID"))
+        canvas.restoreState()
+
+    doc.build(el, onFirstPage=_stamp, onLaterPages=_stamp)
     return buf.getvalue()
+
+
+async def _render_invoice_pdf(inv):
+    tpl = await _get_doc_template()
+    company = await db.company_settings.find_one({"key": "company"}) or {}
+    iid = str(inv.get("_id"))
+    paid = (float(inv.get("outstanding") or 0) <= 0) or (str(inv.get("status", "")).upper() in ("PAID", "LUNAS"))
+    data = {**inv, "number": inv.get("invoice_number"), "subtotal": inv.get("amount"),
+            "per_pax_price": round(float(inv.get("amount") or 0) / max(int(inv.get("pax") or 1), 1)), "gross": inv.get("amount"), "addons": []}
+    qr = _public_pdf_url(tpl, "invoice", iid)
+    return build_document_pdf("INVOICE", data, company, tpl=tpl, qr_url=qr, paid=paid), inv.get("invoice_number")
+
+
+async def _render_quotation_pdf(q):
+    tpl = await _get_doc_template()
+    company = await db.company_settings.find_one({"key": "company"}) or {}
+    itins = await db.package_itineraries.find({"package_id": q.get("package_id")}).sort("day", 1).to_list(200)
+    data = {**q, "number": q.get("quotation_number")}
+    qr = _public_pdf_url(tpl, "quotation", str(q.get("_id")))
+    return build_document_pdf("QUOTATION", data, company, itins, tpl=tpl, qr_url=qr), q.get("quotation_number")
+
+
+async def _render_receipt_pdf(r):
+    tpl = await _get_doc_template()
+    primary = colors.HexColor(tpl.get("primary_color") or "#1d4ed8")
+    base_font, bold_font = _pdf_fonts(tpl)
+    rid = str(r.get("_id"))
+
+    def rp(n):
+        return "Rp " + f"{float(n or 0):,.0f}".replace(",", ".")
+
+    buf = BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4, topMargin=20 * mm, bottomMargin=20 * mm)
+    styles = getSampleStyleSheet()
+    title = ParagraphStyle("t", parent=styles["Title"], textColor=primary, fontName=bold_font)
+    logo = _img_from_src(tpl.get("logo_url"), 40, 20)
+    rows = [["No. Kwitansi", r.get("receipt_number", "")], ["Tanggal", (r.get("created_at") or "")[:16].replace("T", " ")],
+            ["Booking", r.get("booking_number", "")], ["Customer", r.get("customer_name", "")],
+            ["Termin", f"#{r.get('payment_number')} {r.get('label', '')}"], ["Jumlah Dibayar", rp(r.get("amount"))],
+            ["Sisa Termin", rp(r.get("outstanding_after"))], ["Sisa Total Booking", rp(r.get("outstanding_total"))]]
+    t = Table(rows, colWidths=[55 * mm, 110 * mm])
+    t.setStyle(TableStyle([("GRID", (0, 0), (-1, -1), 0.5, colors.grey), ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#f1f5f9")),
+                           ("FONTNAME", (0, 0), (-1, -1), base_font), ("FONTSIZE", (0, 0), (-1, -1), 10),
+                           ("TOPPADDING", (0, 0), (-1, -1), 6), ("BOTTOMPADDING", (0, 0), (-1, -1), 6)]))
+    el = []
+    if logo:
+        el.append(logo)
+    el += [Paragraph(f"<b>{tpl.get('company_name', 'Travel CRM')}</b>", title),
+           Paragraph(tpl.get("receipt_title", "KWITANSI PEMBAYARAN"), styles["Heading2"]), Spacer(1, 8), t]
+    if tpl.get("show_qr", True):
+        qr = _qr_image(_public_pdf_url(tpl, "receipt", rid), 24)
+        if qr:
+            el += [Spacer(1, 10), qr, Paragraph("Scan untuk verifikasi kwitansi", ParagraphStyle("qs", parent=styles["Normal"], fontSize=8))]
+    el += [Spacer(1, 16), Paragraph(tpl.get("footer_text", "Terima kasih atas pembayaran Anda."), styles["Normal"])]
+    doc.build(el)
+    return buf.getvalue(), r.get("receipt_number")
+
+
+@api_router.get("/public/documents/{kind}/{doc_id}")
+async def public_document_pdf(kind: str, doc_id: str, sig: str = Query("")):
+    if kind not in ("invoice", "quotation", "receipt") or not ObjectId.is_valid(doc_id):
+        raise HTTPException(status_code=404, detail="Not found")
+    if not sig or not _hmac.compare_digest(sig, _doc_sig(kind, doc_id)):
+        raise HTTPException(status_code=403, detail="Invalid signature")
+    if kind == "invoice":
+        inv = await db.invoices.find_one({"_id": ObjectId(doc_id)})
+        if not inv:
+            raise HTTPException(status_code=404, detail="Not found")
+        await _recompute_invoice_status(doc_id)
+        inv = await db.invoices.find_one({"_id": ObjectId(doc_id)})
+        pdf, name = await _render_invoice_pdf(inv)
+    elif kind == "quotation":
+        q = await db.quotations.find_one({"_id": ObjectId(doc_id)})
+        if not q:
+            raise HTTPException(status_code=404, detail="Not found")
+        pdf, name = await _render_quotation_pdf(q)
+    else:
+        r = await db.schedule_payments.find_one({"_id": ObjectId(doc_id)})
+        if not r:
+            raise HTTPException(status_code=404, detail="Not found")
+        pdf, name = await _render_receipt_pdf(r)
+    return Response(content=pdf, media_type="application/pdf",
+                    headers={"Content-Disposition": f"inline; filename={name}.pdf"})
 
 
 # ---------- Quotations ----------
@@ -3585,12 +3820,9 @@ async def quotation_pdf(qid: str, authorization: str = Header(None), auth: str =
     q = await db.quotations.find_one({"_id": ObjectId(qid)})
     if not q:
         raise HTTPException(status_code=404, detail="Quotation not found")
-    company = await db.company_settings.find_one({"key": "company"}) or {}
-    itins = await db.package_itineraries.find({"package_id": q.get("package_id")}).sort("day", 1).to_list(200)
-    data = {**q, "number": q.get("quotation_number")}
-    pdf = build_document_pdf("QUOTATION", data, company, itins)
+    pdf, name = await _render_quotation_pdf(q)
     return Response(content=pdf, media_type="application/pdf",
-                    headers={"Content-Disposition": f"inline; filename={q.get('quotation_number')}.pdf"})
+                    headers={"Content-Disposition": f"inline; filename={name}.pdf"})
 
 
 # ---------- Bookings ----------
@@ -3927,33 +4159,9 @@ async def receipt_pdf(rid: str, user: dict = Depends(require_permission("booking
     r = await db.schedule_payments.find_one({"_id": ObjectId(rid)})
     if not r:
         raise HTTPException(status_code=404, detail="Kwitansi tidak ditemukan")
-    settings = await get_settings_dict()
-    company = (settings.get("company") or {}).get("name", "Travel CRM")
-
-    def rp(n):
-        return "Rp " + f"{float(n or 0):,.0f}".replace(",", ".")
-
-    buf = BytesIO()
-    doc = SimpleDocTemplate(buf, pagesize=A4, topMargin=20 * mm, bottomMargin=20 * mm)
-    styles = getSampleStyleSheet()
-    rows = [["No. Kwitansi", r.get("receipt_number", "")],
-            ["Tanggal", (r.get("created_at") or "")[:16].replace("T", " ")],
-            ["Booking", r.get("booking_number", "")],
-            ["Customer", r.get("customer_name", "")],
-            ["Termin", f"#{r.get('payment_number')} {r.get('label', '')}"],
-            ["Jumlah Dibayar", rp(r.get("amount"))],
-            ["Sisa Termin", rp(r.get("outstanding_after"))],
-            ["Sisa Total Booking", rp(r.get("outstanding_total"))],
-            ["Diterima oleh", r.get("recorded_by", "")]]
-    t = Table(rows, colWidths=[55 * mm, 110 * mm])
-    t.setStyle(TableStyle([("GRID", (0, 0), (-1, -1), 0.5, colors.grey), ("BACKGROUND", (0, 0), (0, -1), colors.whitesmoke),
-                           ("FONTSIZE", (0, 0), (-1, -1), 10), ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-                           ("TOPPADDING", (0, 0), (-1, -1), 6), ("BOTTOMPADDING", (0, 0), (-1, -1), 6)]))
-    el = [Paragraph(f"<b>{company}</b>", styles["Title"]), Paragraph("KWITANSI PEMBAYARAN", styles["Heading2"]),
-          Spacer(1, 8), t, Spacer(1, 20), Paragraph("Terima kasih atas pembayaran Anda.", styles["Normal"])]
-    doc.build(el)
-    return Response(content=buf.getvalue(), media_type="application/pdf",
-                    headers={"Content-Disposition": f"inline; filename=kwitansi-{r.get('receipt_number', '')}.pdf"})
+    pdf, name = await _render_receipt_pdf(r)
+    return Response(content=pdf, media_type="application/pdf",
+                    headers={"Content-Disposition": f"inline; filename=kwitansi-{name}.pdf"})
 
 
 # ---- Customer Portal: uploads & PDF downloads (Phase 9L.1) ----
@@ -4007,12 +4215,9 @@ async def portal_invoice_pdf(iid: str, authorization: str = Header(None), auth: 
     inv = await db.invoices.find_one({"_id": ObjectId(iid)})
     if not inv or str(inv.get("customer_id")) != str(cust["_id"]):
         raise HTTPException(status_code=404, detail="Invoice not found")
-    company = await db.company_settings.find_one({"key": "company"}) or {}
-    data = {**inv, "number": inv.get("invoice_number"), "subtotal": inv.get("amount"),
-            "per_pax_price": round(float(inv.get("amount") or 0) / max(int(inv.get("pax") or 1), 1)), "gross": inv.get("amount"), "addons": []}
-    pdf = build_document_pdf("INVOICE", data, company)
+    pdf, name = await _render_invoice_pdf(inv)
     return Response(content=pdf, media_type="application/pdf",
-                    headers={"Content-Disposition": f"inline; filename={inv.get('invoice_number')}.pdf"})
+                    headers={"Content-Disposition": f"inline; filename={name}.pdf"})
 
 
 @api_router.get("/portal/receipts/{rid}/pdf")
@@ -4026,27 +4231,9 @@ async def portal_receipt_pdf(rid: str, authorization: str = Header(None), auth: 
     r = await db.schedule_payments.find_one({"_id": ObjectId(rid)})
     if not r or str(r.get("customer_id")) != str(cust["_id"]):
         raise HTTPException(status_code=404, detail="Kwitansi tidak ditemukan")
-    settings = await get_settings_dict()
-    company = (settings.get("company") or {}).get("name", "Travel CRM")
-
-    def rp(n):
-        return "Rp " + f"{float(n or 0):,.0f}".replace(",", ".")
-
-    buf = BytesIO()
-    doc = SimpleDocTemplate(buf, pagesize=A4, topMargin=20 * mm, bottomMargin=20 * mm)
-    styles = getSampleStyleSheet()
-    rows = [["No. Kwitansi", r.get("receipt_number", "")], ["Tanggal", (r.get("created_at") or "")[:16].replace("T", " ")],
-            ["Booking", r.get("booking_number", "")], ["Customer", r.get("customer_name", "")],
-            ["Termin", f"#{r.get('payment_number')} {r.get('label', '')}"], ["Jumlah Dibayar", rp(r.get("amount"))],
-            ["Sisa Termin", rp(r.get("outstanding_after"))], ["Sisa Total Booking", rp(r.get("outstanding_total"))]]
-    t = Table(rows, colWidths=[55 * mm, 110 * mm])
-    t.setStyle(TableStyle([("GRID", (0, 0), (-1, -1), 0.5, colors.grey), ("BACKGROUND", (0, 0), (0, -1), colors.whitesmoke),
-                           ("FONTSIZE", (0, 0), (-1, -1), 10), ("TOPPADDING", (0, 0), (-1, -1), 6), ("BOTTOMPADDING", (0, 0), (-1, -1), 6)]))
-    el = [Paragraph(f"<b>{company}</b>", styles["Title"]), Paragraph("KWITANSI PEMBAYARAN", styles["Heading2"]),
-          Spacer(1, 8), t, Spacer(1, 20), Paragraph("Terima kasih atas pembayaran Anda.", styles["Normal"])]
-    doc.build(el)
-    return Response(content=buf.getvalue(), media_type="application/pdf",
-                    headers={"Content-Disposition": f"inline; filename=kwitansi-{r.get('receipt_number', '')}.pdf"})
+    pdf, name = await _render_receipt_pdf(r)
+    return Response(content=pdf, media_type="application/pdf",
+                    headers={"Content-Disposition": f"inline; filename=kwitansi-{name}.pdf"})
 
 
 
@@ -4361,15 +4548,13 @@ async def invoice_pdf(iid: str, authorization: str = Header(None), auth: str = Q
     user = await user_from_token(token) if token else None
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
+    await _recompute_invoice_status(iid)
     inv = await db.invoices.find_one({"_id": ObjectId(iid)})
     if not inv:
         raise HTTPException(status_code=404, detail="Invoice not found")
-    company = await db.company_settings.find_one({"key": "company"}) or {}
-    data = {**inv, "number": inv.get("invoice_number"), "subtotal": inv.get("amount"),
-            "per_pax_price": round(float(inv.get("amount") or 0) / max(int(inv.get("pax") or 1), 1)), "gross": inv.get("amount"), "addons": []}
-    pdf = build_document_pdf("INVOICE", data, company)
+    pdf, name = await _render_invoice_pdf(inv)
     return Response(content=pdf, media_type="application/pdf",
-                    headers={"Content-Disposition": f"inline; filename={inv.get('invoice_number')}.pdf"})
+                    headers={"Content-Disposition": f"inline; filename={name}.pdf"})
 
 
 # ---------- Payments ----------

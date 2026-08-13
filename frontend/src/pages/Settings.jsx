@@ -78,8 +78,11 @@ export default function Settings() {
           <TabsTrigger value="company" data-testid="tab-company">Company</TabsTrigger>
           <TabsTrigger value="global" data-testid="tab-global">Global</TabsTrigger>
           <TabsTrigger value="login" data-testid="tab-login">Login Page</TabsTrigger>
+          {isAdmin && <TabsTrigger value="doctpl" data-testid="tab-doctpl">Template Dokumen</TabsTrigger>}
           {isAdmin && <TabsTrigger value="roles" data-testid="tab-roles">Roles & Permissions</TabsTrigger>}
         </TabsList>
+
+        {isAdmin && <TabsContent value="doctpl"><DocTemplateTab canManage={canManage} /></TabsContent>}
 
         {/* Company */}
         <TabsContent value="company">
@@ -368,5 +371,52 @@ function RolePermissions() {
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+
+function DocTemplateTab({ canManage }) {
+  const [t, setT] = useState(null);
+  const [saving, setSaving] = useState(false);
+  useEffect(() => {
+    api.get("/doc-template").then((r) => {
+      const d = r.data || {};
+      if (!d.public_base_url) d.public_base_url = process.env.REACT_APP_BACKEND_URL;
+      setT(d);
+    }).catch(() => setT({}));
+  }, []);
+  if (!t) return <div className="p-8 text-center text-slate-400 text-sm">Loading...</div>;
+  const set = (k) => (e) => setT({ ...t, [k]: e.target.value });
+  const save = async () => {
+    setSaving(true);
+    try { await api.put("/doc-template", t); toast.success("Template dokumen tersimpan"); }
+    catch { toast.error("Gagal menyimpan"); } finally { setSaving(false); }
+  };
+  return (
+    <Card className="border-slate-200 shadow-sm">
+      <CardHeader><CardTitle className="font-display">Template Dokumen (Invoice · Quotation · Kwitansi)</CardTitle></CardHeader>
+      <CardContent className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div className="space-y-2"><Label>Warna Utama</Label><input type="color" value={t.primary_color || "#1d4ed8"} onChange={set("primary_color")} className="h-10 w-20 rounded border" data-testid="tpl-primary" disabled={!canManage} /></div>
+        <div className="space-y-2"><Label>Warna Aksen</Label><input type="color" value={t.accent_color || "#f59e0b"} onChange={set("accent_color")} className="h-10 w-20 rounded border" data-testid="tpl-accent" disabled={!canManage} /></div>
+        <div className="space-y-2"><Label>Font</Label>
+          <select value={t.font || "Helvetica"} onChange={set("font")} className="w-full h-10 rounded-md border border-slate-200 px-2 text-sm" data-testid="tpl-font" disabled={!canManage}>
+            {["Helvetica", "Times-Roman", "Courier"].map((f) => <option key={f} value={f}>{f}</option>)}</select></div>
+        <div className="space-y-2"><Label>Tampilkan QR Code</Label>
+          <select value={t.show_qr ? "yes" : "no"} onChange={(e) => setT({ ...t, show_qr: e.target.value === "yes" })} className="w-full h-10 rounded-md border border-slate-200 px-2 text-sm" data-testid="tpl-qr" disabled={!canManage}>
+            <option value="yes">Ya</option><option value="no">Tidak</option></select></div>
+        <div className="space-y-2"><Label>Judul Invoice</Label><Input value={t.invoice_title || ""} onChange={set("invoice_title")} data-testid="tpl-invoice-title" disabled={!canManage} /></div>
+        <div className="space-y-2"><Label>Judul Quotation</Label><Input value={t.quotation_title || ""} onChange={set("quotation_title")} data-testid="tpl-quotation-title" disabled={!canManage} /></div>
+        <div className="space-y-2"><Label>Judul Kwitansi</Label><Input value={t.receipt_title || ""} onChange={set("receipt_title")} data-testid="tpl-receipt-title" disabled={!canManage} /></div>
+        <div className="space-y-2"><Label>Teks Stempel Lunas</Label><Input value={t.paid_stamp_text || ""} onChange={set("paid_stamp_text")} data-testid="tpl-paid-text" disabled={!canManage} /></div>
+        <div className="space-y-2 sm:col-span-2"><Label>Nama Perusahaan (dokumen)</Label><Input value={t.company_name || ""} onChange={set("company_name")} data-testid="tpl-company" disabled={!canManage} /></div>
+        <div className="space-y-2 sm:col-span-2"><Label>Alamat</Label><Input value={t.address || ""} onChange={set("address")} disabled={!canManage} /></div>
+        <div className="space-y-2"><Label>Telepon</Label><Input value={t.phone || ""} onChange={set("phone")} disabled={!canManage} /></div>
+        <div className="space-y-2"><Label>Email</Label><Input value={t.email || ""} onChange={set("email")} disabled={!canManage} /></div>
+        <div className="space-y-2 sm:col-span-2"><Label>Logo URL (kosong = pakai logo company)</Label><Input value={t.logo_url || ""} onChange={set("logo_url")} placeholder="https://..." data-testid="tpl-logo" disabled={!canManage} /></div>
+        <div className="space-y-2 sm:col-span-2"><Label>Teks Footer</Label><Input value={t.footer_text || ""} onChange={set("footer_text")} data-testid="tpl-footer" disabled={!canManage} /></div>
+        <div className="space-y-2 sm:col-span-2"><Label>Base URL Publik (untuk QR)</Label><Input value={t.public_base_url || ""} onChange={set("public_base_url")} data-testid="tpl-baseurl" disabled={!canManage} /><p className="text-xs text-slate-400">Dipakai di QR agar customer dapat membuka PDF tanpa login.</p></div>
+        {canManage && <div className="sm:col-span-2"><Button onClick={save} disabled={saving} className="bg-blue-600 hover:bg-blue-700" data-testid="save-doctpl-button">{saving ? "Saving..." : "Simpan template"}</Button></div>}
+      </CardContent>
+    </Card>
   );
 }

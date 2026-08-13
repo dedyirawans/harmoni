@@ -1,3 +1,11 @@
+## PHASE 9M — Document Template + PAID Stamp + QR (2026-06) — DONE (Verified curl E2E + screenshot)
+- **Template dokumen (Super Admin)**: `GET/PUT /api/doc-template` (key `doc_template` di company_settings). Atur warna utama/aksen, font (Helvetica/Times-Roman/Courier), judul (Invoice/Quotation/Kwitansi), logo, teks footer, teks stempel, toggle QR, dan Base URL publik. UI: Settings → tab "Template Dokumen" (admin-only).
+- **Stempel PAID/LUNAS**: invoice dengan outstanding<=0 atau status PAID mendapat watermark diagonal (teks dapat diatur) di semua render invoice.
+- **QR Code di Invoice/Quotation/Kwitansi**: setiap PDF menampilkan QR menuju endpoint publik `GET /api/public/documents/{invoice|quotation|receipt}/{id}?sig=HMAC` (signature HMAC-SHA256 dgn JWT_SECRET). Dapat diakses customer TANPA login; sig salah → 403. `public_url` disertakan di payload portal (invoices & receipts) untuk share/download.
+- Refactor: semua render invoice/quotation/kwitansi (staff, portal, publik) memakai helper terpusat `_render_invoice_pdf/_render_quotation_pdf/_render_receipt_pdf` + `build_document_pdf(tpl, qr_url, paid)`. Lib baru: `qrcode[pil]`.
+- Catatan: `JWT_SECRET` di .env ber-tanda kutip (dotenv melepasnya) — QR generate & verify pakai `_doc_sig` yang sama sehingga selalu konsisten.
+
+
 ## PHASE 9L.1 — Portal Upload Dokumen + Unduh Invoice/Kwitansi PDF (2026-06) — DONE (Verified curl + screenshot)
 - **Upload dokumen dari portal**: `POST /api/portal/documents` (multipart doc_type+file, maks 10MB) → Emergent Object Storage, scoped ke `customer_id` token (source=portal). Tipe: PASSPORT/KTP/KK/PHOTO/VISA/VACCINE_CERT/OTHER. UI: pilih tipe + tombol Unggah di kartu Dokumen.
 - **Unduh PDF**: `GET /api/portal/invoices/{id}/pdf` & `GET /api/portal/receipts/{id}/pdf` (auth via header atau `?auth=` token; ownership-checked). Reuse `build_document_pdf` (invoice) & builder kwitansi. Dashboard payload kini menyertakan `receipts` (dari `db.schedule_payments`).
