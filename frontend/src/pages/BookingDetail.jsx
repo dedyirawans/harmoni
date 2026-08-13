@@ -35,6 +35,8 @@ export default function BookingDetail() {
   const [cancelOpen, setCancelOpen] = useState(false);
   const [timeline, setTimeline] = useState({ steps: [] });
   const [editInv, setEditInv] = useState(null);
+  const [autoSync, setAutoSyncRaw] = useState(() => localStorage.getItem("autoSyncPax") === "1");
+  const setAutoSync = (v) => { setAutoSyncRaw(v); localStorage.setItem("autoSyncPax", v ? "1" : "0"); };
 
   const load = useCallback(() => {
     api.get(`/bookings/${id}`).then((r) => setData(r.data)).catch(() => setData(null));
@@ -71,6 +73,12 @@ export default function BookingDetail() {
     if (!window.confirm("Samakan pax booking dengan jumlah peserta terdaftar & perbarui invoice?")) return;
     try { const r = await api.post(`/bookings/${id}/sync-pax`); toast.success(`Pax booking = ${r.data.pax}, ${r.data.invoices_updated} invoice diperbarui`); load(); }
     catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); }
+  };
+  const afterTraveler = async () => {
+    if (autoSync && hasPerm("booking.manage")) {
+      try { const r = await api.post(`/bookings/${id}/sync-pax`); toast.success(`Auto-sinkron: pax booking = ${r.data.pax}`); } catch (e) { /* silent */ }
+    }
+    load();
   };
 
   const changeStatus = async (v) => {
@@ -142,12 +150,18 @@ export default function BookingDetail() {
               {canTravel && <Button size="sm" onClick={() => setTravOpen(true)} className="bg-blue-600 hover:bg-blue-700" data-testid="add-traveler-button"><Plus className="h-4 w-4 mr-1" />Tambah Peserta</Button>}
               <div className="flex items-center gap-2 flex-wrap">
                 <PaxCountBadge registered={data.travelers.length} pax={b.pax} />
+                {hasPerm("booking.manage") && (
+                  <label className="flex items-center gap-1.5 text-xs text-slate-500 cursor-pointer" data-testid="auto-sync-toggle">
+                    <input type="checkbox" checked={autoSync} onChange={(e) => setAutoSync(e.target.checked)} className="rounded border-slate-300" />
+                    Auto sinkron pax
+                  </label>
+                )}
                 {data.travelers.length !== (b.pax || 0) && hasPerm("booking.manage") && <Button size="sm" variant="outline" onClick={syncPax} data-testid="sync-pax-button"><RefreshCw className="h-4 w-4 mr-1" />Sinkron Pax</Button>}
               </div>
             </div>
             {data.travelers.length === 0 ? <p className="text-sm text-slate-400 text-center py-4">Belum ada peserta.</p>
               : data.travelers.map((t) => (
-                <TravelerCard key={t._id} t={t} docs={data.documents.filter((d) => d.traveler_id === t._id)} canDoc={canDoc} canTravel={canTravel} onChange={load} />
+                <TravelerCard key={t._id} t={t} docs={data.documents.filter((d) => d.traveler_id === t._id)} canDoc={canDoc} canTravel={canTravel} onChange={afterTraveler} />
               ))}
           </CardContent></Card>
         </TabsContent>
@@ -240,7 +254,7 @@ export default function BookingDetail() {
         </TabsContent>
       </Tabs>
 
-      {travOpen && <TravelerDialog bookingId={id} onClose={() => setTravOpen(false)} onSaved={() => { setTravOpen(false); load(); }} />}
+      {travOpen && <TravelerDialog bookingId={id} onClose={() => setTravOpen(false)} onSaved={() => { setTravOpen(false); afterTraveler(); }} />}
       {payFor && <PaymentDialog invoice={payFor} onClose={() => setPayFor(null)} onSaved={() => { setPayFor(null); load(); }} />}
       {editInv && <EditInvoiceDialog invoice={editInv} onClose={() => setEditInv(null)} onSaved={() => { setEditInv(null); load(); }} />}
       {cancelOpen && <CancellationDialog booking={b} travelers={data.travelers} onClose={() => setCancelOpen(false)} onSaved={() => { setCancelOpen(false); load(); }} />}

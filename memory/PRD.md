@@ -1,3 +1,8 @@
+## Enhancement Batch 5 — Approval Detail Panel + Auto Sinkron Pax (2026-06) — DONE (curl E2E + screenshots)
+- **Approval Detail Panel**: Dialog Detail di Approval Center kini menampilkan `CostBreakdown` untuk cancellation (Total Dibayar, Cancellation Fee, Non-Refundable, Other, Estimasi Refund) & refund (Proposed, Deductions list, Total Deduction, Approved, Bank) + tombol Approve/Revise/Reject langsung di dalam dialog (tanpa buka halaman lain). Data dari `GET /api/approval-center/detail/{source}/{aid}`.
+- **Auto Sinkron saat Tambah/Hapus Peserta**: Toggle "Auto sinkron pax" (localStorage, `booking.manage`) di tab Peserta BookingDetail. Bila aktif, setiap tambah/hapus peserta otomatis memanggil `sync-pax` (pax booking = jumlah peserta + regenerate invoice). Handler `afterTraveler` dipakai di TravelerDialog onSaved & TravelerCard onChange.
+
+
 ## Enhancement Batch 4 — Inline Approval (Cancellation/Refund) + Sinkron Pax (2026-06) — DONE (curl E2E + screenshot)
 - **Approval inline Cancellation/Refund**: `_collect_approvals` set `actionable=True` untuk cancellation/refund saat status `ACCOUNTING_REVIEWED` (giliran Super Admin). Endpoint terpadu `POST /api/approval-center/action/{source}/{aid}` kini mendispatch source `cancellation`→`approve_cancellation` & `refund`→`approve_refund` (Approve/Reject/Revise langsung dari Approval Center, tetap menghormati langkah Accounting Review). Reject/Revise wajib reason (400 bila kosong).
 - **Sinkron Pax↔Peserta**: `POST /api/bookings/{bid}/sync-pax` (booking.manage) set `pax` = jumlah peserta aktif, hitung ulang harga (tiered utk PRIVATE) + regenerate semua invoice. Tombol "Sinkron Pax" di tab Peserta BookingDetail (muncul saat mismatch). Verified: pax 1→3, total 15jt, invoice updated.

@@ -136,6 +136,7 @@ export default function ApprovalCenter() {
               <Row l="Amount" v={idr(detail.meta.amount)} /><Row l="Requested By" v={detail.meta.requested_by} />
               <Row l="Reason" v={detail.doc.reason || detail.doc.notes} />
               {detail.doc.evidence_url && <Row l="Evidence" v={<a className="text-blue-600 underline" href={detail.doc.evidence_url} target="_blank" rel="noreferrer">Lihat</a>} />}
+              <CostBreakdown meta={detail.meta} doc={detail.doc} />
               <div className="pt-2"><p className="font-semibold text-slate-800 mb-1">History</p>
                 <ol className="space-y-1.5" data-testid="approval-history">
                   {(detail.doc.history || []).length === 0 ? <p className="text-slate-400">Belum ada history.</p> :
@@ -148,6 +149,13 @@ export default function ApprovalCenter() {
                     ))}
                 </ol>
               </div>
+              {detail.meta.actionable && detail.meta.status === "PENDING" && (
+                <div className="flex gap-2 justify-end pt-3 border-t border-slate-100" data-testid="detail-actions">
+                  <Button size="sm" className="bg-emerald-600 hover:bg-emerald-700" onClick={() => { const r = detail.meta; setDetail(null); setAct({ row: r, action: "APPROVE" }); setReason(""); }} data-testid={`detail-approve-${detail.meta.id}`}>Approve</Button>
+                  <Button size="sm" variant="outline" className="text-blue-600" onClick={() => { const r = detail.meta; setDetail(null); setAct({ row: r, action: "REQUEST_REVISION" }); setReason(""); }} data-testid={`detail-revise-${detail.meta.id}`}>Revise</Button>
+                  <Button size="sm" variant="outline" className="text-red-600" onClick={() => { const r = detail.meta; setDetail(null); setAct({ row: r, action: "REJECT" }); setReason(""); }} data-testid={`detail-reject-${detail.meta.id}`}>Reject</Button>
+                </div>
+              )}
             </div>
           )}
         </DialogContent>
@@ -171,6 +179,35 @@ export default function ApprovalCenter() {
 
 function Row({ l, v }) {
   return <div className="flex gap-2"><span className="text-slate-400 w-28 shrink-0">{l}</span><span className="text-slate-800 break-words">{v || "—"}</span></div>;
+}
+
+function CostBreakdown({ meta, doc }) {
+  if (meta.source === "cancellation") {
+    const r = doc.accounting_review || {};
+    const items = [["Total Dibayar", doc.total_paid], ["Cancellation Fee", r.cancellation_fee], ["Non-Refundable", r.non_refundable_cost], ["Other Deduction", r.other_deduction]];
+    return (
+      <div className="rounded-md border border-slate-200 bg-slate-50 p-3" data-testid="cost-breakdown">
+        <p className="font-semibold text-slate-800 mb-2">Rincian Biaya Cancellation</p>
+        {items.map(([l, v]) => <div key={l} className="flex justify-between"><span className="text-slate-500">{l}</span><span className="text-slate-800">{idr(v)}</span></div>)}
+        <div className="flex justify-between border-t border-slate-200 mt-2 pt-2 font-semibold"><span>Estimasi Refund</span><span className="text-emerald-700">{idr(r.estimated_refund)}</span></div>
+        {!doc.accounting_review && <p className="text-xs text-amber-600 mt-1">Belum direview Accounting.</p>}
+      </div>
+    );
+  }
+  if (meta.source === "refund") {
+    const ded = doc.deductions || [];
+    return (
+      <div className="rounded-md border border-slate-200 bg-slate-50 p-3" data-testid="cost-breakdown">
+        <p className="font-semibold text-slate-800 mb-2">Rincian Refund</p>
+        <div className="flex justify-between"><span className="text-slate-500">Proposed Refund</span><span className="text-slate-800">{idr(doc.proposed_refund)}</span></div>
+        {ded.length > 0 && <div className="mt-1 space-y-0.5">{ded.map((d, i) => <div key={i} className="flex justify-between text-xs"><span className="text-slate-400">− {d.label || d.name}</span><span className="text-red-600">{idr(d.amount)}</span></div>)}</div>}
+        <div className="flex justify-between"><span className="text-slate-500">Total Deduction</span><span className="text-red-600">{idr(doc.total_deduction)}</span></div>
+        <div className="flex justify-between border-t border-slate-200 mt-2 pt-2 font-semibold"><span>Approved Refund</span><span className="text-emerald-700">{idr(doc.approved_refund || doc.proposed_refund)}</span></div>
+        {doc.bank?.bank_name && <p className="text-xs text-slate-500 mt-1">Bank: {doc.bank.bank_name} • {doc.bank.account_number} • {doc.bank.account_holder}</p>}
+      </div>
+    );
+  }
+  return null;
 }
 
 function NewAdjustment({ onDone }) {
