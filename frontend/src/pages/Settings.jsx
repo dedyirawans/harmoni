@@ -380,10 +380,11 @@ function DocTemplateTab({ canManage }) {
   const [saving, setSaving] = useState(false);
   const [preview, setPreview] = useState("");
   const [previewing, setPreviewing] = useState(false);
-  const doPreview = async (tpl) => {
+  const [previewKind, setPreviewKind] = useState("invoice");
+  const doPreview = async (kind) => {
     setPreviewing(true);
     try {
-      const r = await api.post("/doc-template/preview", tpl || t, { responseType: "blob" });
+      const r = await api.post("/doc-template/preview", { ...t, kind: kind || previewKind }, { responseType: "blob" });
       setPreview((old) => { if (old) URL.revokeObjectURL(old); return URL.createObjectURL(r.data); });
     } catch { toast.error("Gagal membuat preview"); } finally { setPreviewing(false); }
   };
@@ -438,11 +439,14 @@ function DocTemplateTab({ canManage }) {
         <div className="space-y-2 sm:col-span-2"><Label>Base URL Publik (untuk QR)</Label><Input value={t.public_base_url || ""} onChange={set("public_base_url")} data-testid="tpl-baseurl" disabled={!canManage} /><p className="text-xs text-slate-400">Dipakai di QR agar customer dapat membuka PDF tanpa login.</p></div>
         <div className="sm:col-span-2 flex items-center gap-2">
           {canManage && <Button onClick={save} disabled={saving} className="bg-blue-600 hover:bg-blue-700" data-testid="save-doctpl-button">{saving ? "Saving..." : "Simpan template"}</Button>}
+          <select value={previewKind} onChange={(e) => setPreviewKind(e.target.value)} className="h-10 rounded-md border border-slate-200 px-2 text-sm" data-testid="preview-kind">
+            <option value="invoice">Invoice</option><option value="quotation">Quotation</option><option value="receipt">Kwitansi</option>
+          </select>
           <Button variant="outline" onClick={() => doPreview()} disabled={previewing} data-testid="preview-doctpl-button">{previewing ? "Membuat..." : "Preview PDF"}</Button>
         </div>
         {preview && (
           <div className="sm:col-span-2 mt-2" data-testid="doctpl-preview">
-            <Label className="mb-1 block">Pratinjau (contoh invoice, dengan stempel & QR)</Label>
+            <Label className="mb-1 block">Pratinjau ({previewKind})</Label>
             <iframe title="preview" src={preview} className="w-full h-[520px] rounded-md border border-slate-200" />
           </div>
         )}

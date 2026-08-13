@@ -3279,15 +3279,26 @@ async def update_doc_template(body: DocTemplateUpdate, request: Request, user: d
 
 @api_router.post("/doc-template/preview")
 async def doc_template_preview(body: dict, user: dict = Depends(require_permission("settings.view"))):
-    tpl = {**DOC_TEMPLATE_DEFAULTS, **{k: v for k, v in (body or {}).items() if v not in (None,)}}
-    sample = {"number": "INV-CONTOH", "created_at": now_iso(), "customer_name": "Budi Santoso",
-              "sales_pic_name": "Rina Sales", "package_name": "Umrah Reguler 9 Hari", "package_version": 1,
-              "room_type": "QUAD", "pax": 2, "per_pax_price": 25000000, "gross": 50000000,
-              "subtotal": 50000000, "discount_percent": 0, "discount_amount": 0, "tax_percent": 11, "tax_amount": 0,
-              "total": 50000000, "due_date": "2026-09-01", "status": "PAID", "addons": []}
+    body = body or {}
+    kind = (body.pop("kind", None) or "invoice").lower()
+    tpl = {**DOC_TEMPLATE_DEFAULTS, **{k: v for k, v in body.items() if v is not None}}
     company = await db.company_settings.find_one({"key": "company"}) or {}
-    qr = _public_pdf_url(tpl, "invoice", "contoh")
-    pdf = build_document_pdf("INVOICE", sample, company, tpl=tpl, qr_url=qr, paid=True)
+    if kind == "receipt":
+        sample_r = {"_id": "contoh", "receipt_number": "KW-CONTOH", "created_at": now_iso(),
+                    "booking_number": "BKG-CONTOH", "customer_name": "Budi Santoso", "payment_number": 2,
+                    "label": "Pelunasan", "amount": 25000000, "outstanding_after": 0, "outstanding_total": 0}
+        pdf, _ = await _render_receipt_pdf(sample_r, tpl=tpl)
+    else:
+        k = "QUOTATION" if kind == "quotation" else "INVOICE"
+        sample = {"number": ("QT-CONTOH" if k == "QUOTATION" else "INV-CONTOH"), "created_at": now_iso(),
+                  "customer_name": "Budi Santoso", "sales_pic_name": "Rina Sales",
+                  "package_name": "Umrah Reguler 9 Hari", "package_version": 1, "room_type": "QUAD", "pax": 2,
+                  "per_pax_price": 25000000, "gross": 50000000, "subtotal": 50000000, "discount_percent": 0,
+                  "discount_amount": 0, "tax_percent": 0, "tax_amount": 0, "total": 50000000,
+                  "due_date": "2026-09-01", "status": "PAID", "addons": [],
+                  "terms": "Pembayaran DP minimal 50%. Sisa dilunasi H-30 keberangkatan."}
+        qr = _public_pdf_url(tpl, kind, "contoh")
+        pdf = build_document_pdf(k, sample, company, tpl=tpl, qr_url=qr, paid=(kind == "invoice"))
     return Response(content=pdf, media_type="application/pdf", headers={"Content-Disposition": "inline; filename=preview.pdf"})
 
 
@@ -3613,8 +3624,9 @@ async def _render_quotation_pdf(q):
     return build_document_pdf("QUOTATION", data, company, itins, tpl=tpl, qr_url=qr), q.get("quotation_number")
 
 
-async def _render_receipt_pdf(r):
-    tpl = await _get_doc_template()
+async def _render_receipt_pdf(r, tpl=None):
+    if tpl is None:
+        tpl = await _get_doc_template()
     primary = colors.HexColor(tpl.get("primary_color") or "#1d4ed8")
     base_font, bold_font = _pdf_fonts(tpl)
     rid = str(r.get("_id"))
@@ -3651,10 +3663,10 @@ async def _render_receipt_pdf(r):
         if not paid_full:
             return
         canvas.saveState()
-        canvas.translate(150 * mm, 60 * mm)
+        canvas.translate(105 * mm, 148.5 * mm)
         canvas.rotate(30)
-        canvas.setFont(bold_font, 64)
-        canvas.setFillColor(colors.Color(0.13, 0.7, 0.4, alpha=0.28))
+        canvas.setFont(bold_font, 72)
+        canvas.setFillColor(colors.Color(0.13, 0.7, 0.4, alpha=0.25))
         canvas.drawCentredString(0, 0, tpl.get("paid_stamp_text", "LUNAS"))
         canvas.restoreState()
 

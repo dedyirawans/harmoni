@@ -1,3 +1,8 @@
+## PHASE 9M.2 — Preview Multi-Dokumen + Stempel di Tengah (2026-06) — DONE (Verified curl)
+- **Preview Quotation & Kwitansi**: `POST /api/doc-template/preview` menerima `kind` (invoice/quotation/receipt). UI tab Template Dokumen punya dropdown jenis + tombol Preview → iframe. Ketiganya terverifikasi 200 `%PDF-`.
+- **Stempel di tengah**: watermark PAID (invoice) & LUNAS (kwitansi) dipindah ke pusat halaman A4 (105mm × 148.5mm), font 72, alpha 0.25 — berlaku di `build_document_pdf` dan `_render_receipt_pdf`. `_render_receipt_pdf(r, tpl=None)` kini menerima tpl untuk preview.
+
+
 ## PHASE 9M.1 — Upload Logo + Preview PDF + Stempel Kwitansi (2026-06) — DONE (Verified curl + screenshot)
 - **Upload logo file**: tab Template Dokumen kini punya input file (base64 → `logo_url`, maks 2MB) + preview logo, selain input URL.
 - **Preview PDF real-time**: `POST /api/doc-template/preview` merender contoh invoice dari template yang sedang diedit (belum disimpan) — tombol "Preview PDF" menampilkan hasil di iframe (dengan stempel + QR).
