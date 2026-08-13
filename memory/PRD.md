@@ -1,3 +1,10 @@
+## Enhancement Batch 3 — Regenerate All + PIC Report + Tiered Pricing + Approval Buttons (2026-06) — DONE (curl E2E + screenshots)
+- **Regenerate Semua**: `POST /api/bookings/{bid}/invoices/regenerate-all` (invoice.manage) hitung ulang semua invoice satu booking. Tombol "Regenerate Semua" di tab Invoice BookingDetail.
+- **Laporan Perpindahan PIC**: `GET /api/reports/pic-changes` (super_admin) dari `lead_activities type=pic_change` (waktu, customer, dari→ke, Satuan/Massal, oleh). Tab "Perpindahan PIC" di Reports (super_admin only via flag admin).
+- **Harga Tiered Otomatis**: `_booking_invoice_amounts` kini, untuk paket `sub_category==PRIVATE`, memakai `compute_pax_price(pkg, pax_count, room_type)` sehingga per-pax mengikuti bracket jumlah peserta terkini saat regenerate. Terverifikasi: 4 peserta → tier 3-5 → per_pax 35jt. (create_invoice tetap pakai harga terkunci; tiered hanya saat regenerate.)
+- **Tombol Approval (bug fix)**: Approval Center kini menampilkan Approve/Revise/Reject untuk item PENDING dari sumber `adjustment` DAN `commission` (sebelumnya commission hanya "Open"). Endpoint terpadu baru `POST /api/approval-center/action/{source}/{aid}` (super_admin) mendispatch ke adjustment & commission closing. `_collect_approvals` set `actionable` untuk commission REVIEW/CLOSED yang belum di-approve.
+
+
 ## Enhancement Batch 2 — PIC Audit/Bulk + Invoice Edit/Delete/Regenerate + Pax Badge (2026-06) — DONE (curl E2E + screenshots)
 - **Peringatan Selisih Peserta**: BookingDetail menampilkan `PaxCountBadge` (tab Peserta) + banner kuning `invoice-pax-warning` di tab Invoice bila jumlah peserta terdaftar ≠ pax booking.
 - **Riwayat Ganti PIC**: `update_customer` & bulk reassign mencatat `log_activity(type=pic_change)` → tampil di timeline Customer 360.

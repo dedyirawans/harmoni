@@ -62,6 +62,11 @@ export default function BookingDetail() {
     try { await api.delete(`/invoices/${iid}`); toast.success("Invoice dihapus"); load(); }
     catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); }
   };
+  const regenerateAllInvoices = async () => {
+    if (!window.confirm("Perbarui SEMUA invoice booking ini sesuai jumlah peserta terbaru?")) return;
+    try { const r = await api.post(`/bookings/${id}/invoices/regenerate-all`); toast.success(`${r.data.updated} invoice diperbarui`); load(); }
+    catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); }
+  };
 
   const changeStatus = async (v) => {
     if (v === b.status) return;
@@ -147,7 +152,10 @@ export default function BookingDetail() {
                 <span>Jumlah peserta terdaftar (<b>{data.travelers.length}</b>) berbeda dari pax booking (<b>{b.pax || 0}</b>). Invoice dihitung sesuai jumlah peserta terdaftar.</span>
               </div>
             )}
-            {canInvoice && <Button size="sm" onClick={createInvoice} className="bg-blue-600 hover:bg-blue-700" data-testid="create-invoice-button"><Plus className="h-4 w-4 mr-1" />Generate Invoice</Button>}
+            <div className="flex flex-wrap gap-2">
+              {canInvoice && <Button size="sm" onClick={createInvoice} className="bg-blue-600 hover:bg-blue-700" data-testid="create-invoice-button"><Plus className="h-4 w-4 mr-1" />Generate Invoice</Button>}
+              {canInvoice && data.invoices.length > 0 && <Button size="sm" variant="outline" onClick={regenerateAllInvoices} data-testid="regenerate-all-invoices-button"><RefreshCw className="h-4 w-4 mr-1" />Regenerate Semua</Button>}
+            </div>
             {data.invoices.length === 0 && <p className="text-sm text-slate-400 text-center py-4">Belum ada invoice.</p>}
             <div className="space-y-3 mt-3">
               {data.invoices.map((inv) => (

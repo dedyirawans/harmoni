@@ -51,7 +51,7 @@ export default function ApprovalCenter() {
     const { row, action } = act;
     if ((action === "REJECT" || action === "REQUEST_REVISION") && !reason.trim()) { toast.error("Reason wajib diisi"); return; }
     try {
-      await api.post(`/approval-center/adjustments/${row.id}/action`, { action, reason });
+      await api.post(`/approval-center/action/${row.source}/${row.id}`, { action, reason });
       toast.success(`Approval ${action}`); setAct(null); setReason(""); load();
     } catch (e) { toast.error(e.response?.data?.detail || "Gagal memproses"); }
   };
@@ -108,7 +108,7 @@ export default function ApprovalCenter() {
                     <td className="px-3 py-2.5">
                       <div className="flex items-center gap-1.5">
                         <Button size="sm" variant="outline" onClick={() => openDetail(r)} data-testid={`approval-detail-${r.id}`}>Detail</Button>
-                        {r.source === "adjustment" && r.actionable && r.status === "PENDING" ? (
+                        {r.actionable && r.status === "PENDING" ? (
                           <>
                             <Button size="sm" className="bg-emerald-600 hover:bg-emerald-700" onClick={() => { setAct({ row: r, action: "APPROVE" }); setReason(""); }} data-testid={`approval-approve-${r.id}`}>Approve</Button>
                             <Button size="sm" variant="outline" className="text-blue-600" onClick={() => { setAct({ row: r, action: "REQUEST_REVISION" }); setReason(""); }} data-testid={`approval-revision-${r.id}`}>Revise</Button>

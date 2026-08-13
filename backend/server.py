@@ -1182,11 +1182,21 @@ async def _collect_approvals(user, type_filter=None):
                 "decided_date": _ac_last_at(d.get("timeline")), "actionable": False, "link": "/approvals"})
     if role == "super_admin" and (not type_filter or type_filter == "COMMISSION"):
         async for d in db.commission_closings.find({"status": {"$nin": ["DRAFT", "CALCULATING"]}}):
+            sa = d.get("sa_approval")
+            if sa == "APPROVED" or d.get("status") in ("APPROVED", "PAID"):
+                st = "APPROVED"
+            elif sa == "REJECTED":
+                st = "REJECTED"
+            elif sa == "REVISION":
+                st = "REVISION"
+            else:
+                st = "PENDING"
+            act_ok = role == "super_admin" and st == "PENDING" and d.get("status") in ("REVIEW", "CLOSED")
             rows.append({"source": "commission", "id": str(d.get("period")), "approval_number": f"COMM-{d.get('period')}",
                 "type": "COMMISSION", "reference": d.get("period", ""), "customer": "—",
                 "amount": d.get("total_final") or d.get("total_commission") or 0, "requested_by": "System",
-                "requested_date": d.get("created_at"), "status": "APPROVED" if d.get("status") in ("APPROVED", "PAID") else "PENDING",
-                "decided_date": d.get("approved_at"), "actionable": False, "link": "/commission"})
+                "requested_date": d.get("created_at"), "status": st,
+                "decided_date": d.get("sa_approval_at") or d.get("approved_at"), "actionable": act_ok, "link": "/commission"})
     if type_filter and type_filter in ADJ_TYPES:
         rows = [r for r in rows if r["type"] == type_filter]
     rows.sort(key=lambda x: (x.get("requested_date") or ""), reverse=True)
@@ -4934,6 +4944,12 @@ async def _booking_invoice_amounts(b, pax_count=None):
         pax_count = tc if tc > 0 else booking_pax
     pax_count = max(int(pax_count), 1)
     per_pax = float(b.get("per_pax_price") or 0)
+    # Harga tiered otomatis: paket PRIVATE mengikuti bracket jumlah peserta terbaru
+    pkg = await db.packages.find_one({"_id": ObjectId(b["package_id"])}) if ObjectId.is_valid(b.get("package_id") or "") else None
+    if pkg and pkg.get("sub_category") == "PRIVATE":
+        tiered = compute_pax_price(pkg, pax_count, b.get("room_type"))
+        if tiered > 0:
+            per_pax = float(tiered)
     addon_total = sum(float(a.get("amount") or 0) for a in (b.get("addons") or []))
     gross = per_pax * pax_count
     subtotal = gross + addon_total
@@ -5036,6 +5052,81 @@ async def regenerate_invoice(iid: str, request: Request, user: dict = Depends(re
                     new={"total": amounts["total"], "pax": amounts["pax"]})
     inv2 = await db.invoices.find_one({"_id": ObjectId(iid)})
     return serialize(inv2)
+
+
+@api_router.post("/bookings/{bid}/invoices/regenerate-all")
+async def regenerate_all_invoices(bid: str, request: Request, user: dict = Depends(require_permission("invoice.manage"))):
+    b = await db.bookings.find_one({"_id": ObjectId(bid)}) if ObjectId.is_valid(bid) else None
+    if not b:
+        raise HTTPException(status_code=404, detail="Booking not found")
+    invs = await db.invoices.find({"booking_id": bid}).to_list(500)
+    amounts = await _booking_invoice_amounts(b)
+    updated = 0
+    for inv in invs:
+        await db.invoices.update_one({"_id": inv["_id"]}, {"$set": amounts})
+        await _recompute_invoice_status(str(inv["_id"]))
+        updated += 1
+    await log_audit(user, "invoice", "regenerate_all", request, record_id=bid, new={"updated": updated, "pax": amounts["pax"]})
+    return {"updated": updated, "pax": amounts["pax"], "total_each": amounts["total"]}
+
+
+@api_router.post("/approval-center/action/{source}/{aid}")
+async def approval_center_action(source: str, aid: str, body: dict, request: Request, user: dict = Depends(require_role("super_admin"))):
+    action = (body.get("action") or "").upper()
+    reason = (body.get("reason") or body.get("comment") or "").strip()
+    if action not in ("APPROVE", "REJECT", "REQUEST_REVISION"):
+        raise HTTPException(status_code=400, detail="Invalid action")
+    if action in ("REJECT", "REQUEST_REVISION") and not reason:
+        raise HTTPException(status_code=400, detail="Reason wajib diisi untuk Reject / Request Revision")
+    if source == "adjustment":
+        d = await db.approvals.find_one({"_id": ObjectId(aid)}) if ObjectId.is_valid(aid) else None
+        if not d:
+            raise HTTPException(status_code=404, detail="Not found")
+        new_status = {"APPROVE": "APPROVED", "REJECT": "REJECTED", "REQUEST_REVISION": "REVISION"}[action]
+        hist = d.get("history", [])
+        hist.append({"user": user["name"], "role": user["role"], "action": action, "comment": reason, "at": now_iso()})
+        await db.approvals.update_one({"_id": ObjectId(aid)}, {"$set": {"status": new_status, "decided_at": now_iso(), "history": hist}})
+        await notify(f"Approval {new_status.title()}", f"{d.get('approval_number')} • {d.get('atype')}" + (f" — {reason}" if reason else ""),
+                     "/approval-center", user_id=d.get("requested_by_id"), ntype="APPROVAL_RESULT", priority="normal")
+        return serialize(await db.approvals.find_one({"_id": ObjectId(aid)}))
+    if source == "commission":
+        c = await _get_closing(aid)
+        if not c:
+            raise HTTPException(status_code=404, detail="Closing not found")
+        if c.get("status") not in ("REVIEW", "CLOSED"):
+            raise HTTPException(status_code=400, detail="Approval komisi hanya untuk closing REVIEW/CLOSED")
+        decision = {"APPROVE": "APPROVED", "REJECT": "REJECTED", "REQUEST_REVISION": "REVISION"}[action]
+        await db.commission_closings.update_one({"period": aid}, {"$set": {
+            "sa_approval": decision, "sa_approval_reason": reason,
+            "sa_approval_by": user["name"], "sa_approval_at": now_iso()}})
+        await log_audit(user, "commission", "sa_approval", request, record_id=aid, new={"decision": decision, "reason": reason})
+        return serialize(await _get_closing(aid))
+    raise HTTPException(status_code=400, detail="Sumber approval ini harus diproses di halaman terkait")
+
+
+@api_router.get("/reports/pic-changes")
+async def report_pic_changes(frm: Optional[str] = None, to: Optional[str] = None, user: dict = Depends(require_role("super_admin"))):
+    acts = await db.lead_activities.find({"type": "pic_change"}).sort("timestamp", -1).to_list(2000)
+    cust_ids = [ObjectId(a["customer_id"]) for a in acts if a.get("customer_id") and ObjectId.is_valid(a["customer_id"])]
+    cust_map = {}
+    if cust_ids:
+        async for c in db.customers.find({"_id": {"$in": cust_ids}}):
+            cust_map[str(c["_id"])] = c.get("full_name") or c.get("customer_code") or "—"
+    rows = []
+    for a in acts:
+        ts = a.get("timestamp") or ""
+        if (frm and ts[:10] < frm) or (to and ts[:10] > to):
+            continue
+        title = a.get("title") or ""
+        change = title.split(":", 1)[1].strip() if ":" in title else title
+        rows.append({
+            "date": ts.replace("T", " ")[:16],
+            "customer": cust_map.get(str(a.get("customer_id")), "—"),
+            "change": change,
+            "mode": "Massal" if "massal" in title.lower() else "Satuan",
+            "by": a.get("user_name") or "—",
+        })
+    return {"title": "Laporan Perpindahan PIC Sales", "count": len(rows), "rows": rows}
 
 
 @api_router.get("/invoices/{iid}/pdf")

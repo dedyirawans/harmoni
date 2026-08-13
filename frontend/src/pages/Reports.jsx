@@ -23,6 +23,7 @@ const REPORTS = [
   { key: "tax-recap", label: "Rekap Pajak", icon: Receipt, finance: true },
   { key: "payable", label: "Utang Usaha", icon: ArrowUpCircle, finance: true },
   { key: "receivable-aging", label: "Piutang Usaha", icon: ArrowDownCircle, finance: false },
+  { key: "pic-changes", label: "Perpindahan PIC", icon: Users2, finance: false, admin: true },
 ];
 
 function presetRange(preset) {
@@ -39,7 +40,7 @@ function presetRange(preset) {
 
 export default function Reports() {
   const { user } = useAuth();
-  const list = REPORTS.filter((r) => user.role !== "sales" || !r.finance);
+  const list = REPORTS.filter((r) => (user.role !== "sales" || !r.finance) && (!r.admin || user.role === "super_admin"));
   const [active, setActive] = useState(list[0].key);
   const [preset, setPreset] = useState("monthly");
   const [range, setRange] = useState(presetRange("monthly"));
@@ -65,7 +66,10 @@ export default function Reports() {
 
   const load = () => {
     setData(null);
-    api.get(`/mgmt-reports/${active}?${buildQuery()}`).then((r) => setData(r.data)).catch((e) => setData({ __err: e.response?.status === 403 ? "403 Forbidden" : "Gagal memuat laporan" }));
+    const url = active === "pic-changes"
+      ? `/reports/pic-changes?${range.frm ? `frm=${range.frm}&` : ""}${range.to ? `to=${range.to}` : ""}`
+      : `/mgmt-reports/${active}?${buildQuery()}`;
+    api.get(url).then((r) => setData(r.data)).catch((e) => setData({ __err: e.response?.status === 403 ? "403 Forbidden" : "Gagal memuat laporan" }));
   };
 
   const doExport = async (fmt) => {
@@ -223,6 +227,27 @@ const PLGroup = ({ title, node, keys, strong }) => (
 );
 
 function renderReport(key, d) {
+  if (key === "pic-changes") {
+    return (
+      <Card className="border-slate-200 shadow-sm"><CardContent className="p-0"><div className="overflow-x-auto">
+        <table className="w-full text-sm" data-testid="report-table">
+          <thead><tr className="bg-slate-800 text-white text-left"><th className="px-3 py-2">Waktu</th><th className="px-3 py-2 border-l border-slate-600">Customer</th><th className="px-3 py-2 border-l border-slate-600">Perubahan PIC</th><th className="px-3 py-2 border-l border-slate-600">Tipe</th><th className="px-3 py-2 border-l border-slate-600">Oleh</th></tr></thead>
+          <tbody>
+            {(d.rows || []).length === 0 ? <tr><td colSpan={5} className="px-4 py-8 text-center text-slate-400">Belum ada perpindahan PIC.</td></tr>
+              : (d.rows || []).map((r, i) => (
+                <tr key={i} className={i % 2 ? "bg-slate-50" : "bg-white"} data-testid={`pic-change-row-${i}`}>
+                  <td className="px-3 py-2 whitespace-nowrap">{r.date}</td>
+                  <td className="px-3 py-2 border-l border-slate-100">{r.customer}</td>
+                  <td className="px-3 py-2 border-l border-slate-100">{r.change}</td>
+                  <td className="px-3 py-2 border-l border-slate-100"><Badge className={r.mode === "Massal" ? "bg-indigo-50 text-indigo-700 border-indigo-200" : "bg-slate-100 text-slate-600 border-slate-200"}>{r.mode}</Badge></td>
+                  <td className="px-3 py-2 border-l border-slate-100">{r.by}</td>
+                </tr>
+              ))}
+          </tbody>
+        </table>
+      </div></CardContent></Card>
+    );
+  }
   if (key === "profit-loss") {
     return (
       <div className="space-y-4">
