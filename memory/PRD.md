@@ -1,3 +1,9 @@
+## Enhancement — Customer PIC Reassign + Booking "Peserta" + Invoice by Participants (2026-06) — DONE (Verified curl E2E + screenshot)
+- **Ganti PIC Sales (Super Admin)**: `CustomerUpdate` now accepts `sales_pic_id`; `PUT /api/customers/{id}` resolves new PIC name+branch. Only super_admin may reassign (sales → 403). UI: `ChangePicButton` (UserCog icon) di profil Customer 360, dialog pilih sales user.
+- **Teks "jamaah" → "peserta"** di menu Booking (`Bookings.jsx`, `BookingDetail.jsx`).
+- **Invoice nominal by participants**: `POST /api/bookings/{id}/invoice` kini hitung nominal = per_pax_price paket × jumlah peserta (travelers) terdaftar di booking (fallback booking.pax bila 0). Diskon & pajak diskala proporsional per peserta. Verified BKG-00002 (pax=2, 1 peserta) → subtotal 50jt, tax 110rb, total 48.61jt.
+
+
 ## PHASE 9N — Sales & Financial Forecasting (2026-06) — DONE (Verified curl E2E + RBAC 403 + screenshots)
 - Backend `GET /api/forecast/dashboard` (super_admin only, `require_role`). Returns: sales_forecast, cash_flow_forecast, receivable_forecast, upcoming_expense, upcoming_commission.
 - Sales Forecast: pipeline weighted by STAGE_PROBABILITY (NEW 10%/CONTACTED 20%/QUALIFIED 30%/QUOTATION 50%/NEGOTIATION 70%/BOOKING 90%). Deal value = lead.budget → fallback quotation total. Buckets: Current/Next/Next-3-Months (weighted, pipeline raw, actual booked).

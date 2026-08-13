@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback } from "react";
 import { useParams, useNavigate } from "react-router-dom";
+import { useAuth } from "@/context/AuthContext";
 import api, { API, formatApiErrorDetail } from "@/lib/api";
 import { fmtIDR, fmtDate, fmtDateTime, STAGE_COLORS, FOLLOWUP_ACTIVITIES } from "@/config/crm";
 import { Card, CardContent } from "@/components/ui/card";
@@ -13,7 +14,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import {
   ArrowLeft, Loader2, Phone, Mail, MapPin, StickyNote, MessageSquare, CalendarClock,
-  Briefcase, Clock, User as UserIcon, Upload, Eye, Trash2, RefreshCw,
+  Briefcase, Clock, User as UserIcon, Upload, Eye, Trash2, RefreshCw, UserCog,
   Sparkles, Copy, ShieldCheck, FileText, Send, Lightbulb,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -80,7 +81,7 @@ export default function Customer360() {
               {c.whatsapp && <p className="flex items-center gap-2"><Phone className="h-4 w-4 text-slate-400" aria-hidden="true" />{c.whatsapp}</p>}
               {c.email && <p className="flex items-center gap-2"><Mail className="h-4 w-4 text-slate-400" aria-hidden="true" />{c.email}</p>}
               {(c.city || c.country) && <p className="flex items-center gap-2"><MapPin className="h-4 w-4 text-slate-400" aria-hidden="true" />{[c.city, c.country].filter(Boolean).join(", ")}</p>}
-              <p className="flex items-center gap-2"><UserIcon className="h-4 w-4 text-slate-400" aria-hidden="true" />PIC: {c.sales_pic_name}</p>
+              <p className="flex items-center gap-2"><UserIcon className="h-4 w-4 text-slate-400" aria-hidden="true" />PIC: {c.sales_pic_name}<ChangePicButton customerId={id} currentPicId={c.sales_pic_id} onDone={load} /></p>
             </div>
             <div className="mt-5 grid grid-cols-2 gap-2 text-xs text-slate-500" data-testid="c360-profile">
               <Info label="Customer ID" value={c.customer_code} /><Info label="Type" value={c.customer_type} />
@@ -277,6 +278,50 @@ export default function Customer360() {
 
 function Info({ label, value }) {
   return <div><span className="text-slate-400">{label}: </span><span className="text-slate-700">{value || "—"}</span></div>;
+}
+
+function ChangePicButton({ customerId, currentPicId, onDone }) {
+  const { user } = useAuth();
+  const [open, setOpen] = useState(false);
+  const [users, setUsers] = useState([]);
+  const [sel, setSel] = useState(currentPicId || "");
+  const [saving, setSaving] = useState(false);
+  useEffect(() => {
+    if (open && users.length === 0) {
+      api.get("/users").then((r) => setUsers((r.data || []).filter((u) => ["sales", "super_admin"].includes(u.role) && u.status !== "ARCHIVED"))).catch(() => {});
+    }
+  }, [open, users.length]);
+  if (user?.role !== "super_admin") return null;
+  const save = async () => {
+    if (!sel) return toast.error("Pilih PIC sales");
+    setSaving(true);
+    try { await api.put(`/customers/${customerId}`, { sales_pic_id: sel }); toast.success("PIC sales diperbarui"); setOpen(false); onDone(); }
+    catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); }
+    finally { setSaving(false); }
+  };
+  return (
+    <>
+      <button onClick={() => setOpen(true)} className="ml-1 text-blue-600 hover:text-blue-800 transition-colors" data-testid="change-pic-btn" title="Ganti PIC Sales"><UserCog className="h-3.5 w-3.5" /></button>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="bg-white" data-testid="change-pic-dialog">
+          <DialogHeader><DialogTitle className="font-display">Ganti PIC Sales</DialogTitle><DialogDescription>Pindahkan kepemilikan customer ini ke sales lain.</DialogDescription></DialogHeader>
+          <div className="space-y-2 py-2">
+            <Label className="text-xs">PIC Sales</Label>
+            <Select value={sel} onValueChange={setSel}>
+              <SelectTrigger data-testid="pic-select"><SelectValue placeholder="Pilih sales" /></SelectTrigger>
+              <SelectContent className="bg-white">
+                {users.map((u) => <SelectItem key={u._id} value={u._id} data-testid={`pic-option-${u._id}`}>{u.name} ({u.role})</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setOpen(false)}>Batal</Button>
+            <Button className="bg-blue-600 hover:bg-blue-700" onClick={save} disabled={saving} data-testid="pic-save-btn">{saving ? <Loader2 className="h-4 w-4 animate-spin" /> : "Simpan"}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
 }
 
 const AI_ACTIONS = [

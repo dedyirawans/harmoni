@@ -108,7 +108,7 @@ export default function BookingDetail() {
 
       <Tabs defaultValue="travelers">
         <TabsList>
-          <TabsTrigger value="travelers" data-testid="tab-travelers"><Users className="h-4 w-4 mr-1" />Jamaah</TabsTrigger>
+          <TabsTrigger value="travelers" data-testid="tab-travelers"><Users className="h-4 w-4 mr-1" />Peserta</TabsTrigger>
           <TabsTrigger value="payments" data-testid="tab-payments"><CreditCard className="h-4 w-4 mr-1" />Invoice & Payment</TabsTrigger>
           <TabsTrigger value="timeline" data-testid="tab-timeline"><GitBranch className="h-4 w-4 mr-1" />Timeline</TabsTrigger>
           <TabsTrigger value="schedule" data-testid="tab-schedule"><CreditCard className="h-4 w-4 mr-1" />Payment Schedule</TabsTrigger>
@@ -116,8 +116,8 @@ export default function BookingDetail() {
 
         <TabsContent value="travelers">
           <Card className="border-slate-200"><CardContent className="p-4 space-y-3" data-testid="travelers-list">
-            {canTravel && <Button size="sm" onClick={() => setTravOpen(true)} className="bg-blue-600 hover:bg-blue-700" data-testid="add-traveler-button"><Plus className="h-4 w-4 mr-1" />Tambah Jamaah</Button>}
-            {data.travelers.length === 0 ? <p className="text-sm text-slate-400 text-center py-4">Belum ada jamaah.</p>
+            {canTravel && <Button size="sm" onClick={() => setTravOpen(true)} className="bg-blue-600 hover:bg-blue-700" data-testid="add-traveler-button"><Plus className="h-4 w-4 mr-1" />Tambah Peserta</Button>}
+            {data.travelers.length === 0 ? <p className="text-sm text-slate-400 text-center py-4">Belum ada peserta.</p>
               : data.travelers.map((t) => (
                 <TravelerCard key={t._id} t={t} docs={data.documents.filter((d) => d.traveler_id === t._id)} canDoc={canDoc} canTravel={canTravel} onChange={load} />
               ))}
@@ -226,7 +226,7 @@ function TravelerCard({ t, docs, canDoc, canTravel, onChange }) {
   const viewDoc = (d) => window.open(`${API}/documents/${d.id || d._id}/download?auth=${localStorage.getItem("token")}`, "_blank");
   const delDoc = async (d) => { if (!window.confirm(`Hapus dokumen ${d.doc_type}?`)) return; try { await api.delete(`/documents/${d.id || d._id}`); toast.success("Dokumen dihapus"); onChange(); } catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); } };
   const setStatus = async (docId, status) => { try { await api.patch(`/documents/${docId}/status`, { status }); onChange(); } catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); } };
-  const del = async () => { if (!window.confirm(`Hapus jamaah ${t.full_name}?`)) return; try { await api.delete(`/travelers/${t._id}`); toast.success("Jamaah dihapus"); onChange(); } catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); } };
+  const del = async () => { if (!window.confirm(`Hapus peserta ${t.full_name}?`)) return; try { await api.delete(`/travelers/${t._id}`); toast.success("Peserta dihapus"); onChange(); } catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); } };
   return (
     <div className="border border-slate-200 rounded-md p-3" data-testid={`traveler-${t._id}`}>
       <div className="flex items-center justify-between">
@@ -310,14 +310,14 @@ function TravelerDialog({ bookingId, onClose, onSaved }) {
   const save = async () => {
     if (!f.full_name.trim()) return toast.error("Nama wajib diisi");
     setSaving(true);
-    try { await api.post(`/bookings/${bookingId}/travelers`, f); toast.success("Jamaah ditambahkan"); onSaved(); }
+    try { await api.post(`/bookings/${bookingId}/travelers`, f); toast.success("Peserta ditambahkan"); onSaved(); }
     catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); } finally { setSaving(false); }
   };
   const F = ({ label, k, type }) => <div className="space-y-1"><Label className="text-xs">{label}</Label><Input type={type} value={f[k]} onChange={(e) => set(k)(e.target.value)} data-testid={`traveler-${k}`} /></div>;
   return (
     <Dialog open onOpenChange={onClose}>
       <DialogContent className="bg-white max-w-2xl max-h-[90vh] overflow-y-auto" data-testid="traveler-dialog">
-        <DialogHeader><DialogTitle className="font-display">Tambah Jamaah</DialogTitle></DialogHeader>
+        <DialogHeader><DialogTitle className="font-display">Tambah Peserta</DialogTitle></DialogHeader>
         <div className="grid grid-cols-2 gap-3 py-2">
           <F label="Full Name" k="full_name" /><F label="Passport Name" k="passport_name" />
           <F label="NIK" k="nik" /><F label="Passport" k="passport_number" />
@@ -404,7 +404,7 @@ function CancellationDialog({ booking, travelers, onClose, onSaved }) {
     if (!reason) return toast.error("Cancellation reason wajib diisi");
     const body = { booking_id: booking._id, reason, detail, notes,
       cancelled_traveler_ids: full ? [] : selected };
-    if (!full && selected.length === 0) return toast.error("Pilih minimal 1 jamaah");
+    if (!full && selected.length === 0) return toast.error("Pilih minimal 1 peserta");
     try { await api.post("/cancellations", body); toast.success("Cancellation diajukan — menunggu review & approval"); onSaved(); }
     catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); }
   };
@@ -415,11 +415,11 @@ function CancellationDialog({ booking, travelers, onClose, onSaved }) {
         <div className="space-y-3 text-sm">
           <div className="flex items-center gap-4">
             <label className="flex items-center gap-2"><input type="radio" checked={full} onChange={() => setFull(true)} data-testid="cancel-full" /> Full Cancellation</label>
-            <label className="flex items-center gap-2"><input type="radio" checked={!full} onChange={() => setFull(false)} data-testid="cancel-partial" /> Partial (pilih jamaah)</label>
+            <label className="flex items-center gap-2"><input type="radio" checked={!full} onChange={() => setFull(false)} data-testid="cancel-partial" /> Partial (pilih peserta)</label>
           </div>
           {!full && (
             <div className="border border-slate-200 rounded p-2 max-h-40 overflow-y-auto space-y-1">
-              {travelers.length === 0 ? <p className="text-slate-400">Belum ada jamaah.</p> : travelers.map((t) => (
+              {travelers.length === 0 ? <p className="text-slate-400">Belum ada peserta.</p> : travelers.map((t) => (
                 <label key={t._id} className="flex items-center gap-2" data-testid={`cancel-trav-${t._id}`}>
                   <input type="checkbox" checked={selected.includes(t._id)} onChange={() => toggle(t._id)} /> {t.full_name}
                 </label>

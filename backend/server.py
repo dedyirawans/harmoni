@@ -1389,6 +1389,7 @@ class CustomerUpdate(BaseModel):
     country: Optional[str] = None
     customer_type: Optional[str] = None
     customer_source: Optional[str] = None
+    sales_pic_id: Optional[str] = None
     tags: Optional[List[str]] = None
     notes: Optional[str] = None
 
@@ -1557,6 +1558,16 @@ async def update_customer(cid: str, body: CustomerUpdate, request: Request,
     if not can_access_record(user, doc):
         raise HTTPException(status_code=403, detail="403 Forbidden: not your customer")
     updates = {k: v for k, v in body.model_dump(exclude_none=True).items()}
+    new_pic = updates.pop("sales_pic_id", None)
+    if new_pic is not None:
+        if user["role"] != "super_admin":
+            raise HTTPException(status_code=403, detail="Hanya Super Admin yang dapat mengganti PIC sales")
+        pic = await db.users.find_one({"_id": ObjectId(new_pic)}) if ObjectId.is_valid(new_pic) else None
+        if not pic or pic.get("is_deleted"):
+            raise HTTPException(status_code=400, detail="Sales PIC tidak ditemukan")
+        updates["sales_pic_id"] = str(pic["_id"])
+        updates["sales_pic_name"] = pic.get("name")
+        updates["branch"] = pic.get("branch", doc.get("branch", ""))
     await db.customers.update_one({"_id": ObjectId(cid)}, {"$set": updates})
     await log_audit(user, "customer", "update_customer", request, record_id=cid, new=updates)
     return serialize(await db.customers.find_one({"_id": ObjectId(cid)}))
@@ -4848,17 +4859,37 @@ async def create_invoice(bid: str, body: dict, request: Request, user: dict = De
     settings = await get_settings_dict()
     number = await next_number((settings.get("numbering") or {}).get("invoice_prefix", "INV"), db.invoices, "invoice_number")
     due_date = (body or {}).get("due_date") or ""
-    amount = float((body or {}).get("amount") if (body or {}).get("amount") is not None else b.get("subtotal", 0))
+    # Nominal invoice = harga paket (per pax booking) x jumlah peserta terdaftar di booking.
+    # Fallback ke booking.pax bila belum ada peserta yang didaftarkan.
+    trav_count = await db.travelers.count_documents({"booking_id": bid})
+    booking_pax = max(int(b.get("pax") or 1), 1)
+    pax_count = trav_count if trav_count > 0 else booking_pax
+    per_pax = float(b.get("per_pax_price") or 0)
+    addon_total = sum(float(a.get("amount") or 0) for a in (b.get("addons") or []))
+    gross = per_pax * pax_count
+    subtotal = gross + addon_total
+    disc_pct = float(b.get("discount_percent") or 0)
+    if disc_pct > 0:
+        discount_amount = round(subtotal * disc_pct / 100)
+    else:
+        discount_amount = float(b.get("discount_amount") or 0)
+    tax_pct = float(b.get("tax_percent") or 0)
+    tax_unit = float(b.get("tax_amount") or 0) / booking_pax
+    tax_amount = round(tax_unit * pax_count)
+    total = subtotal - discount_amount + tax_amount
+    amount = subtotal
     doc = {"invoice_number": number, "booking_id": bid, "booking_number": b.get("booking_number"),
            "customer_id": b.get("customer_id"), "customer_name": b.get("customer_name"),
-           "package_id": b.get("package_id"), "package_name": b.get("package_name"), "pax": b.get("pax"),
-           "amount": amount, "discount_amount": b.get("discount_amount", 0), "discount_percent": b.get("discount_percent", 0),
-           "tax_percent": b.get("tax_percent", 0), "tax_amount": b.get("tax_amount", 0), "total": b.get("total", amount),
-           "paid_amount": 0, "outstanding": b.get("total", amount), "due_date": due_date, "status": "Unpaid",
+           "package_id": b.get("package_id"), "package_name": b.get("package_name"),
+           "pax": pax_count, "per_pax_price": per_pax,
+           "amount": amount, "subtotal": subtotal,
+           "discount_amount": discount_amount, "discount_percent": disc_pct,
+           "tax_percent": tax_pct, "tax_amount": tax_amount, "total": total,
+           "paid_amount": 0, "outstanding": total, "due_date": due_date, "status": "Unpaid",
            "sales_pic_id": b.get("sales_pic_id"), "sales_pic_name": b.get("sales_pic_name"), "branch": b.get("branch", ""),
            "terms": (await db.packages.find_one({"_id": ObjectId(b["package_id"])}) or {}).get("terms", ""),
            "created_at": now_iso(), "created_by": user["name"]}
-    doc.update(await tax_snapshot(now_iso()[:10], amount))
+    doc.update(await tax_snapshot(now_iso()[:10], subtotal))
     res = await db.invoices.insert_one(doc)
     await _recompute_invoice_status(str(res.inserted_id))
     await log_audit(user, "invoice", "create", request, record_id=str(res.inserted_id), new={"number": number})

@@ -21,7 +21,7 @@ export default function Bookings() {
     <div className="space-y-6" data-testid="bookings-page">
       <div>
         <h1 className="font-display text-3xl font-bold text-slate-900">Booking</h1>
-        <p className="text-slate-500 mt-1">Kelola booking, jamaah, dokumen, invoice, dan pembayaran.</p>
+        <p className="text-slate-500 mt-1">Kelola booking, peserta, dokumen, invoice, dan pembayaran.</p>
       </div>
       {rows === null ? <div className="p-12 flex justify-center"><Loader2 className="h-6 w-6 animate-spin text-blue-600" /></div>
         : rows.length === 0 ? <Card className="border-slate-200"><CardContent className="p-12 text-center text-slate-500"><CalendarCheck className="h-8 w-8 mx-auto text-slate-300" />Belum ada booking. Konversi quotation yang accepted.</CardContent></Card>
