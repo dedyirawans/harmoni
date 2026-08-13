@@ -660,6 +660,214 @@ async def dashboard_charts(user: dict = Depends(get_current_user)):
             "monthly_leads": monthly_leads, "packages_by_type": packages_by_type}
 
 
+# ----------------------------------------------------------------------------
+# Phase 9N — Sales & Financial Forecasting (Super Admin only)
+# ----------------------------------------------------------------------------
+STAGE_PROBABILITY = {
+    "NEW": 0.10, "CONTACTED": 0.20, "QUALIFIED": 0.30,
+    "QUOTATION": 0.50, "NEGOTIATION": 0.70, "BOOKING": 0.90,
+}
+
+
+def _shift_month(y, m, k):
+    idx = (y * 12 + (m - 1)) + k
+    return f"{idx // 12:04d}-{idx % 12 + 1:02d}"
+
+
+@api_router.get("/forecast/dashboard")
+async def forecast_dashboard(user: dict = Depends(require_role("super_admin"))):
+    now = datetime.now(timezone.utc)
+    cur = _shift_month(now.year, now.month, 0)
+    nxt = _shift_month(now.year, now.month, 1)
+    m3 = [_shift_month(now.year, now.month, i) for i in range(3)]
+    window = [_shift_month(now.year, now.month, i) for i in range(6)]
+
+    leads = await db.leads.find({}).to_list(5000)
+    quotes = await db.quotations.find({}).to_list(5000)
+    bookings = await db.bookings.find({}).to_list(5000)
+    invoices = await db.invoices.find({}).to_list(5000)
+    payments = await db.payments.find({}).to_list(5000)
+    sup_pays = await db.supplier_payments.find({}).to_list(5000)
+    comm_items = await db.commission_items.find({}).to_list(5000)
+    refunds = await db.refunds.find({}).to_list(5000)
+    expenses = await db.expenses.find({}).to_list(5000)
+
+    # ---------- 1) SALES FORECAST (weighted pipeline) ----------
+    q_by_lead = {}
+    for q in quotes:
+        lid = q.get("lead_id")
+        if lid:
+            q_by_lead[lid] = q_by_lead.get(lid, 0) + float(q.get("total") or 0)
+    pipeline = []
+    for l in leads:
+        st = l.get("status")
+        if st not in STAGE_PROBABILITY:
+            continue
+        lid = str(l["_id"])
+        deal = float(l.get("budget") or 0)
+        if deal <= 0:
+            deal = q_by_lead.get(lid, 0)
+        prob = STAGE_PROBABILITY[st]
+        close = (l.get("departure_date") or l.get("next_follow_up") or l.get("created_at") or "")[:7]
+        pipeline.append({
+            "lead_id": lid, "lead_code": l.get("lead_code"), "customer": l.get("customer_name"),
+            "stage": st, "value": deal, "probability": prob, "weighted": round(deal * prob, 2),
+            "close_month": close, "sales": l.get("sales_pic_name"),
+        })
+    pipeline_value = round(sum(p["value"] for p in pipeline), 2)
+    weighted_value = round(sum(p["weighted"] for p in pipeline), 2)
+    stage_summary = [{
+        "stage": st, "probability": STAGE_PROBABILITY[st],
+        "count": sum(1 for p in pipeline if p["stage"] == st),
+        "value": round(sum(p["value"] for p in pipeline if p["stage"] == st), 2),
+        "weighted": round(sum(p["weighted"] for p in pipeline if p["stage"] == st), 2),
+    } for st in STAGE_PROBABILITY]
+
+    def _bkt(months):
+        ms = months if isinstance(months, list) else [months]
+        return {
+            "pipeline": round(sum(p["value"] for p in pipeline if p["close_month"] in ms), 2),
+            "weighted": round(sum(p["weighted"] for p in pipeline if p["close_month"] in ms), 2),
+        }
+
+    # ACTUAL booked revenue (won) per month — from bookings created_at
+    actual_by_month = {}
+    for b in bookings:
+        mk = (b.get("created_at") or "")[:7]
+        actual_by_month[mk] = actual_by_month.get(mk, 0) + float(b.get("total") or 0)
+
+    def _actual(months):
+        ms = months if isinstance(months, list) else [months]
+        return round(sum(v for k, v in actual_by_month.items() if k in ms), 2)
+
+    sales_forecast = {
+        "pipeline_value": pipeline_value,
+        "weighted_value": weighted_value,
+        "stage_summary": stage_summary,
+        "buckets": {
+            "current_month": {"label": cur, **_bkt(cur), "actual": _actual(cur)},
+            "next_month": {"label": nxt, **_bkt(nxt), "actual": _actual(nxt)},
+            "next_3_months": {"label": f"{m3[0]} → {m3[-1]}", "months": m3, **_bkt(m3), "actual": _actual(m3)},
+        },
+        "pipeline": sorted(pipeline, key=lambda p: -p["weighted"])[:30],
+    }
+
+    # ---------- 3) RECEIVABLE / CASH-IN FORECAST (payment schedule) ----------
+    recv_items = []
+    recv_by_month = {}
+    for b in bookings:
+        for it in (b.get("payment_schedule") or []):
+            out = float(it.get("outstanding") or 0)
+            if out <= 0 or it.get("status") == "PAID":
+                continue
+            mk = (it.get("due_date") or "")[:7]
+            recv_by_month[mk] = recv_by_month.get(mk, 0) + out
+            recv_items.append({
+                "booking_number": b.get("booking_number"), "customer": b.get("customer_name"),
+                "label": it.get("label"), "due_date": it.get("due_date"),
+                "amount": round(out, 2), "status": it.get("status"),
+            })
+    total_receivable = round(sum(recv_by_month.values()), 2)
+    receivable_forecast = {
+        "total_outstanding": total_receivable,
+        "by_month": [{"month": mk, "amount": round(recv_by_month.get(mk, 0), 2)} for mk in window],
+        "items": sorted(recv_items, key=lambda x: x.get("due_date") or "")[:40],
+    }
+
+    # ---------- Upcoming COMMISSION (payable) ----------
+    comm_by_month = {}
+    comm_list = []
+    for ci in comm_items:
+        mk = (ci.get("payout_month") or ci.get("commission_month") or "")[:7]
+        amt = float(ci.get("commission_amount") or 0)
+        if amt <= 0:
+            continue
+        comm_by_month[mk] = comm_by_month.get(mk, 0) + amt
+        comm_list.append({
+            "sales": ci.get("sales_pic_name"), "customer": ci.get("customer_name"),
+            "booking_number": ci.get("booking_number"), "payout_month": mk,
+            "amount": round(amt, 2), "package": ci.get("package_name"),
+        })
+    upcoming_commission = {
+        "total": round(sum(v for k, v in comm_by_month.items() if k >= cur), 2),
+        "by_month": [{"month": mk, "amount": round(comm_by_month.get(mk, 0), 2)} for mk in window],
+        "items": sorted([c for c in comm_list if c["payout_month"] >= cur], key=lambda x: x["payout_month"])[:40],
+    }
+
+    # ---------- Upcoming EXPENSE (supplier payment outstanding + refund pending) ----------
+    sup_by_month, refund_by_month = {}, {}
+    exp_items = []
+    for sp in sup_pays:
+        out = float(sp.get("amount") or 0) - float(sp.get("paid") or 0)
+        if out <= 0:
+            continue
+        mk = (sp.get("due_date") or "")[:7]
+        sup_by_month[mk] = sup_by_month.get(mk, 0) + out
+        exp_items.append({
+            "type": "SUPPLIER", "name": sp.get("supplier_name"), "invoice_number": sp.get("invoice_number"),
+            "due_date": sp.get("due_date"), "amount": round(out, 2),
+        })
+    for r in refunds:
+        if (r.get("status") or "").upper() != "PENDING":
+            continue
+        amt = float(r.get("amount") or 0)
+        mk = (r.get("date") or r.get("created_at") or "")[:7]
+        refund_by_month[mk] = refund_by_month.get(mk, 0) + amt
+        exp_items.append({
+            "type": "REFUND", "name": r.get("customer_name"), "invoice_number": r.get("reason"),
+            "due_date": r.get("date"), "amount": round(amt, 2),
+        })
+    total_sup = round(sum(sup_by_month.values()), 2)
+    total_refund_pending = round(sum(refund_by_month.values()), 2)
+    upcoming_expense = {
+        "total": round(total_sup + total_refund_pending, 2),
+        "supplier_total": total_sup,
+        "refund_total": total_refund_pending,
+        "by_month": [{"month": mk, "supplier": round(sup_by_month.get(mk, 0), 2),
+                      "refund": round(refund_by_month.get(mk, 0), 2),
+                      "total": round(sup_by_month.get(mk, 0) + refund_by_month.get(mk, 0), 2)} for mk in window],
+        "items": sorted(exp_items, key=lambda x: x.get("due_date") or "")[:40],
+    }
+
+    # ---------- 2) CASH FLOW FORECAST (In - Out per month) ----------
+    cf_series = []
+    for mk in window:
+        cin = round(recv_by_month.get(mk, 0), 2)
+        cout = round(sup_by_month.get(mk, 0) + refund_by_month.get(mk, 0) + comm_by_month.get(mk, 0), 2)
+        cf_series.append({
+            "month": mk, "cash_in": cin,
+            "supplier": round(sup_by_month.get(mk, 0), 2),
+            "commission": round(comm_by_month.get(mk, 0), 2),
+            "refund": round(refund_by_month.get(mk, 0), 2),
+            "cash_out": cout, "net": round(cin - cout, 2),
+        })
+
+    # ACTUAL current month (realized) — payments in, expenses/refunds paid out
+    act_in = round(sum(float(p.get("amount") or 0) for p in payments if (p.get("payment_date") or p.get("created_at") or "")[:7] == cur), 2)
+    act_exp = sum(float(e.get("amount") or 0) for e in expenses if (e.get("date") or e.get("created_at") or "")[:7] == cur)
+    act_refund = sum(float(r.get("amount") or 0) for r in refunds if (r.get("status") or "").upper() == "PAID" and (r.get("date") or r.get("created_at") or "")[:7] == cur)
+    act_sup_paid = sum(float(sp.get("paid") or 0) for sp in sup_pays if (sp.get("created_at") or sp.get("due_date") or "")[:7] == cur)
+    act_out = round(act_exp + act_refund + act_sup_paid, 2)
+    cash_flow_forecast = {
+        "series": cf_series,
+        "actual_current_month": {"month": cur, "cash_in": act_in, "cash_out": act_out, "net": round(act_in - act_out, 2)},
+        "forecast_total_in": round(sum(s["cash_in"] for s in cf_series), 2),
+        "forecast_total_out": round(sum(s["cash_out"] for s in cf_series), 2),
+    }
+
+    return {
+        "generated_at": now_iso(),
+        "probabilities": STAGE_PROBABILITY,
+        "window": window,
+        "sales_forecast": sales_forecast,
+        "cash_flow_forecast": cash_flow_forecast,
+        "receivable_forecast": receivable_forecast,
+        "upcoming_expense": upcoming_expense,
+        "upcoming_commission": upcoming_commission,
+    }
+
+
+
 @api_router.get("/notifications")
 async def notifications(unread_only: bool = False, user: dict = Depends(require_permission("notifications.view"))):
     q = {"$or": [{"user_id": user["_id"]}, {"role": user["role"]}]}

@@ -37,6 +37,7 @@ import Commission from "@/pages/Commission";
 import Approvals from "@/pages/Approvals";
 import Tax from "@/pages/Tax";
 import Reports from "@/pages/Reports";
+import Forecast from "@/pages/Forecast";
 import N8N from "@/pages/N8N";
 import Tasks from "@/pages/Tasks";
 import ApprovalCenter from "@/pages/ApprovalCenter";
@@ -64,6 +65,7 @@ const PAGES = {
   "/approvals": Approvals,
   "/tax": Tax,
   "/reports": Reports,
+  "/forecast": Forecast,
   "/n8n": N8N,
   "/tasks": Tasks,
   "/approval-center": ApprovalCenter,

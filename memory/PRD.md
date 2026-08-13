@@ -1,3 +1,11 @@
+## PHASE 9N — Sales & Financial Forecasting (2026-06) — DONE (Verified curl E2E + RBAC 403 + screenshots)
+- Backend `GET /api/forecast/dashboard` (super_admin only, `require_role`). Returns: sales_forecast, cash_flow_forecast, receivable_forecast, upcoming_expense, upcoming_commission.
+- Sales Forecast: pipeline weighted by STAGE_PROBABILITY (NEW 10%/CONTACTED 20%/QUALIFIED 30%/QUOTATION 50%/NEGOTIATION 70%/BOOKING 90%). Deal value = lead.budget → fallback quotation total. Buckets: Current/Next/Next-3-Months (weighted, pipeline raw, actual booked).
+- Cash Flow Forecast: 6-month window. Cash In = booking payment_schedule outstanding by due_date. Cash Out = supplier outstanding (amount−paid) + commission payout + refund PENDING. Net per month. ACTUAL current month = realized payments in vs expenses/refunds-paid/supplier-paid out.
+- Receivable Forecast (payment_schedule outstanding), Upcoming Expense (supplier + refund), Upcoming Commission (commission_items by payout_month).
+- Frontend: new `Forecast.jsx` page, route `/forecast` gated by perm "super_admin" (hasPerm returns true only for super_admin). Menu "Forecasting" added. Recharts bar/line. ACTUAL vs FORECAST badges throughout — never mixed with accounting actuals.
+
+
 ## PHASE 9N — Internal AI Sales Assistant UI (2026-06) — DONE (Verified curl E2E + screenshot)
 - Backend `POST /api/sales/ai-assist/{customer_id}` (mode: summary/followup/suggestion) via Gemini 3 Flash; HPP/modal/margin stripped; requires_approval=True.
 - Frontend: New "AI Assistant" tab in Customer 360 (`Customer360.jsx` → `AIAssistantTab`) with 3 action cards: Ringkas Customer, Draft Follow-Up, Saran Respons & Paket.
