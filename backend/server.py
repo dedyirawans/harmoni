@@ -2089,6 +2089,57 @@ async def sales_performance(frm: Optional[str] = None, to: Optional[str] = None,
                          "by_conversion": top("conversion_rate"), "by_activity": top("activity_score")}}
 
 
+@api_router.post("/sales/ai-assist/{customer_id}")
+async def sales_ai_assist(customer_id: str, body: dict, user: dict = Depends(require_permission("sales.view"))):
+    import json as _json
+    from emergentintegrations.llm.chat import LlmChat, UserMessage
+    mode = (body or {}).get("mode", "summary")
+    if not ObjectId.is_valid(customer_id):
+        raise HTTPException(status_code=404, detail="Customer tidak ditemukan")
+    c = await db.customers.find_one({"_id": ObjectId(customer_id), "is_deleted": {"$ne": True}})
+    if not c:
+        raise HTTPException(status_code=404, detail="Customer tidak ditemukan")
+    if user["role"] == "sales" and str(c.get("sales_pic_id")) != user["_id"]:
+        raise HTTPException(status_code=403, detail="Bukan customer Anda")
+    cid = str(c["_id"])
+    leads = await db.leads.find({"customer_id": cid}).to_list(50)
+    comms = await db.communications.find({"customer_id": cid}).sort("timestamp", -1).to_list(20)
+    quotes = await db.quotations.find({"customer_id": cid}).to_list(20)
+    bks = await db.bookings.find({"customer_id": cid}).to_list(20)
+    fus = await db.follow_ups.find({"customer_id": cid}).sort("created_at", -1).to_list(10)
+    pkgs = await db.packages.find({"is_active": True}).to_list(30)
+
+    def m(n):
+        return f"Rp{int(float(n or 0)):,}".replace(",", ".")
+
+    ctx = {
+        "customer": {"name": c.get("full_name"), "phone": c.get("whatsapp") or c.get("phone"), "city": c.get("city"),
+                     "interest": c.get("interest") or c.get("notes"), "stage": c.get("stage")},
+        "interests": [l.get("interest") or l.get("notes") for l in leads],
+        "conversations": [{"t": (x.get("timestamp") or "")[:16], "dir": x.get("direction"), "ch": x.get("channel"),
+                           "msg": (x.get("message") or x.get("content") or "")[:200]} for x in comms],
+        "quotations": [{"pkg": q.get("package_name"), "pax": q.get("pax"), "total": m(q.get("total")), "status": q.get("status")} for q in quotes],
+        "bookings": [{"pkg": b.get("package_name"), "pax": b.get("pax"), "status": b.get("status"), "total": m(b.get("total"))} for b in bks],
+        "last_follow_up": ({"date": (fus[0].get("created_at") or "")[:16], "type": fus[0].get("activity_type"), "notes": fus[0].get("notes")} if fus else None),
+        "packages_catalog": [{"name": p.get("package_name"), "price": m(p.get("selling_price") or p.get("price")), "type": p.get("package_type")} for p in pkgs],
+    }
+    prompts = {
+        "summary": "Ringkas customer ini untuk sales (Bahasa Indonesia): profil, minat, ringkasan percakapan, status quotation & booking, dan follow up terakhir. Singkat, poin-poin.",
+        "followup": "Buat 1 draft pesan follow-up WhatsApp yang sopan, personal, dan persuasif (Bahasa Indonesia) berdasarkan history customer, dengan ajakan langkah berikutnya. Ini hanya draft; jangan kirim.",
+        "suggestion": "Berikan: 1) Recommended package (pilih dari katalog) + alasan singkat, 2) Suggested response untuk pesan terakhir customer, 3) Follow up strategy. Bahasa Indonesia, ringkas.",
+    }
+    sys = ("Anda asisten internal untuk tim SALES travel umrah. Gunakan HANYA data yang diberikan. "
+           "DILARANG menyebut HPP, modal, biaya supplier, atau margin. Output hanya saran/draft; "
+           "sales wajib menyetujui sebelum mengirim ke customer.")
+    chat = LlmChat(api_key=os.environ["EMERGENT_LLM_KEY"], session_id=f"ai-{cid}-{mode}", system_message=sys).with_model("gemini", "gemini-3-flash-preview")
+    prompt = prompts.get(mode, prompts["summary"]) + "\n\nDATA:\n" + _json.dumps(ctx, ensure_ascii=False)
+    try:
+        resp = await chat.send_message(UserMessage(text=prompt))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"AI error: {e}")
+    return {"mode": mode, "draft": resp, "requires_approval": True, "customer_name": c.get("full_name")}
+
+
 class SalesTargetInput(BaseModel):
     sales_id: str
     period: str

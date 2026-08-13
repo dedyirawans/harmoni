@@ -14,6 +14,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import {
   ArrowLeft, Loader2, Phone, Mail, MapPin, StickyNote, MessageSquare, CalendarClock,
   Briefcase, Clock, User as UserIcon, Upload, Eye, Trash2, RefreshCw,
+  Sparkles, Copy, ShieldCheck, FileText, Send, Lightbulb,
 } from "lucide-react";
 import { toast } from "sonner";
 import { expiryTone, daysUntil } from "@/components/ExpiringDocsWidget";
@@ -123,6 +124,7 @@ export default function Customer360() {
               <TabsTrigger value="followups" data-testid="tab-followups">Follow Ups</TabsTrigger>
               <TabsTrigger value="documents" data-testid="tab-documents">Documents</TabsTrigger>
               <TabsTrigger value="timeline" data-testid="tab-timeline">Activity Timeline</TabsTrigger>
+              <TabsTrigger value="ai-assistant" data-testid="tab-ai-assistant"><Sparkles className="h-3.5 w-3.5 mr-1 text-purple-500" aria-hidden="true" />AI Assistant</TabsTrigger>
             </TabsList>
 
             <TabsContent value="overview">
@@ -260,6 +262,10 @@ export default function Customer360() {
                 )}
               </CardContent></Card>
             </TabsContent>
+
+            <TabsContent value="ai-assistant">
+              <AIAssistantTab customerId={id} customerName={c.full_name} />
+            </TabsContent>
           </Tabs>
         </div>
       </div>
@@ -271,6 +277,107 @@ export default function Customer360() {
 
 function Info({ label, value }) {
   return <div><span className="text-slate-400">{label}: </span><span className="text-slate-700">{value || "—"}</span></div>;
+}
+
+const AI_ACTIONS = [
+  { mode: "summary", label: "Ringkas Customer", desc: "Ringkasan profil, minat, percakapan, quotation/booking & follow-up terakhir.", icon: FileText, color: "text-blue-600", bg: "bg-blue-50 border-blue-200 hover:bg-blue-100" },
+  { mode: "followup", label: "Draft Follow-Up", desc: "Draft pesan WhatsApp follow-up yang personal & persuasif.", icon: Send, color: "text-emerald-600", bg: "bg-emerald-50 border-emerald-200 hover:bg-emerald-100" },
+  { mode: "suggestion", label: "Saran Respons & Paket", desc: "Rekomendasi paket, saran balasan, dan strategi follow-up.", icon: Lightbulb, color: "text-amber-600", bg: "bg-amber-50 border-amber-200 hover:bg-amber-100" },
+];
+
+function AIAssistantTab({ customerId, customerName }) {
+  const [loading, setLoading] = useState(null); // mode currently loading
+  const [result, setResult] = useState(null); // { mode, draft }
+
+  const run = async (mode) => {
+    setLoading(mode);
+    setResult(null);
+    try {
+      const r = await api.post(`/sales/ai-assist/${customerId}`, { mode });
+      setResult({ mode, draft: r.data.draft || "" });
+    } catch (e) {
+      toast.error(formatApiErrorDetail(e.response?.data?.detail) || "AI gagal merespons");
+    } finally {
+      setLoading(null);
+    }
+  };
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(result.draft);
+      toast.success("Disalin ke clipboard");
+    } catch { toast.error("Gagal menyalin"); }
+  };
+
+  const activeAction = result ? AI_ACTIONS.find((a) => a.mode === result.mode) : null;
+
+  return (
+    <div className="space-y-4" data-testid="c360-ai-assistant">
+      <Card className="border-purple-200 bg-purple-50/40 shadow-sm">
+        <CardContent className="p-4 flex items-start gap-3">
+          <div className="h-9 w-9 rounded-lg bg-purple-600 text-white flex items-center justify-center shrink-0">
+            <Sparkles className="h-5 w-5" aria-hidden="true" />
+          </div>
+          <div>
+            <p className="font-display text-base font-bold text-slate-900">AI Sales Assistant</p>
+            <p className="text-sm text-slate-500">Bantuan AI internal untuk {customerName}. Semua output hanya draft &mdash; wajib disetujui sales sebelum dikirim.</p>
+          </div>
+        </CardContent>
+      </Card>
+
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        {AI_ACTIONS.map((a) => {
+          const Icon = a.icon;
+          const isLoading = loading === a.mode;
+          return (
+            <button
+              key={a.mode}
+              onClick={() => run(a.mode)}
+              disabled={!!loading}
+              className={`text-left rounded-xl border p-4 transition-colors duration-200 disabled:opacity-60 disabled:cursor-not-allowed ${a.bg}`}
+              data-testid={`ai-action-${a.mode}`}
+            >
+              <div className="flex items-center gap-2 mb-1.5">
+                {isLoading ? <Loader2 className={`h-5 w-5 animate-spin ${a.color}`} /> : <Icon className={`h-5 w-5 ${a.color}`} aria-hidden="true" />}
+                <span className="font-semibold text-slate-900 text-sm">{a.label}</span>
+              </div>
+              <p className="text-xs text-slate-500 leading-relaxed">{a.desc}</p>
+            </button>
+          );
+        })}
+      </div>
+
+      {loading && !result && (
+        <Card className="border-slate-200 shadow-sm"><CardContent className="p-8 flex flex-col items-center gap-3 text-slate-400" data-testid="ai-loading">
+          <Loader2 className="h-6 w-6 animate-spin text-purple-600" />
+          <p className="text-sm">AI sedang menyusun jawaban&hellip;</p>
+        </CardContent></Card>
+      )}
+
+      {result && (
+        <Card className="border-slate-200 shadow-sm" data-testid="ai-result">
+          <CardContent className="p-5">
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-2">
+                {activeAction && <activeAction.icon className={`h-4 w-4 ${activeAction.color}`} aria-hidden="true" />}
+                <span className="font-semibold text-slate-900 text-sm">{activeAction?.label}</span>
+              </div>
+              <Button size="sm" variant="outline" onClick={copy} data-testid="ai-copy-btn">
+                <Copy className="h-4 w-4 mr-1" aria-hidden="true" />Salin
+              </Button>
+            </div>
+            <div className="rounded-lg bg-slate-50 border border-slate-100 p-4 text-sm text-slate-700 whitespace-pre-wrap leading-relaxed" data-testid="ai-result-text">
+              {result.draft}
+            </div>
+            <div className="mt-3 flex items-center gap-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2" data-testid="ai-approval-notice">
+              <ShieldCheck className="h-4 w-4 shrink-0" aria-hidden="true" />
+              <span>Draft ini perlu ditinjau &amp; disetujui sales sebelum dikirim ke customer. AI tidak mengirim pesan secara otomatis.</span>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+    </div>
+  );
 }
 function Rows({ items, row, empty, testid }) {
   return (

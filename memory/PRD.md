@@ -1,3 +1,10 @@
+## PHASE 9N — Internal AI Sales Assistant UI (2026-06) — DONE (Verified curl E2E + screenshot)
+- Backend `POST /api/sales/ai-assist/{customer_id}` (mode: summary/followup/suggestion) via Gemini 3 Flash; HPP/modal/margin stripped; requires_approval=True.
+- Frontend: New "AI Assistant" tab in Customer 360 (`Customer360.jsx` → `AIAssistantTab`) with 3 action cards: Ringkas Customer, Draft Follow-Up, Saran Respons & Paket.
+- Result panel with Copy button + amber notice "Draft perlu disetujui sales sebelum dikirim" (human-in-the-loop). Loading & error states handled.
+- Verified: login sales → /crm/:id → AI tab → summary returns real Indonesian output rendered in UI.
+
+
 ## PHASE 9M.5 — Fix Preview Error + Rich-Text Terms (2026-06) — DONE (Verified testing_agent iteration_37: BE 14/14, FE 100%)
 - **Bug fix**: preview PDF (khususnya Quotation) gagal 500 karena HTML tak aman dari contentEditable/`<br>` merusak reportlab. `_clean_terms()` kini menormalkan `<br ...>`→`<br/>`, tag b/i/u ber-atribut → tag polos, `<ol>/<ul>/<li>`→daftar bernomor/butir, buang tag lain. Diterapkan di terms & footer semua PDF.
 - **Rich-text editor Terms**: field Terms Invoice & Quotation di tab Template Dokumen kini editor sederhana (contentEditable) dengan toolbar Bold/Italic/Underline/• list/1. list; hasil HTML tersimpan & dirender rapi di PDF.
