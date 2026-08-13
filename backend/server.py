@@ -1569,6 +1569,10 @@ async def update_customer(cid: str, body: CustomerUpdate, request: Request,
         updates["sales_pic_name"] = pic.get("name")
         updates["branch"] = pic.get("branch", doc.get("branch", ""))
     await db.customers.update_one({"_id": ObjectId(cid)}, {"$set": updates})
+    if new_pic is not None and str(doc.get("sales_pic_id") or "") != str(new_pic):
+        await log_activity(cid, None, "pic_change",
+                           f"PIC Sales diganti: {doc.get('sales_pic_name') or '—'} → {updates.get('sales_pic_name')}",
+                           f"Diubah oleh {user['name']}", user)
     await log_audit(user, "customer", "update_customer", request, record_id=cid, new=updates)
     return serialize(await db.customers.find_one({"_id": ObjectId(cid)}))
 
@@ -4920,6 +4924,118 @@ async def get_invoice(iid: str, user: dict = Depends(require_permission("invoice
         raise HTTPException(status_code=404, detail="Invoice not found")
     payments = [serialize(p) for p in await db.payments.find({"invoice_id": iid}).sort("created_at", -1).to_list(500)]
     return {"invoice": serialize(inv), "payments": payments}
+
+
+async def _booking_invoice_amounts(b, pax_count=None):
+    """Nominal invoice = per_pax_price paket x jumlah peserta terdaftar (fallback booking.pax)."""
+    booking_pax = max(int(b.get("pax") or 1), 1)
+    if pax_count is None:
+        tc = await db.travelers.count_documents({"booking_id": str(b["_id"])})
+        pax_count = tc if tc > 0 else booking_pax
+    pax_count = max(int(pax_count), 1)
+    per_pax = float(b.get("per_pax_price") or 0)
+    addon_total = sum(float(a.get("amount") or 0) for a in (b.get("addons") or []))
+    gross = per_pax * pax_count
+    subtotal = gross + addon_total
+    disc_pct = float(b.get("discount_percent") or 0)
+    discount_amount = round(subtotal * disc_pct / 100) if disc_pct > 0 else float(b.get("discount_amount") or 0)
+    tax_pct = float(b.get("tax_percent") or 0)
+    tax_unit = float(b.get("tax_amount") or 0) / booking_pax
+    tax_amount = round(tax_unit * pax_count)
+    total = subtotal - discount_amount + tax_amount
+    return {"pax": pax_count, "per_pax_price": per_pax, "amount": subtotal, "subtotal": subtotal,
+            "discount_amount": discount_amount, "discount_percent": disc_pct,
+            "tax_percent": tax_pct, "tax_amount": tax_amount, "total": total}
+
+
+class BulkPicReassign(BaseModel):
+    customer_ids: List[str]
+    sales_pic_id: str
+
+
+@api_router.post("/customers/bulk-reassign-pic")
+async def bulk_reassign_pic(body: BulkPicReassign, request: Request, user: dict = Depends(require_role("super_admin"))):
+    pic = await db.users.find_one({"_id": ObjectId(body.sales_pic_id)}) if ObjectId.is_valid(body.sales_pic_id) else None
+    if not pic or pic.get("is_deleted"):
+        raise HTTPException(status_code=400, detail="Sales PIC tidak ditemukan")
+    ids = [ObjectId(c) for c in body.customer_ids if ObjectId.is_valid(c)]
+    if not ids:
+        raise HTTPException(status_code=400, detail="Tidak ada customer dipilih")
+    custs = await db.customers.find({"_id": {"$in": ids}}).to_list(5000)
+    count = 0
+    for c in custs:
+        if str(c.get("sales_pic_id") or "") == str(pic["_id"]):
+            continue
+        await db.customers.update_one({"_id": c["_id"]}, {"$set": {
+            "sales_pic_id": str(pic["_id"]), "sales_pic_name": pic.get("name"),
+            "branch": pic.get("branch", c.get("branch", ""))}})
+        await log_activity(str(c["_id"]), None, "pic_change",
+                           f"PIC Sales diganti (massal): {c.get('sales_pic_name') or '—'} → {pic.get('name')}",
+                           f"Diubah oleh {user['name']}", user)
+        count += 1
+    await log_audit(user, "customer", "bulk_reassign_pic", request,
+                    new={"count": count, "sales_pic_id": str(pic["_id"]), "sales_pic_name": pic.get("name")})
+    return {"reassigned": count, "sales_pic_name": pic.get("name")}
+
+
+@api_router.put("/invoices/{iid}")
+async def update_invoice(iid: str, body: dict, request: Request, user: dict = Depends(require_role("super_admin"))):
+    inv = await db.invoices.find_one({"_id": ObjectId(iid)}) if ObjectId.is_valid(iid) else None
+    if not inv:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    body = body or {}
+    old_per_pax = float(inv.get("per_pax_price") or 0)
+    old_pax = max(int(inv.get("pax") or 1), 1)
+    addon_component = max(float(inv.get("subtotal") or inv.get("amount") or 0) - old_per_pax * old_pax, 0)
+    per_pax = float(body.get("per_pax_price", old_per_pax) or 0)
+    pax = max(int(body.get("pax", old_pax) or 1), 1)
+    subtotal = per_pax * pax + addon_component
+    discount_amount = float(body.get("discount_amount", inv.get("discount_amount") or 0) or 0)
+    tax_amount = float(body.get("tax_amount", inv.get("tax_amount") or 0) or 0)
+    total = subtotal - discount_amount + tax_amount
+    disc_pct = round(discount_amount / subtotal * 100, 2) if subtotal else 0.0
+    upd = {"due_date": body.get("due_date", inv.get("due_date")), "pax": pax, "per_pax_price": per_pax,
+           "subtotal": subtotal, "amount": subtotal, "discount_amount": discount_amount,
+           "discount_percent": disc_pct, "tax_amount": tax_amount, "total": total}
+    if body.get("notes") is not None:
+        upd["notes"] = body.get("notes")
+    await db.invoices.update_one({"_id": ObjectId(iid)}, {"$set": upd})
+    await _recompute_invoice_status(iid)
+    await log_audit(user, "invoice", "update", request, record_id=iid,
+                    old={"total": inv.get("total")}, new={"total": total})
+    inv2 = await db.invoices.find_one({"_id": ObjectId(iid)})
+    return serialize(inv2)
+
+
+@api_router.delete("/invoices/{iid}")
+async def delete_invoice(iid: str, request: Request, user: dict = Depends(require_role("super_admin"))):
+    inv = await db.invoices.find_one({"_id": ObjectId(iid)}) if ObjectId.is_valid(iid) else None
+    if not inv:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    pays = await db.payments.count_documents({"invoice_id": iid, "status": {"$ne": "VOID"}})
+    if pays > 0 or float(inv.get("paid_amount") or 0) > 0:
+        raise HTTPException(status_code=400, detail="Invoice memiliki pembayaran. VOID pembayaran terlebih dahulu sebelum menghapus.")
+    await db.invoices.delete_one({"_id": ObjectId(iid)})
+    await log_audit(user, "invoice", "delete", request, record_id=iid, old={"invoice_number": inv.get("invoice_number"), "total": inv.get("total")})
+    return {"ok": True, "deleted": inv.get("invoice_number")}
+
+
+@api_router.post("/invoices/{iid}/regenerate")
+async def regenerate_invoice(iid: str, request: Request, user: dict = Depends(require_permission("invoice.manage"))):
+    inv = await db.invoices.find_one({"_id": ObjectId(iid)}) if ObjectId.is_valid(iid) else None
+    if not inv:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    b = await db.bookings.find_one({"_id": ObjectId(inv["booking_id"])}) if ObjectId.is_valid(inv.get("booking_id") or "") else None
+    if not b:
+        raise HTTPException(status_code=400, detail="Booking sumber tidak ditemukan")
+    amounts = await _booking_invoice_amounts(b)
+    await db.invoices.update_one({"_id": ObjectId(iid)}, {"$set": amounts})
+    await _recompute_invoice_status(iid)
+    await log_audit(user, "invoice", "regenerate", request, record_id=iid,
+                    old={"total": inv.get("total"), "pax": inv.get("pax")},
+                    new={"total": amounts["total"], "pax": amounts["pax"]})
+    inv2 = await db.invoices.find_one({"_id": ObjectId(iid)})
+    return serialize(inv2)
 
 
 @api_router.get("/invoices/{iid}/pdf")

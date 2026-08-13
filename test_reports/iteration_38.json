@@ -1,0 +1,27 @@
+{
+  "summary": "Iteration_38 E2E verification for the 5 enhancements (peserta-mismatch warning + PaxCountBadge, PIC-change timeline entry, Bulk Pindah PIC, Regenerate/Edit/Delete invoice, invoice nominal = per_pax x traveler count). Backend pytest suite (8/8 PASS) covers: sales 403 on PUT /api/customers/{id} with sales_pic_id and on POST /api/customers/bulk-reassign-pic; POST /api/bookings/6a7ac3e26aad3a79a0844111/invoice → pax=1, subtotal 50,000,000, total 48,610,000; PUT /api/invoices/{iid} pax=3 per_pax=10jt → total 30,000,000 (verified with GET); POST /api/invoices/{iid}/regenerate reverts to pax=1 total 48,610,000; DELETE /api/invoices/{iid} → 400 when a payment exists (voided via POST /api/payments/{pid}/void for cleanup, then delete OK); PUT /api/customers/{cid} with sales_pic_id logs pic_change activity that surfaces as a 'PIC Sales diganti' entry in GET /api/customers/{cid}/360 timeline (kind=pic_change); POST /api/customers/bulk-reassign-pic reassigns and returns {reassigned:N}; auto-reverted. Frontend E2E (Playwright) as Super Admin: on /crm the select-all-customers header checkbox and per-row select-customer-* checkboxes are present, checking them shows bulk-action-bar with bulk-reassign-btn → opens bulk-pic-dialog with bulk-pic-select + bulk-pic-save; Customer 360 (/crm/6a7a88415cad6f678e729b10) shows change-pic-btn → change-pic-dialog with pic-select + pic-save-btn; tab-timeline contains 'PIC Sales diganti'. BookingDetail (/booking/6a7ac3e26aad3a79a0844111) Peserta tab shows pax-count-badge, Invoice & Payment tab shows invoice-pax-warning banner ('Jumlah peserta terdaftar (1) berbeda dari pax booking (2). Invoice dihitung sesuai jumlah peserta terdaftar.') + create-invoice-button + invoice-regenerate-* + invoice-edit-* + invoice-delete-* on each row; invoice-edit opens edit-invoice-dialog with edit-inv-pax/perpax/total/save. As Sales user: no select-all/row checkboxes on /crm, no change-pic-btn on Customer 360, no invoice-edit/delete/regenerate/create-invoice buttons on BookingDetail.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_phase_invoice_pic.py",
+    "/app/test_reports/pytest/iter38_invoice_pic.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py is now 8751 lines — refactor recommended (split invoices, customers, PIC endpoints into separate routers).",
+    "delete_invoice blocks on paid_amount>0 OR any non-VOID payment; good. Consider surfacing a friendlier UI toast in BookingDetail Delete confirm to mention 'VOID pembayaran terlebih dahulu'.",
+    "update_invoice preserves discount_percent by re-deriving from discount_amount/subtotal; correct but note that if discount_percent was originally provided by user and rounds to a different value, it will drift. Acceptable for MVP.",
+    "regenerate_invoice does not update terms/due_date; only recomputes amounts+pax — matches spec.",
+    "_booking_invoice_amounts fallback to booking.pax when no travelers is consistent with create_invoice branch — good."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_phase_invoice_pic.py (new — RBAC + invoice CRUD + regenerate + PIC change activity + bulk reassign, with proper VOID-then-DELETE teardown)"
+  ],
+  "success_rate": {"backend": "8/8 = 100%", "frontend": "100% — all data-testids present for super admin, correctly hidden for sales"},
+  "test_credentials": "Super Admin dedyirawan18@gmail.com/Admin@123; Sales sales@safarcrm.com/Sales@123",
+  "seed_data_creation": "None permanent. Test created invoices on BKG-00002 were deleted (with payment VOID) during teardown. Two stray leftover invoices (INV-00009, INV-00010) from earlier iteration_37/manual runs were cleaned up manually via /api/payments/{pid}/void then DELETE /api/invoices/{iid}. Only seed INV-00002 (Paid, 97.22jt) remains on BKG-00002. Bulk reassign temporarily moved Rina's customers to another sales user and reverted to Rina (6a7a7e21e764e17be548e40c) in the same test.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Regression suite for iteration_38 is /app/backend/tests/test_phase_invoice_pic.py. Uses POST /api/payments/{pid}/void for teardown of payment used in delete-block test. Playwright note: BookingDetail defaults to Peserta tab — invoice-edit-*/invoice-delete-*/invoice-regenerate-*/invoice-pax-warning/create-invoice-button only appear after clicking the 'Invoice & Payment' tab.",
+  "rca of the issue": "N/A — no bugs found in this iteration."
+}

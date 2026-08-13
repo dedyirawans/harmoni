@@ -1,3 +1,12 @@
+## Enhancement Batch 2 — PIC Audit/Bulk + Invoice Edit/Delete/Regenerate + Pax Badge (2026-06) — DONE (curl E2E + screenshots)
+- **Peringatan Selisih Peserta**: BookingDetail menampilkan `PaxCountBadge` (tab Peserta) + banner kuning `invoice-pax-warning` di tab Invoice bila jumlah peserta terdaftar ≠ pax booking.
+- **Riwayat Ganti PIC**: `update_customer` & bulk reassign mencatat `log_activity(type=pic_change)` → tampil di timeline Customer 360.
+- **Pindah PIC Massal**: `POST /api/customers/bulk-reassign-pic` (super_admin). UI: checkbox pilih customer + bulk bar + dialog `BulkPicDialog` di Customers.jsx.
+- **Regenerate Invoice**: `POST /api/invoices/{iid}/regenerate` (invoice.manage) hitung ulang nominal dari booking + peserta terkini. Tombol Regenerate di tiap invoice.
+- **Edit & Hapus Invoice (Super Admin)**: `PUT /api/invoices/{iid}` (edit pax/harga/diskon/pajak/jatuh tempo, recompute total) + `DELETE /api/invoices/{iid}` (ditolak bila ada pembayaran). UI: `EditInvoiceDialog` + tombol Edit/Delete.
+- Helper `_booking_invoice_amounts(b, pax_count)` dipakai bersama oleh regenerate.
+
+
 ## Enhancement — Customer PIC Reassign + Booking "Peserta" + Invoice by Participants (2026-06) — DONE (Verified curl E2E + screenshot)
 - **Ganti PIC Sales (Super Admin)**: `CustomerUpdate` now accepts `sales_pic_id`; `PUT /api/customers/{id}` resolves new PIC name+branch. Only super_admin may reassign (sales → 403). UI: `ChangePicButton` (UserCog icon) di profil Customer 360, dialog pilih sales user.
 - **Teks "jamaah" → "peserta"** di menu Booking (`Bookings.jsx`, `BookingDetail.jsx`).

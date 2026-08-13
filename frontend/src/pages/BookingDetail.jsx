@@ -12,7 +12,7 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
-import { ArrowLeft, Loader2, Plus, Trash2, Upload, FileText, Users, CreditCard, Ban, GitBranch, Eye } from "lucide-react";
+import { ArrowLeft, Loader2, Plus, Trash2, Upload, FileText, Users, CreditCard, Ban, GitBranch, Eye, AlertTriangle, Pencil, RefreshCw } from "lucide-react";
 import { expiryTone, daysUntil } from "@/components/ExpiringDocsWidget";
 import { toast } from "sonner";
 
@@ -34,6 +34,7 @@ export default function BookingDetail() {
   const [payFor, setPayFor] = useState(null);
   const [cancelOpen, setCancelOpen] = useState(false);
   const [timeline, setTimeline] = useState({ steps: [] });
+  const [editInv, setEditInv] = useState(null);
 
   const load = useCallback(() => {
     api.get(`/bookings/${id}`).then((r) => setData(r.data)).catch(() => setData(null));
@@ -48,6 +49,17 @@ export default function BookingDetail() {
 
   const createInvoice = async () => {
     try { await api.post(`/bookings/${id}/invoice`, { due_date: "" }); toast.success("Invoice dibuat"); load(); }
+    catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); }
+  };
+  const isSA = user?.role === "super_admin";
+  const regenerateInvoice = async (iid) => {
+    if (!window.confirm("Perbarui nominal invoice sesuai jumlah peserta terbaru?")) return;
+    try { await api.post(`/invoices/${iid}/regenerate`); toast.success("Invoice diperbarui sesuai peserta"); load(); }
+    catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); }
+  };
+  const deleteInvoice = async (iid) => {
+    if (!window.confirm("Hapus invoice ini? Tindakan tidak dapat dibatalkan.")) return;
+    try { await api.delete(`/invoices/${iid}`); toast.success("Invoice dihapus"); load(); }
     catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); }
   };
 
@@ -116,7 +128,10 @@ export default function BookingDetail() {
 
         <TabsContent value="travelers">
           <Card className="border-slate-200"><CardContent className="p-4 space-y-3" data-testid="travelers-list">
-            {canTravel && <Button size="sm" onClick={() => setTravOpen(true)} className="bg-blue-600 hover:bg-blue-700" data-testid="add-traveler-button"><Plus className="h-4 w-4 mr-1" />Tambah Peserta</Button>}
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              {canTravel && <Button size="sm" onClick={() => setTravOpen(true)} className="bg-blue-600 hover:bg-blue-700" data-testid="add-traveler-button"><Plus className="h-4 w-4 mr-1" />Tambah Peserta</Button>}
+              <PaxCountBadge registered={data.travelers.length} pax={b.pax} />
+            </div>
             {data.travelers.length === 0 ? <p className="text-sm text-slate-400 text-center py-4">Belum ada peserta.</p>
               : data.travelers.map((t) => (
                 <TravelerCard key={t._id} t={t} docs={data.documents.filter((d) => d.traveler_id === t._id)} canDoc={canDoc} canTravel={canTravel} onChange={load} />
@@ -126,6 +141,12 @@ export default function BookingDetail() {
 
         <TabsContent value="payments">
           <Card className="border-slate-200 mb-4"><CardContent className="p-4">
+            {data.travelers.length !== (b.pax || 0) && (
+              <div className="mb-3 flex items-center gap-2 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-md px-3 py-2" data-testid="invoice-pax-warning">
+                <AlertTriangle className="h-4 w-4 shrink-0" />
+                <span>Jumlah peserta terdaftar (<b>{data.travelers.length}</b>) berbeda dari pax booking (<b>{b.pax || 0}</b>). Invoice dihitung sesuai jumlah peserta terdaftar.</span>
+              </div>
+            )}
             {canInvoice && <Button size="sm" onClick={createInvoice} className="bg-blue-600 hover:bg-blue-700" data-testid="create-invoice-button"><Plus className="h-4 w-4 mr-1" />Generate Invoice</Button>}
             {data.invoices.length === 0 && <p className="text-sm text-slate-400 text-center py-4">Belum ada invoice.</p>}
             <div className="space-y-3 mt-3">
@@ -133,10 +154,13 @@ export default function BookingDetail() {
                 <div key={inv._id} className="border border-slate-200 rounded-md p-3" data-testid={`invoice-row-${inv._id}`}>
                   <div className="flex items-center justify-between flex-wrap gap-2">
                     <div><p className="font-mono text-[11px] text-slate-400">{inv.invoice_number}</p><p className="font-medium text-slate-900">{fmtIDR(inv.total)}</p>
-                      <p className="text-xs text-slate-500">Terbayar {fmtIDR(inv.paid_amount)} · Sisa {fmtIDR(inv.outstanding)}</p></div>
-                    <div className="flex items-center gap-2">
+                      <p className="text-xs text-slate-500">{inv.pax || 0} peserta · Terbayar {fmtIDR(inv.paid_amount)} · Sisa {fmtIDR(inv.outstanding)}</p></div>
+                    <div className="flex items-center gap-2 flex-wrap">
                       <Badge variant="outline" className={INVOICE_STATUS_COLORS[inv.status]} data-testid={`invoice-status-${inv._id}`}>{inv.status}</Badge>
                       <Button size="sm" variant="outline" onClick={() => openPdf(inv._id)} data-testid={`invoice-pdf-${inv._id}`}><FileText className="h-4 w-4 mr-1" />PDF</Button>
+                      {canInvoice && <Button size="sm" variant="outline" onClick={() => regenerateInvoice(inv._id)} data-testid={`invoice-regenerate-${inv._id}`} title="Perbarui nominal sesuai jumlah peserta"><RefreshCw className="h-4 w-4 mr-1" />Regenerate</Button>}
+                      {isSA && <Button size="sm" variant="outline" onClick={() => setEditInv(inv)} data-testid={`invoice-edit-${inv._id}`}><Pencil className="h-4 w-4 mr-1" />Edit</Button>}
+                      {isSA && <Button size="sm" variant="outline" className="text-red-600 border-red-200 hover:bg-red-50" onClick={() => deleteInvoice(inv._id)} data-testid={`invoice-delete-${inv._id}`}><Trash2 className="h-4 w-4" /></Button>}
                       {canPay && inv.status !== "Paid" && <Button size="sm" className="bg-emerald-600 hover:bg-emerald-700" onClick={() => setPayFor(inv)} data-testid={`record-payment-${inv._id}`}>Record Payment</Button>}
                     </div>
                   </div>
@@ -202,6 +226,7 @@ export default function BookingDetail() {
 
       {travOpen && <TravelerDialog bookingId={id} onClose={() => setTravOpen(false)} onSaved={() => { setTravOpen(false); load(); }} />}
       {payFor && <PaymentDialog invoice={payFor} onClose={() => setPayFor(null)} onSaved={() => { setPayFor(null); load(); }} />}
+      {editInv && <EditInvoiceDialog invoice={editInv} onClose={() => setEditInv(null)} onSaved={() => { setEditInv(null); load(); }} />}
       {cancelOpen && <CancellationDialog booking={b} travelers={data.travelers} onClose={() => setCancelOpen(false)} onSaved={() => { setCancelOpen(false); load(); }} />}
     </div>
   );
@@ -431,6 +456,69 @@ function CancellationDialog({ booking, travelers, onClose, onSaved }) {
           <div><Label className="text-xs">Notes</Label><Input value={notes} onChange={(e) => setNotes(e.target.value)} data-testid="cancel-notes" /></div>
         </div>
         <DialogFooter><Button variant="outline" onClick={onClose}>Batal</Button><Button className="bg-red-600 hover:bg-red-700" onClick={submit} data-testid="cancel-submit">Ajukan</Button></DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+
+function PaxCountBadge({ registered, pax }) {
+  const p = pax || 0;
+  const match = registered === p;
+  return (
+    <Badge variant="outline" className={match ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-amber-50 text-amber-700 border-amber-200"} data-testid="pax-count-badge">
+      {!match && <AlertTriangle className="h-3.5 w-3.5 mr-1" />}
+      {registered} peserta terdaftar / {p} pax booking
+    </Badge>
+  );
+}
+
+function EditInvoiceDialog({ invoice, onClose, onSaved }) {
+  const [f, setF] = useState({
+    due_date: (invoice.due_date || "").slice(0, 10),
+    pax: invoice.pax || 1,
+    per_pax_price: invoice.per_pax_price || 0,
+    discount_amount: invoice.discount_amount || 0,
+    tax_amount: invoice.tax_amount || 0,
+  });
+  const [saving, setSaving] = useState(false);
+  const set = (k) => (v) => setF((o) => ({ ...o, [k]: v }));
+  const addonComp = Math.max(Number(invoice.subtotal || invoice.amount || 0) - Number(invoice.per_pax_price || 0) * Number(invoice.pax || 1), 0);
+  const subtotal = Number(f.per_pax_price || 0) * Number(f.pax || 0) + addonComp;
+  const total = subtotal - Number(f.discount_amount || 0) + Number(f.tax_amount || 0);
+  const save = async () => {
+    setSaving(true);
+    try {
+      await api.put(`/invoices/${invoice._id}`, {
+        due_date: f.due_date, pax: Number(f.pax), per_pax_price: Number(f.per_pax_price),
+        discount_amount: Number(f.discount_amount), tax_amount: Number(f.tax_amount),
+      });
+      toast.success("Invoice diperbarui"); onSaved();
+    } catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); }
+    finally { setSaving(false); }
+  };
+  return (
+    <Dialog open onOpenChange={onClose}>
+      <DialogContent className="bg-white max-w-md" data-testid="edit-invoice-dialog">
+        <DialogHeader><DialogTitle>Edit Invoice — {invoice.invoice_number}</DialogTitle>
+          <DialogDescription>Ubah nominal invoice secara manual (khusus Super Admin).</DialogDescription></DialogHeader>
+        <div className="grid grid-cols-2 gap-3 py-2 text-sm">
+          <div className="space-y-1"><Label className="text-xs">Jumlah Peserta</Label><Input type="number" value={f.pax} onChange={(e) => set("pax")(e.target.value)} data-testid="edit-inv-pax" /></div>
+          <div className="space-y-1"><Label className="text-xs">Harga / Peserta</Label><Input type="number" value={f.per_pax_price} onChange={(e) => set("per_pax_price")(e.target.value)} data-testid="edit-inv-perpax" /></div>
+          <div className="space-y-1"><Label className="text-xs">Diskon (Rp)</Label><Input type="number" value={f.discount_amount} onChange={(e) => set("discount_amount")(e.target.value)} data-testid="edit-inv-discount" /></div>
+          <div className="space-y-1"><Label className="text-xs">Pajak (Rp)</Label><Input type="number" value={f.tax_amount} onChange={(e) => set("tax_amount")(e.target.value)} data-testid="edit-inv-tax" /></div>
+          <div className="space-y-1 col-span-2"><Label className="text-xs">Jatuh Tempo</Label><Input type="date" value={f.due_date} onChange={(e) => set("due_date")(e.target.value)} data-testid="edit-inv-due" /></div>
+        </div>
+        <div className="rounded-md bg-slate-50 border border-slate-100 p-3 text-sm space-y-1" data-testid="edit-inv-preview">
+          <div className="flex justify-between text-slate-500"><span>Subtotal</span><span>{fmtIDR(subtotal)}</span></div>
+          <div className="flex justify-between text-slate-500"><span>Diskon</span><span>- {fmtIDR(f.discount_amount || 0)}</span></div>
+          <div className="flex justify-between text-slate-500"><span>Pajak</span><span>+ {fmtIDR(f.tax_amount || 0)}</span></div>
+          <div className="flex justify-between font-semibold text-slate-900 border-t border-slate-200 pt-1"><span>Total</span><span data-testid="edit-inv-total">{fmtIDR(total)}</span></div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Batal</Button>
+          <Button className="bg-blue-600 hover:bg-blue-700" onClick={save} disabled={saving} data-testid="edit-inv-save">{saving ? <Loader2 className="h-4 w-4 animate-spin" /> : "Simpan"}</Button>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   );

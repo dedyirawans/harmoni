@@ -12,7 +12,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogTrigger } from "@/components/ui/dialog";
-import { UserPlus, Search, Loader2, Users2, Phone, Mail, Archive, RotateCcw } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
+import { UserPlus, Search, Loader2, Users2, Phone, Mail, Archive, RotateCcw, UserCog } from "lucide-react";
 import { toast } from "sonner";
 import { useAuth } from "@/context/AuthContext";
 
@@ -34,6 +35,8 @@ export default function Customers() {
   const [form, setForm] = useState(EMPTY);
   const [saving, setSaving] = useState(false);
   const [dupWarn, setDupWarn] = useState([]);
+  const [selected, setSelected] = useState([]);
+  const [bulkOpen, setBulkOpen] = useState(false);
 
   const load = () => {
     setRows(null);
@@ -65,6 +68,8 @@ export default function Customers() {
     try { await api.post(`/customers/${c._id}/restore`); toast.success("Customer dipulihkan"); load(); }
     catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); }
   };
+  const toggleSel = (id) => setSelected((s) => s.includes(id) ? s.filter((x) => x !== id) : [...s, id]);
+  const toggleAll = () => setSelected((s) => (rows && s.length === rows.length) ? [] : (rows || []).map((c) => c._id));
 
   const set = (k) => (v) => setForm((f) => ({ ...f, [k]: v }));
 
@@ -173,6 +178,16 @@ export default function Customers() {
         )}
       </div>
 
+      {isSA && selected.length > 0 && (
+        <div className="flex items-center justify-between rounded-md border border-blue-200 bg-blue-50 px-4 py-2.5" data-testid="bulk-action-bar">
+          <span className="text-sm font-medium text-blue-800">{selected.length} customer dipilih</span>
+          <div className="flex gap-2">
+            <Button size="sm" variant="outline" onClick={() => setSelected([])}>Batal</Button>
+            <Button size="sm" className="bg-blue-600 hover:bg-blue-700" onClick={() => setBulkOpen(true)} data-testid="bulk-reassign-btn"><UserCog className="h-4 w-4 mr-1" />Pindah PIC</Button>
+          </div>
+        </div>
+      )}
+
       <Card className="border-slate-200 shadow-sm overflow-hidden">
         {rows === null ? (
           <div className="p-12 flex justify-center"><Loader2 className="h-6 w-6 animate-spin text-blue-600" /></div>
@@ -185,6 +200,7 @@ export default function Customers() {
           <Table data-testid="customers-table">
             <TableHeader>
               <TableRow className="bg-slate-50">
+                {isSA && <TableHead className="w-10"><Checkbox checked={rows.length > 0 && selected.length === rows.length} onCheckedChange={toggleAll} data-testid="select-all-customers" /></TableHead>}
                 <TableHead>Code</TableHead><TableHead>Name</TableHead><TableHead>Contact</TableHead>
                 <TableHead>Type</TableHead><TableHead>City</TableHead><TableHead>Created</TableHead>
                 {isSA && <TableHead className="w-24 text-right">Actions</TableHead>}
@@ -193,6 +209,7 @@ export default function Customers() {
             <TableBody>
               {rows.map((c) => (
                 <TableRow key={c._id} className="hover:bg-slate-50 cursor-pointer" onClick={() => navigate(`/crm/${c._id}`)} data-testid={`customer-row-${c._id}`}>
+                  {isSA && <TableCell onClick={(e) => e.stopPropagation()}><Checkbox checked={selected.includes(c._id)} onCheckedChange={() => toggleSel(c._id)} data-testid={`select-customer-${c._id}`} /></TableCell>}
                   <TableCell className="font-mono text-xs text-slate-500">{c.customer_code}</TableCell>
                   <TableCell><div className="font-medium text-slate-900 flex items-center gap-2">{c.full_name}{c.is_deleted && <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-200 text-[10px]">ARCHIVED</Badge>}</div>
                     <div className="flex gap-1 mt-1">{(c.tags || []).map((t) => <Badge key={t} variant="outline" className="text-[10px] bg-blue-50 text-blue-700 border-blue-200">{t}</Badge>)}</div>
@@ -219,6 +236,8 @@ export default function Customers() {
           </Table>
         )}
       </Card>
+
+      {isSA && <BulkPicDialog open={bulkOpen} onOpenChange={setBulkOpen} customerIds={selected} onDone={() => { setSelected([]); load(); }} />}
     </div>
   );
 }
@@ -229,5 +248,47 @@ function Field({ label, children, full }) {
       <Label>{label}</Label>
       {children}
     </div>
+  );
+}
+
+function BulkPicDialog({ open, onOpenChange, customerIds, onDone }) {
+  const [users, setUsers] = useState([]);
+  const [sel, setSel] = useState("");
+  const [saving, setSaving] = useState(false);
+  useEffect(() => {
+    if (open && users.length === 0) {
+      api.get("/users").then((r) => setUsers((r.data || []).filter((u) => ["sales", "super_admin"].includes(u.role) && u.status !== "ARCHIVED"))).catch(() => {});
+    }
+  }, [open, users.length]);
+  const save = async () => {
+    if (!sel) return toast.error("Pilih PIC sales tujuan");
+    setSaving(true);
+    try {
+      const r = await api.post("/customers/bulk-reassign-pic", { customer_ids: customerIds, sales_pic_id: sel });
+      toast.success(`${r.data.reassigned} customer dipindahkan ke ${r.data.sales_pic_name}`);
+      onOpenChange(false); onDone();
+    } catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); }
+    finally { setSaving(false); }
+  };
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="bg-white" data-testid="bulk-pic-dialog">
+        <DialogHeader><DialogTitle className="font-display">Pindah PIC Sales</DialogTitle>
+          <DialogDescription>Pindahkan {customerIds.length} customer terpilih ke sales lain (mis. saat sales resign).</DialogDescription></DialogHeader>
+        <div className="space-y-2 py-2">
+          <Label className="text-xs">PIC Sales Tujuan</Label>
+          <Select value={sel} onValueChange={setSel}>
+            <SelectTrigger data-testid="bulk-pic-select"><SelectValue placeholder="Pilih sales" /></SelectTrigger>
+            <SelectContent className="bg-white">
+              {users.map((u) => <SelectItem key={u._id} value={u._id} data-testid={`bulk-pic-option-${u._id}`}>{u.name} ({u.role})</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>Batal</Button>
+          <Button className="bg-blue-600 hover:bg-blue-700" onClick={save} disabled={saving} data-testid="bulk-pic-save">{saving ? <Loader2 className="h-4 w-4 animate-spin" /> : `Pindahkan ${customerIds.length} customer`}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
