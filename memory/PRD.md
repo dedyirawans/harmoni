@@ -1,3 +1,7 @@
+## PHASE 9M.4 — Editable Terms & Conditions Invoice/Quotation (2026-06) — DONE (Verified render PNG/text)
+- Tab Template Dokumen kini punya editor **Terms & Conditions — Invoice** dan **— Quotation** (`invoice_terms`, `quotation_terms` di template). Bila diisi, T&C ini yang tampil di PDF (memprioritaskan template; fallback ke terms dokumen bila template kosong). Terverifikasi: invoice & quotation menampilkan T&C dari template; preview menghormati nilai form.
+
+
 ## PHASE 9M.3 — Watermark Quotation + Stempel Center + Kekurangan Invoice (2026-06) — DONE (Verified render PNG)
 - **Watermark Quotation**: quotation dengan status ≠ ACCEPTED mendapat watermark (default "DRAFT", teks diatur via `quotation_watermark_text` di template). Field baru di tab Template Dokumen + preview mendukungnya.
 - **Stempel di tengah**: PAID (invoice) & LUNAS (kwitansi) diposisikan di pusat halaman A4 memakai `_d.pagesize` (bukan koordinat tetap) — terverifikasi center via render PNG.

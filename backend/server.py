@@ -3194,6 +3194,7 @@ DOC_TEMPLATE_DEFAULTS = {
     "footer_text": "Terima kasih atas kepercayaan Anda.",
     "invoice_title": "INVOICE", "quotation_title": "QUOTATION", "receipt_title": "KWITANSI PEMBAYARAN",
     "show_qr": True, "paid_stamp_text": "PAID", "public_base_url": "", "quotation_watermark_text": "DRAFT",
+    "invoice_terms": "", "quotation_terms": "",
 }
 _FRONTEND_BASE_CACHE = None
 
@@ -3261,6 +3262,8 @@ class DocTemplateUpdate(BaseModel):
     show_qr: Optional[bool] = None
     paid_stamp_text: Optional[str] = None
     quotation_watermark_text: Optional[str] = None
+    invoice_terms: Optional[str] = None
+    quotation_terms: Optional[str] = None
     public_base_url: Optional[str] = None
 
 
@@ -3298,6 +3301,7 @@ async def doc_template_preview(body: dict, user: dict = Depends(require_permissi
                   "discount_amount": 0, "tax_percent": 0, "tax_amount": 0, "total": 50000000,
                   "due_date": "2026-09-01", "status": "PAID", "addons": [],
                   "terms": "Pembayaran DP minimal 50%. Sisa dilunasi H-30 keberangkatan."}
+        sample["terms"] = tpl.get("invoice_terms" if k == "INVOICE" else "quotation_terms") or sample["terms"]
         qr = _public_pdf_url(tpl, kind, "contoh")
         wm = tpl.get("quotation_watermark_text", "DRAFT") if k == "QUOTATION" else None
         pdf = build_document_pdf(k, sample, company, tpl=tpl, qr_url=qr, paid=(kind == "invoice"), watermark=wm)
@@ -3630,6 +3634,7 @@ async def _render_invoice_pdf(inv):
     _out = float(inv.get("outstanding") or 0)
     data["outstanding"] = _out
     data["paid_amount"] = max(_tot - _out, 0)
+    data["terms"] = tpl.get("invoice_terms") or inv.get("terms") or ""
     qr = _public_pdf_url(tpl, "invoice", iid)
     return build_document_pdf("INVOICE", data, company, tpl=tpl, qr_url=qr, paid=paid), inv.get("invoice_number")
 
@@ -3639,6 +3644,7 @@ async def _render_quotation_pdf(q):
     company = await db.company_settings.find_one({"key": "company"}) or {}
     itins = await db.package_itineraries.find({"package_id": q.get("package_id")}).sort("day", 1).to_list(200)
     data = {**q, "number": q.get("quotation_number")}
+    data["terms"] = tpl.get("quotation_terms") or q.get("terms") or ""
     qr = _public_pdf_url(tpl, "quotation", str(q.get("_id")))
     wm = tpl.get("quotation_watermark_text", "DRAFT") if str(q.get("status", "")).upper() != "ACCEPTED" else None
     return build_document_pdf("QUOTATION", data, company, itins, tpl=tpl, qr_url=qr, watermark=wm), q.get("quotation_number")

@@ -437,6 +437,8 @@ function DocTemplateTab({ canManage }) {
           </div>
         </div>
         <div className="space-y-2 sm:col-span-2"><Label>Teks Footer</Label><Input value={t.footer_text || ""} onChange={set("footer_text")} data-testid="tpl-footer" disabled={!canManage} /></div>
+        <div className="space-y-2 sm:col-span-2"><Label>Terms &amp; Conditions — Invoice</Label><textarea value={t.invoice_terms || ""} onChange={set("invoice_terms")} rows={3} className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm" placeholder="Syarat & ketentuan yang tampil di invoice" data-testid="tpl-invoice-terms" disabled={!canManage} /></div>
+        <div className="space-y-2 sm:col-span-2"><Label>Terms &amp; Conditions — Quotation</Label><textarea value={t.quotation_terms || ""} onChange={set("quotation_terms")} rows={3} className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm" placeholder="Syarat & ketentuan yang tampil di quotation" data-testid="tpl-quotation-terms" disabled={!canManage} /></div>
         <div className="space-y-2 sm:col-span-2"><Label>Base URL Publik (untuk QR)</Label><Input value={t.public_base_url || ""} onChange={set("public_base_url")} data-testid="tpl-baseurl" disabled={!canManage} /><p className="text-xs text-slate-400">Dipakai di QR agar customer dapat membuka PDF tanpa login.</p></div>
         <div className="sm:col-span-2 flex items-center gap-2">
           {canManage && <Button onClick={save} disabled={saving} className="bg-blue-600 hover:bg-blue-700" data-testid="save-doctpl-button">{saving ? "Saving..." : "Simpan template"}</Button>}
