@@ -3273,8 +3273,22 @@ async def update_doc_template(body: DocTemplateUpdate, request: Request, user: d
     updates = {k: v for k, v in body.dict().items() if v is not None}
     updates["key"] = "doc_template"
     await db.company_settings.update_one({"key": "doc_template"}, {"$set": updates}, upsert=True)
-    await log_audit(user, "settings", "doc_template", request, new=updates)
+    await log_audit(user, "settings", "doc_template", request, new={k: v for k, v in updates.items() if k != "logo_url"})
     return await _get_doc_template()
+
+
+@api_router.post("/doc-template/preview")
+async def doc_template_preview(body: dict, user: dict = Depends(require_permission("settings.view"))):
+    tpl = {**DOC_TEMPLATE_DEFAULTS, **{k: v for k, v in (body or {}).items() if v not in (None,)}}
+    sample = {"number": "INV-CONTOH", "created_at": now_iso(), "customer_name": "Budi Santoso",
+              "sales_pic_name": "Rina Sales", "package_name": "Umrah Reguler 9 Hari", "package_version": 1,
+              "room_type": "QUAD", "pax": 2, "per_pax_price": 25000000, "gross": 50000000,
+              "subtotal": 50000000, "discount_percent": 0, "discount_amount": 0, "tax_percent": 11, "tax_amount": 0,
+              "total": 50000000, "due_date": "2026-09-01", "status": "PAID", "addons": []}
+    company = await db.company_settings.find_one({"key": "company"}) or {}
+    qr = _public_pdf_url(tpl, "invoice", "contoh")
+    pdf = build_document_pdf("INVOICE", sample, company, tpl=tpl, qr_url=qr, paid=True)
+    return Response(content=pdf, media_type="application/pdf", headers={"Content-Disposition": "inline; filename=preview.pdf"})
 
 
 # ============================================================================
@@ -3631,7 +3645,20 @@ async def _render_receipt_pdf(r):
         if qr:
             el += [Spacer(1, 10), qr, Paragraph("Scan untuk verifikasi kwitansi", ParagraphStyle("qs", parent=styles["Normal"], fontSize=8))]
     el += [Spacer(1, 16), Paragraph(tpl.get("footer_text", "Terima kasih atas pembayaran Anda."), styles["Normal"])]
-    doc.build(el)
+    paid_full = float(r.get("outstanding_total") or 0) <= 0
+
+    def _stamp(canvas, _d):
+        if not paid_full:
+            return
+        canvas.saveState()
+        canvas.translate(150 * mm, 60 * mm)
+        canvas.rotate(30)
+        canvas.setFont(bold_font, 64)
+        canvas.setFillColor(colors.Color(0.13, 0.7, 0.4, alpha=0.28))
+        canvas.drawCentredString(0, 0, tpl.get("paid_stamp_text", "LUNAS"))
+        canvas.restoreState()
+
+    doc.build(el, onFirstPage=_stamp)
     return buf.getvalue(), r.get("receipt_number")
 
 

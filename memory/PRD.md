@@ -1,3 +1,9 @@
+## PHASE 9M.1 — Upload Logo + Preview PDF + Stempel Kwitansi (2026-06) — DONE (Verified curl + screenshot)
+- **Upload logo file**: tab Template Dokumen kini punya input file (base64 → `logo_url`, maks 2MB) + preview logo, selain input URL.
+- **Preview PDF real-time**: `POST /api/doc-template/preview` merender contoh invoice dari template yang sedang diedit (belum disimpan) — tombol "Preview PDF" menampilkan hasil di iframe (dengan stempel + QR).
+- **Stempel LUNAS di kwitansi**: `_render_receipt_pdf` menambahkan watermark diagonal (teks `paid_stamp_text`) bila `outstanding_total<=0` (kwitansi pembayaran lunas). Terverifikasi via kwitansi publik 200 `%PDF-`.
+
+
 ## PHASE 9M — Document Template + PAID Stamp + QR (2026-06) — DONE (Verified curl E2E + screenshot)
 - **Template dokumen (Super Admin)**: `GET/PUT /api/doc-template` (key `doc_template` di company_settings). Atur warna utama/aksen, font (Helvetica/Times-Roman/Courier), judul (Invoice/Quotation/Kwitansi), logo, teks footer, teks stempel, toggle QR, dan Base URL publik. UI: Settings → tab "Template Dokumen" (admin-only).
 - **Stempel PAID/LUNAS**: invoice dengan outstanding<=0 atau status PAID mendapat watermark diagonal (teks dapat diatur) di semua render invoice.

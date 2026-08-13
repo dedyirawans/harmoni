@@ -378,6 +378,15 @@ function RolePermissions() {
 function DocTemplateTab({ canManage }) {
   const [t, setT] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [preview, setPreview] = useState("");
+  const [previewing, setPreviewing] = useState(false);
+  const doPreview = async (tpl) => {
+    setPreviewing(true);
+    try {
+      const r = await api.post("/doc-template/preview", tpl || t, { responseType: "blob" });
+      setPreview((old) => { if (old) URL.revokeObjectURL(old); return URL.createObjectURL(r.data); });
+    } catch { toast.error("Gagal membuat preview"); } finally { setPreviewing(false); }
+  };
   useEffect(() => {
     api.get("/doc-template").then((r) => {
       const d = r.data || {};
@@ -412,10 +421,31 @@ function DocTemplateTab({ canManage }) {
         <div className="space-y-2 sm:col-span-2"><Label>Alamat</Label><Input value={t.address || ""} onChange={set("address")} disabled={!canManage} /></div>
         <div className="space-y-2"><Label>Telepon</Label><Input value={t.phone || ""} onChange={set("phone")} disabled={!canManage} /></div>
         <div className="space-y-2"><Label>Email</Label><Input value={t.email || ""} onChange={set("email")} disabled={!canManage} /></div>
-        <div className="space-y-2 sm:col-span-2"><Label>Logo URL (kosong = pakai logo company)</Label><Input value={t.logo_url || ""} onChange={set("logo_url")} placeholder="https://..." data-testid="tpl-logo" disabled={!canManage} /></div>
+        <div className="space-y-2 sm:col-span-2"><Label>Logo</Label>
+          <div className="flex items-center gap-3">
+            {t.logo_url ? <img src={t.logo_url} alt="logo" className="h-12 w-12 rounded object-contain border border-slate-200 bg-white" /> : <div className="h-12 w-12 rounded bg-slate-100 flex items-center justify-center text-[10px] text-slate-400">LOGO</div>}
+            <div className="flex-1 space-y-2">
+              <Input value={t.logo_url || ""} onChange={set("logo_url")} placeholder="URL logo, atau unggah file di bawah" data-testid="tpl-logo" disabled={!canManage} />
+              {canManage && <input type="file" accept="image/*" data-testid="tpl-logo-upload" onChange={(e) => {
+                const f = e.target.files?.[0]; if (!f) return;
+                if (f.size > 2 * 1024 * 1024) { toast.error("Logo maksimal 2MB"); return; }
+                const rd = new FileReader(); rd.onload = () => setT((o) => ({ ...o, logo_url: rd.result })); rd.readAsDataURL(f);
+              }} />}
+            </div>
+          </div>
+        </div>
         <div className="space-y-2 sm:col-span-2"><Label>Teks Footer</Label><Input value={t.footer_text || ""} onChange={set("footer_text")} data-testid="tpl-footer" disabled={!canManage} /></div>
         <div className="space-y-2 sm:col-span-2"><Label>Base URL Publik (untuk QR)</Label><Input value={t.public_base_url || ""} onChange={set("public_base_url")} data-testid="tpl-baseurl" disabled={!canManage} /><p className="text-xs text-slate-400">Dipakai di QR agar customer dapat membuka PDF tanpa login.</p></div>
-        {canManage && <div className="sm:col-span-2"><Button onClick={save} disabled={saving} className="bg-blue-600 hover:bg-blue-700" data-testid="save-doctpl-button">{saving ? "Saving..." : "Simpan template"}</Button></div>}
+        <div className="sm:col-span-2 flex items-center gap-2">
+          {canManage && <Button onClick={save} disabled={saving} className="bg-blue-600 hover:bg-blue-700" data-testid="save-doctpl-button">{saving ? "Saving..." : "Simpan template"}</Button>}
+          <Button variant="outline" onClick={() => doPreview()} disabled={previewing} data-testid="preview-doctpl-button">{previewing ? "Membuat..." : "Preview PDF"}</Button>
+        </div>
+        {preview && (
+          <div className="sm:col-span-2 mt-2" data-testid="doctpl-preview">
+            <Label className="mb-1 block">Pratinjau (contoh invoice, dengan stempel & QR)</Label>
+            <iframe title="preview" src={preview} className="w-full h-[520px] rounded-md border border-slate-200" />
+          </div>
+        )}
       </CardContent>
     </Card>
   );
