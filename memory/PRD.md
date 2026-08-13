@@ -1,3 +1,9 @@
+## PHASE 9M.3 — Watermark Quotation + Stempel Center + Kekurangan Invoice (2026-06) — DONE (Verified render PNG)
+- **Watermark Quotation**: quotation dengan status ≠ ACCEPTED mendapat watermark (default "DRAFT", teks diatur via `quotation_watermark_text` di template). Field baru di tab Template Dokumen + preview mendukungnya.
+- **Stempel di tengah**: PAID (invoice) & LUNAS (kwitansi) diposisikan di pusat halaman A4 memakai `_d.pagesize` (bukan koordinat tetap) — terverifikasi center via render PNG.
+- **Kekurangan pembayaran (invoice partial)**: invoice dengan outstanding>0 menampilkan baris "Sudah Dibayar" dan "Kekurangan Pembayaran" (merah) dari total tagihan.
+
+
 ## PHASE 9M.2 — Preview Multi-Dokumen + Stempel di Tengah (2026-06) — DONE (Verified curl)
 - **Preview Quotation & Kwitansi**: `POST /api/doc-template/preview` menerima `kind` (invoice/quotation/receipt). UI tab Template Dokumen punya dropdown jenis + tombol Preview → iframe. Ketiganya terverifikasi 200 `%PDF-`.
 - **Stempel di tengah**: watermark PAID (invoice) & LUNAS (kwitansi) dipindah ke pusat halaman A4 (105mm × 148.5mm), font 72, alpha 0.25 — berlaku di `build_document_pdf` dan `_render_receipt_pdf`. `_render_receipt_pdf(r, tpl=None)` kini menerima tpl untuk preview.

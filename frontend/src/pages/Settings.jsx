@@ -418,6 +418,7 @@ function DocTemplateTab({ canManage }) {
         <div className="space-y-2"><Label>Judul Quotation</Label><Input value={t.quotation_title || ""} onChange={set("quotation_title")} data-testid="tpl-quotation-title" disabled={!canManage} /></div>
         <div className="space-y-2"><Label>Judul Kwitansi</Label><Input value={t.receipt_title || ""} onChange={set("receipt_title")} data-testid="tpl-receipt-title" disabled={!canManage} /></div>
         <div className="space-y-2"><Label>Teks Stempel Lunas</Label><Input value={t.paid_stamp_text || ""} onChange={set("paid_stamp_text")} data-testid="tpl-paid-text" disabled={!canManage} /></div>
+        <div className="space-y-2"><Label>Watermark Quotation (belum disetujui)</Label><Input value={t.quotation_watermark_text || ""} onChange={set("quotation_watermark_text")} placeholder="DRAFT" data-testid="tpl-quotation-wm" disabled={!canManage} /></div>
         <div className="space-y-2 sm:col-span-2"><Label>Nama Perusahaan (dokumen)</Label><Input value={t.company_name || ""} onChange={set("company_name")} data-testid="tpl-company" disabled={!canManage} /></div>
         <div className="space-y-2 sm:col-span-2"><Label>Alamat</Label><Input value={t.address || ""} onChange={set("address")} disabled={!canManage} /></div>
         <div className="space-y-2"><Label>Telepon</Label><Input value={t.phone || ""} onChange={set("phone")} disabled={!canManage} /></div>

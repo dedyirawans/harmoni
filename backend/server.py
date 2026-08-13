@@ -3193,7 +3193,7 @@ DOC_TEMPLATE_DEFAULTS = {
     "logo_url": "", "company_name": "", "address": "", "phone": "", "email": "", "website": "",
     "footer_text": "Terima kasih atas kepercayaan Anda.",
     "invoice_title": "INVOICE", "quotation_title": "QUOTATION", "receipt_title": "KWITANSI PEMBAYARAN",
-    "show_qr": True, "paid_stamp_text": "PAID", "public_base_url": "",
+    "show_qr": True, "paid_stamp_text": "PAID", "public_base_url": "", "quotation_watermark_text": "DRAFT",
 }
 _FRONTEND_BASE_CACHE = None
 
@@ -3260,6 +3260,7 @@ class DocTemplateUpdate(BaseModel):
     receipt_title: Optional[str] = None
     show_qr: Optional[bool] = None
     paid_stamp_text: Optional[str] = None
+    quotation_watermark_text: Optional[str] = None
     public_base_url: Optional[str] = None
 
 
@@ -3298,7 +3299,8 @@ async def doc_template_preview(body: dict, user: dict = Depends(require_permissi
                   "due_date": "2026-09-01", "status": "PAID", "addons": [],
                   "terms": "Pembayaran DP minimal 50%. Sisa dilunasi H-30 keberangkatan."}
         qr = _public_pdf_url(tpl, kind, "contoh")
-        pdf = build_document_pdf(k, sample, company, tpl=tpl, qr_url=qr, paid=(kind == "invoice"))
+        wm = tpl.get("quotation_watermark_text", "DRAFT") if k == "QUOTATION" else None
+        pdf = build_document_pdf(k, sample, company, tpl=tpl, qr_url=qr, paid=(kind == "invoice"), watermark=wm)
     return Response(content=pdf, media_type="application/pdf", headers={"Content-Disposition": "inline; filename=preview.pdf"})
 
 
@@ -3521,7 +3523,7 @@ def _qr_image(url, size_mm=22):
         return None
 
 
-def build_document_pdf(kind: str, data: dict, company: dict, itineraries=None, tpl=None, qr_url=None, paid=False) -> bytes:
+def build_document_pdf(kind: str, data: dict, company: dict, itineraries=None, tpl=None, qr_url=None, paid=False, watermark=None) -> bytes:
     tpl = tpl or DOC_TEMPLATE_DEFAULTS
     primary = colors.HexColor(tpl.get("primary_color") or "#1d4ed8")
     accent = colors.HexColor(tpl.get("accent_color") or "#f59e0b")
@@ -3573,6 +3575,14 @@ def build_document_pdf(kind: str, data: dict, company: dict, itineraries=None, t
     ts.setStyle(TableStyle([("ALIGN", (0, 0), (-1, -1), "RIGHT"), ("FONTSIZE", (0, 0), (-1, -1), 10), ("FONTNAME", (0, 0), (-1, -1), base_font),
                             ("LINEABOVE", (0, -1), (-1, -1), 0.6, primary), ("FONTNAME", (0, -1), (-1, -1), bold_font)]))
     el.append(ts)
+    if kind == "INVOICE" and data.get("outstanding") is not None and float(data.get("outstanding") or 0) > 0:
+        extra = [["Sudah Dibayar", _money(data.get("paid_amount"))],
+                 ["Kekurangan Pembayaran", _money(data.get("outstanding"))]]
+        et = Table(extra, colWidths=[140 * mm, 30 * mm])
+        et.setStyle(TableStyle([("ALIGN", (0, 0), (-1, -1), "RIGHT"), ("FONTSIZE", (0, 0), (-1, -1), 10),
+                                ("FONTNAME", (0, 0), (-1, -1), base_font), ("FONTNAME", (0, 1), (-1, 1), bold_font),
+                                ("TEXTCOLOR", (0, 1), (-1, 1), colors.HexColor("#dc2626"))]))
+        el.append(et)
     if itineraries:
         el.append(Spacer(1, 6 * mm))
         el.append(Paragraph("<b>Itinerary</b>", boldn))
@@ -3590,14 +3600,19 @@ def build_document_pdf(kind: str, data: dict, company: dict, itineraries=None, t
         el.append(Paragraph(tpl.get("footer_text"), ParagraphStyle("f", parent=small, textColor=accent)))
 
     def _stamp(canvas, _d):
-        if not paid:
+        if paid:
+            text, col, size = tpl.get("paid_stamp_text", "PAID"), colors.Color(0.13, 0.7, 0.4, alpha=0.22), 84
+        elif watermark:
+            text, col, size = str(watermark), colors.Color(0.5, 0.5, 0.5, alpha=0.16), 90
+        else:
             return
+        w, hh = _d.pagesize
         canvas.saveState()
-        canvas.translate(150 * mm, 55 * mm)
-        canvas.rotate(30)
-        canvas.setFont(bold_font, 64)
-        canvas.setFillColor(colors.Color(0.13, 0.7, 0.4, alpha=0.28))
-        canvas.drawCentredString(0, 0, tpl.get("paid_stamp_text", "PAID"))
+        canvas.translate(w / 2.0, hh / 2.0)
+        canvas.rotate(35)
+        canvas.setFont(bold_font, size)
+        canvas.setFillColor(col)
+        canvas.drawCentredString(0, -size * 0.35, text)
         canvas.restoreState()
 
     doc.build(el, onFirstPage=_stamp, onLaterPages=_stamp)
@@ -3611,6 +3626,10 @@ async def _render_invoice_pdf(inv):
     paid = (float(inv.get("outstanding") or 0) <= 0) or (str(inv.get("status", "")).upper() in ("PAID", "LUNAS"))
     data = {**inv, "number": inv.get("invoice_number"), "subtotal": inv.get("amount"),
             "per_pax_price": round(float(inv.get("amount") or 0) / max(int(inv.get("pax") or 1), 1)), "gross": inv.get("amount"), "addons": []}
+    _tot = float(inv.get("total") or inv.get("amount") or 0)
+    _out = float(inv.get("outstanding") or 0)
+    data["outstanding"] = _out
+    data["paid_amount"] = max(_tot - _out, 0)
     qr = _public_pdf_url(tpl, "invoice", iid)
     return build_document_pdf("INVOICE", data, company, tpl=tpl, qr_url=qr, paid=paid), inv.get("invoice_number")
 
@@ -3621,7 +3640,8 @@ async def _render_quotation_pdf(q):
     itins = await db.package_itineraries.find({"package_id": q.get("package_id")}).sort("day", 1).to_list(200)
     data = {**q, "number": q.get("quotation_number")}
     qr = _public_pdf_url(tpl, "quotation", str(q.get("_id")))
-    return build_document_pdf("QUOTATION", data, company, itins, tpl=tpl, qr_url=qr), q.get("quotation_number")
+    wm = tpl.get("quotation_watermark_text", "DRAFT") if str(q.get("status", "")).upper() != "ACCEPTED" else None
+    return build_document_pdf("QUOTATION", data, company, itins, tpl=tpl, qr_url=qr, watermark=wm), q.get("quotation_number")
 
 
 async def _render_receipt_pdf(r, tpl=None):
