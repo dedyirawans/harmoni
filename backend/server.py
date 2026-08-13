@@ -7125,6 +7125,11 @@ async def n8n_monitor(user: dict = Depends(require_role("super_admin"))):
     tc = [c for c in convs if (c.get("timestamp") or c.get("created_at") or "")[:10] == today]
     auto = await db.bookings.find({"booking_source": "AUTO SALES"}).sort("created_at", -1).to_list(3000)
     logs = await db.n8n_api_logs.find({}).sort("timestamp", -1).to_list(500)
+    wf_raw = await db.n8n_logs.find({}).sort("created_at", -1).to_list(500)
+    _lat = [float(l.get("processing_time_ms") or 0) for l in logs if l.get("processing_time_ms")]
+    _avg_lat = round(sum(_lat) / len(_lat), 1) if _lat else 0
+    _err_rate = round(100 * sum(1 for l in logs if not l.get("ok")) / len(logs), 1) if logs else 0
+    _last_req = logs[0] if logs else None
     cfg = await _n8n_cfg()
     sysdoc = await db.system_settings.find_one({"key": "system"}) or {}
     sla_min = int((sysdoc.get("settings") or {}).get("n8n_sla_minutes") or 15)
@@ -7166,7 +7171,19 @@ async def n8n_monitor(user: dict = Depends(require_role("super_admin"))):
     sync_logs = [{"request_id": str(l.get("_id")), "event": l.get("endpoint"), "method": l.get("method"), "direction": "INBOUND",
                   "timestamp": l.get("timestamp"), "status": "SUCCESS" if l.get("ok") else "FAILED",
                   "response": l.get("code"), "error": l.get("error", ""), "retry_count": l.get("retry_count", 0)} for l in logs[:200]]
-    return {"connection": {"status": "CONNECTED" if (cfg.get("enabled") and cfg.get("webhook_url")) else ("DISABLED" if cfg.get("webhook_url") else "NOT_CONFIGURED"), "base_url": cfg.get("webhook_url", ""), "last_sync": (logs[0]["timestamp"] if logs else None)},
+    workflow_logs = [{"id": str(l.get("_id")), "workflow_id": (l.get("data") or {}).get("n8n_workflow_id") or (l.get("data") or {}).get("workflow_id") or "—",
+                      "event": l.get("event"), "customer": (l.get("data") or {}).get("customer_name") or "—",
+                      "booking": (l.get("data") or {}).get("booking_number") or "—", "timestamp": l.get("created_at"),
+                      "status": "SKIPPED" if l.get("skipped") else ("SUCCESS" if l.get("ok") else "FAILED"),
+                      "error": l.get("error") or l.get("reason") or "", "retry_count": l.get("retry_count", 0)} for l in wf_raw[:200]]
+    api_logs_out = [{"timestamp": l.get("timestamp"), "endpoint": l.get("endpoint"), "method": l.get("method"),
+                     "status": (l.get("status") or ("success" if l.get("ok") else "failed")), "response_code": l.get("response_code") or l.get("code"),
+                     "latency_ms": l.get("processing_time_ms"), "error": (l.get("error") or "")[:120], "api_key": l.get("api_key_mask") or "—"} for l in logs[:200]]
+    conn_status = "CONNECTED" if (cfg.get("enabled") and cfg.get("webhook_url")) else ("DISABLED" if cfg.get("webhook_url") else "NOT_CONFIGURED")
+    return {"connection": {"status": conn_status, "base_url": cfg.get("webhook_url", ""), "last_sync": (logs[0]["timestamp"] if logs else None)},
+            "health": {"connection": conn_status, "last_request": (_last_req or {}).get("timestamp"), "last_request_endpoint": (_last_req or {}).get("endpoint"),
+                       "last_response": ((_last_req or {}).get("status") or "—") if _last_req else "—", "last_response_code": (_last_req or {}).get("response_code"),
+                       "api_latency_ms": _avg_lat, "error_rate": _err_rate, "total_requests": len(logs)},
             "stats": {"total_today": len(tc), "inbound": sum(1 for c in tc if c.get("direction") == "INBOUND"),
                       "outbound": sum(1 for c in tc if c.get("direction") == "OUTBOUND"),
                       "ai_responses": sum(1 for c in tc if c.get("sender_type") == "AI"),
@@ -7176,7 +7193,8 @@ async def n8n_monitor(user: dict = Depends(require_role("super_admin"))):
                       "failed_requests": sum(1 for l in logs if not l.get("ok")),
                       "api_errors": sum(1 for l in logs if (l.get("code") or 200) >= 500),
                       "sla_minutes": sla_min, "sla_overdue": sum(1 for c in conversations if c.get("sla_overdue"))},
-            "conversations": conversations, "orders": orders, "sync_logs": sync_logs}
+            "conversations": conversations, "orders": orders, "sync_logs": sync_logs,
+            "workflow_logs": workflow_logs, "api_logs": api_logs_out}
 
 
 @api_router.post("/integrations/n8n/sync/{log_id}/retry")
@@ -7194,6 +7212,17 @@ async def n8n_retry(log_id: str, user: dict = Depends(require_role("super_admin"
     status = "SUCCESS" if ok else ("FAILED" if configured else "REJECTED")
     await db.n8n_api_logs.update_one({"_id": l["_id"]}, {"$set": {"ok": ok, "status": status}, "$inc": {"retry_count": 1}})
     return {"success": ok, "status": status}
+
+
+@api_router.post("/integrations/n8n/workflow/{log_id}/retry")
+async def n8n_workflow_retry(log_id: str, user: dict = Depends(require_role("super_admin"))):
+    l = await db.n8n_logs.find_one({"_id": ObjectId(log_id)}) if ObjectId.is_valid(log_id) else None
+    if not l:
+        raise HTTPException(status_code=404, detail="Workflow log not found")
+    # Re-deliver original outbound event. Idempotent: outbound webhook re-send; inbound booking creation dedups by external id.
+    res = await _deliver_n8n(l.get("event"), l.get("data") or {})
+    await db.n8n_logs.update_one({"_id": l["_id"]}, {"$inc": {"retry_count": 1}})
+    return {"success": bool(res.get("ok")), "status": "SUCCESS" if res.get("ok") else "FAILED", "reason": res.get("error") or res.get("reason") or ""}
 
 
 @api_router.post("/integrations/n8n/conversations/reply")

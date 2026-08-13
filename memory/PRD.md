@@ -1,3 +1,12 @@
+## PHASE 9O — N8N Monitoring & Reliability (2026-06) — DONE (curl E2E + screenshot)
+- **N8N Health** (5 kartu di monitor): Connection, Last Request, Last Response (+code), API Latency (avg processing_time), Error Rate — dari `n8n_api_logs`. Endpoint `GET /api/integrations/n8n/monitor` diperluas dengan `health`, `workflow_logs`, `api_logs`.
+- **Workflow Log** (tab baru): Workflow ID, Event, Customer, Booking, Timestamp, Status (SUCCESS/FAILED/SKIPPED), Error/reason — dari `db.n8n_logs`.
+- **Error**: status FAILED menampilkan reason (l.error/reason).
+- **Retry**: `POST /api/integrations/n8n/workflow/{log_id}/retry` (super_admin) re-deliver event outbound (idempotent; inbound booking dedup via external_booking_id/idempotency_keys → tidak buat booking duplikat). Tombol Retry hanya pada baris FAILED. Sales → 403.
+- **API Log** (tab baru): Timestamp, Endpoint, Method, Status, Code, Latency, API Key (masked `api_key_mask`), Error — tanpa kredensial plaintext.
+- **AUTO SALES**: `POST /api/v1/bookings` sudah paksa `booking_source="AUTO SALES"`, `sales_pic_id=None`, `sales_user_id=None` + idempotency (tidak diubah).
+
+
 ## Enhancement Batch 5 — Approval Detail Panel + Auto Sinkron Pax (2026-06) — DONE (curl E2E + screenshots)
 - **Approval Detail Panel**: Dialog Detail di Approval Center kini menampilkan `CostBreakdown` untuk cancellation (Total Dibayar, Cancellation Fee, Non-Refundable, Other, Estimasi Refund) & refund (Proposed, Deductions list, Total Deduction, Approved, Bank) + tombol Approve/Revise/Reject langsung di dalam dialog (tanpa buka halaman lain). Data dari `GET /api/approval-center/detail/{source}/{aid}`.
 - **Auto Sinkron saat Tambah/Hapus Peserta**: Toggle "Auto sinkron pax" (localStorage, `booking.manage`) di tab Peserta BookingDetail. Bila aktif, setiap tambah/hapus peserta otomatis memanggil `sync-pax` (pax booking = jumlah peserta + regenerate invoice). Handler `afterTraveler` dipakai di TravelerDialog onSaved & TravelerCard onChange.

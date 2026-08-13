@@ -49,6 +49,16 @@ export default function N8N() {
     } catch { toast.error("Retry gagal"); }
     finally { setRetrying(null); }
   };
+  const retryWf = async (id) => {
+    setRetrying(id);
+    try {
+      const r = await api.post(`/integrations/n8n/workflow/${id}/retry`);
+      if (r.data?.success) toast.success("Retry workflow berhasil (SUCCESS)");
+      else toast.error(`Retry gagal: ${r.data?.reason || r.data?.status || "FAILED"}`);
+      await load();
+    } catch { toast.error("Retry gagal"); }
+    finally { setRetrying(null); }
+  };
 
   if (d === null) return <div className="p-12 flex justify-center"><Loader2 className="h-6 w-6 animate-spin text-blue-600" /></div>;
   if (d === false) return <div className="p-8 text-slate-400">Gagal memuat data N8N.</div>;
@@ -78,12 +88,25 @@ export default function N8N() {
         </CardContent>
       </Card>
 
+      {d.health && (
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-3" data-testid="n8n-health">
+          {[["Connection", d.health.connection], ["Last Request", fmt(d.health.last_request)], ["Last Response", `${d.health.last_response ?? "—"}${d.health.last_response_code ? " (" + d.health.last_response_code + ")" : ""}`], ["API Latency", `${d.health.api_latency_ms ?? 0} ms`], ["Error Rate", `${d.health.error_rate ?? 0}%`]].map(([l, v], i) => (
+            <Card key={i} className="border-slate-200 shadow-sm" data-testid={`n8n-health-${i}`}><CardContent className="p-3">
+              <p className="text-[11px] uppercase tracking-wide text-slate-400">{l}</p>
+              <p className={`text-sm font-semibold mt-0.5 ${l === "Error Rate" && (d.health.error_rate || 0) > 10 ? "text-red-600" : "text-slate-900"}`}>{v}</p>
+            </CardContent></Card>
+          ))}
+        </div>
+      )}
+
       <Tabs defaultValue="dashboard">
         <TabsList data-testid="n8n-tabs">
           <TabsTrigger value="dashboard" data-testid="tab-n8n-dashboard">Dashboard</TabsTrigger>
           <TabsTrigger value="inbox" data-testid="tab-n8n-inbox">Inbox{unreadTotal > 0 && <span className="ml-1.5 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] font-semibold" data-testid="n8n-inbox-unread-total">{unreadTotal}</span>}</TabsTrigger>
           <TabsTrigger value="conversations" data-testid="tab-n8n-conversations">Conversations</TabsTrigger>
           <TabsTrigger value="orders" data-testid="tab-n8n-orders">Orders</TabsTrigger>
+          <TabsTrigger value="workflow" data-testid="tab-n8n-workflow">Workflow Log</TabsTrigger>
+          <TabsTrigger value="apilog" data-testid="tab-n8n-apilog">API Log</TabsTrigger>
           <TabsTrigger value="logs" data-testid="tab-n8n-logs">Sync Logs</TabsTrigger>
         </TabsList>
         <TabsContent value="dashboard">
@@ -103,6 +126,19 @@ export default function N8N() {
         <TabsContent value="orders">
           <Tbl testid="n8n-orders-table" cols={["Order ID", "Customer", "Package", "Departure", "Pax", "Date", "Source", "Booking", "Payment"]} rows={d.orders}
             render={(r) => [r.order_id, r.customer, r.package, r.departure || "-", r.pax, r.order_date, <Badge className="bg-slate-900 text-white">{r.source}</Badge>, r.booking_status, r.payment_status]} />
+        </TabsContent>
+        <TabsContent value="workflow">
+          <Tbl testid="n8n-workflow-table" cols={["Workflow ID", "Event", "Customer", "Booking", "Timestamp", "Status", "Error", "Action"]} rows={d.workflow_logs}
+            render={(r) => [r.workflow_id, r.event, r.customer, r.booking, fmt(r.timestamp), <Badge className={stColor(r.status)}>{r.status}</Badge>, (r.error || "—").slice(0, 50),
+              r.status === "FAILED"
+                ? <Button size="sm" variant="outline" disabled={retrying === r.id} onClick={() => retryWf(r.id)} data-testid={`n8n-wf-retry-${(r.id || "").slice(-8)}`}>
+                    {retrying === r.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <><RotateCcw className="h-3.5 w-3.5 mr-1" />Retry</>}
+                  </Button>
+                : <span className="text-slate-300">—</span>]} />
+        </TabsContent>
+        <TabsContent value="apilog">
+          <Tbl testid="n8n-apilog-table" cols={["Timestamp", "Endpoint", "Method", "Status", "Code", "Latency", "API Key", "Error"]} rows={d.api_logs}
+            render={(r) => [fmt(r.timestamp), r.endpoint, r.method, <Badge className={stColor((r.status || "").toUpperCase() === "SUCCESS" ? "SUCCESS" : (r.status || "").toUpperCase() === "FAILED" ? "FAILED" : "")}>{r.status}</Badge>, r.response_code ?? "—", r.latency_ms != null ? `${r.latency_ms} ms` : "—", r.api_key, (r.error || "—").slice(0, 40)]} />
         </TabsContent>
         <TabsContent value="logs">
           <Tbl testid="n8n-logs-table" cols={["Request ID", "Event", "Method", "Direction", "Timestamp", "Status", "Response", "Error", "Retry", "Action"]} rows={d.sync_logs}
