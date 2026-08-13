@@ -3490,6 +3490,31 @@ def _money(v):
         return "Rp 0"
 
 
+def _clean_terms(html):
+    if not html:
+        return ""
+    import re
+    s = str(html).replace("<strong>", "<b>").replace("</strong>", "</b>").replace("<em>", "<i>").replace("</em>", "</i>")
+
+    def _ol(m):
+        items = re.findall(r"<li[^>]*>(.*?)</li>", m.group(1), re.S | re.I)
+        return "".join(f"{i + 1}. {it}<br/>" for i, it in enumerate(items))
+
+    def _ul(m):
+        items = re.findall(r"<li[^>]*>(.*?)</li>", m.group(1), re.S | re.I)
+        return "".join(f"&bull; {it}<br/>" for it in items)
+
+    s = re.sub(r"<ol[^>]*>(.*?)</ol>", _ol, s, flags=re.S | re.I)
+    s = re.sub(r"<ul[^>]*>(.*?)</ul>", _ul, s, flags=re.S | re.I)
+    s = re.sub(r"</(div|p)>", "<br/>", s, flags=re.I)
+    s = re.sub(r"<(div|p)[^>]*>", "", s, flags=re.I)
+    s = re.sub(r"<br[^>]*>", "<br/>", s, flags=re.I)
+    s = re.sub(r"<(/?)(b|i|u)(\s[^>]*)?>", r"<\1\2>", s, flags=re.I)
+    s = re.sub(r"<(?!/?(?:b|i|u)>|br/>)[^>]*>", "", s)
+    s = re.sub(r"(<br/>\s*)+$", "", s)
+    return s
+
+
 def _pdf_fonts(tpl):
     return {"Helvetica": ("Helvetica", "Helvetica-Bold"), "Times-Roman": ("Times-Roman", "Times-Bold"),
             "Courier": ("Courier", "Courier-Bold")}.get(tpl.get("font") or "Helvetica", ("Helvetica", "Helvetica-Bold"))
@@ -3594,14 +3619,14 @@ def build_document_pdf(kind: str, data: dict, company: dict, itineraries=None, t
             el.append(Paragraph(f"Day {it.get('day', i + 1)}: {it.get('location', '')} — {it.get('activity', '')}", small))
     if data.get("terms"):
         el.append(Spacer(1, 6 * mm))
-        el.append(Paragraph("<b>Terms & Conditions</b>", boldn))
-        el.append(Paragraph(str(data.get("terms")), small))
+        el.append(Paragraph("<b>Terms &amp; Conditions</b>", boldn))
+        el.append(Paragraph(_clean_terms(str(data.get("terms"))), small))
     if kind == "INVOICE" and data.get("due_date"):
         el.append(Spacer(1, 4 * mm))
         el.append(Paragraph(f"<b>Jatuh Tempo:</b> {data.get('due_date')} · <b>Status:</b> {data.get('status', '')}", small))
     if tpl.get("footer_text"):
         el.append(Spacer(1, 8 * mm))
-        el.append(Paragraph(tpl.get("footer_text"), ParagraphStyle("f", parent=small, textColor=accent)))
+        el.append(Paragraph(_clean_terms(tpl.get("footer_text")), ParagraphStyle("f", parent=small, textColor=accent)))
 
     def _stamp(canvas, _d):
         if paid:
@@ -3682,7 +3707,7 @@ async def _render_receipt_pdf(r, tpl=None):
         qr = _qr_image(_public_pdf_url(tpl, "receipt", rid), 24)
         if qr:
             el += [Spacer(1, 10), qr, Paragraph("Scan untuk verifikasi kwitansi", ParagraphStyle("qs", parent=styles["Normal"], fontSize=8))]
-    el += [Spacer(1, 16), Paragraph(tpl.get("footer_text", "Terima kasih atas pembayaran Anda."), styles["Normal"])]
+    el += [Spacer(1, 16), Paragraph(_clean_terms(tpl.get("footer_text")) or "Terima kasih atas pembayaran Anda.", styles["Normal"])]
     paid_full = float(r.get("outstanding_total") or 0) <= 0
 
     def _stamp(canvas, _d):

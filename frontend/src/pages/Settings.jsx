@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useAuth } from "@/context/AuthContext";
 import { useBranding } from "@/context/BrandingContext";
 import api, { formatApiErrorDetail } from "@/lib/api";
@@ -375,6 +375,23 @@ function RolePermissions() {
 }
 
 
+function RichText({ value, onChange, disabled, testid }) {
+  const ref = useRef(null);
+  useEffect(() => { if (ref.current) ref.current.innerHTML = value || ""; }, []); // eslint-disable-line
+  const cmd = (c) => { document.execCommand(c, false, null); if (ref.current) { ref.current.focus(); onChange(ref.current.innerHTML); } };
+  const btns = [["bold", "B"], ["italic", "I"], ["underline", "U"], ["insertUnorderedList", "•"], ["insertOrderedList", "1."]];
+  return (
+    <div className="rounded-md border border-slate-200">
+      <div className="flex gap-1 border-b border-slate-100 p-1">
+        {btns.map(([c, l]) => (
+          <button key={c} type="button" onMouseDown={(e) => { e.preventDefault(); if (!disabled) cmd(c); }} className="h-7 min-w-[28px] px-2 rounded text-sm font-semibold hover:bg-slate-100" data-testid={`${testid}-${c}`}>{l}</button>
+        ))}
+      </div>
+      <div ref={ref} contentEditable={!disabled} suppressContentEditableWarning onInput={(e) => onChange(e.currentTarget.innerHTML)} className="min-h-[80px] p-2 text-sm focus:outline-none" data-testid={testid} />
+    </div>
+  );
+}
+
 function DocTemplateTab({ canManage }) {
   const [t, setT] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -437,8 +454,8 @@ function DocTemplateTab({ canManage }) {
           </div>
         </div>
         <div className="space-y-2 sm:col-span-2"><Label>Teks Footer</Label><Input value={t.footer_text || ""} onChange={set("footer_text")} data-testid="tpl-footer" disabled={!canManage} /></div>
-        <div className="space-y-2 sm:col-span-2"><Label>Terms &amp; Conditions — Invoice</Label><textarea value={t.invoice_terms || ""} onChange={set("invoice_terms")} rows={3} className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm" placeholder="Syarat & ketentuan yang tampil di invoice" data-testid="tpl-invoice-terms" disabled={!canManage} /></div>
-        <div className="space-y-2 sm:col-span-2"><Label>Terms &amp; Conditions — Quotation</Label><textarea value={t.quotation_terms || ""} onChange={set("quotation_terms")} rows={3} className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm" placeholder="Syarat & ketentuan yang tampil di quotation" data-testid="tpl-quotation-terms" disabled={!canManage} /></div>
+        <div className="space-y-2 sm:col-span-2"><Label>Terms &amp; Conditions — Invoice</Label><RichText value={t.invoice_terms} onChange={(v) => setT((o) => ({ ...o, invoice_terms: v }))} disabled={!canManage} testid="tpl-invoice-terms" /></div>
+        <div className="space-y-2 sm:col-span-2"><Label>Terms &amp; Conditions — Quotation</Label><RichText value={t.quotation_terms} onChange={(v) => setT((o) => ({ ...o, quotation_terms: v }))} disabled={!canManage} testid="tpl-quotation-terms" /></div>
         <div className="space-y-2 sm:col-span-2"><Label>Base URL Publik (untuk QR)</Label><Input value={t.public_base_url || ""} onChange={set("public_base_url")} data-testid="tpl-baseurl" disabled={!canManage} /><p className="text-xs text-slate-400">Dipakai di QR agar customer dapat membuka PDF tanpa login.</p></div>
         <div className="sm:col-span-2 flex items-center gap-2">
           {canManage && <Button onClick={save} disabled={saving} className="bg-blue-600 hover:bg-blue-700" data-testid="save-doctpl-button">{saving ? "Saving..." : "Simpan template"}</Button>}

@@ -1,0 +1,34 @@
+{
+  "summary": "RETEST of iteration_36 CRITICAL bug (quotation preview 500 with attributed contentEditable HTML). Fix in _clean_terms (normalize <b/i/u ...>/<br .../> to bare tags before whitelist strip) VERIFIED. Backend pytest 14/14 PASS including the exact previously-failing payloads (<i style=\"color:red\">x</i>, <ol><li style=..>Bayar <b class=..>DP</b></li></ol>, <i style=\"font-size:0.875rem;color:rgb(...)\"> multi-line, and <br style=..> / <br /> / <br class=.../> variants). Frontend E2E: Super Admin login → Settings → tab Template Dokumen → Quotation terms editor: typed text, applied Bold + Ordered List (editor emits <ol><li><b>...</b></li></ol>), Save template OK, then Preview for kind=Quotation returned HTTP 200 application/pdf and PDF iframe (doctpl-preview) renders. Regression: Invoice preview 200, Kwitansi/Receipt preview 200. Staff invoice/quotation PDF endpoints still 200 application/pdf.",
+  "backend_issues": {"critical": [], "minor": [
+    {"endpoint": "POST /api/doc-template/preview", "issue": "On any unhandled error path the response is still text/plain (not structured JSON). Not observed in this run but action item from iteration_36 remains open."}
+  ]},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_doc_template_preview.py",
+    "/app/test_reports/pytest/doctpl_preview_iter37.xml"
+  ],
+  "action_items": [
+    "(Optional) Return JSON body (not text/plain) from POST /api/doc-template/preview on 5xx so UI can surface the underlying reason — carryover from iteration_36, low priority now that the CRITICAL path is fixed.",
+    "(Optional) Sanitize RichText output on the client (Settings.jsx RichText.getHTML) to strip inline styles/font/span before PUT to reduce DB payload noise."
+  ],
+  "critical_code_review_comments": [
+    "_clean_terms fix is effective; recommend adding an inline comment referencing this iteration and keeping the pytest suite as the regression guard.",
+    "server.py remains large (>8k lines) — moving PDF/document module into backend/pdf.py is still recommended for testability."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_doc_template_preview.py (added test_preview_quotation_attributed_html parametrized cases + test_preview_all_kinds_attributed to lock the iteration_36 regression)"
+  ],
+  "success_rate": {"backend": "14/14 = 100%", "frontend": "100% — Save, Quotation/Invoice/Receipt preview all 200, PDF iframe visible"},
+  "test_credentials": "Super Admin dedyirawan18@gmail.com / Admin@123",
+  "seed_data_creation": "None. Only doc_template settings updated via UI Save + PUT tests; singleton settings will be overwritten on next save.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Iteration_36 CRITICAL bug fully resolved. Regression test cases for attributed b/i/u/br tags are now locked in /app/backend/tests/test_doc_template_preview.py (tests test_preview_quotation_attributed_html + test_preview_all_kinds_attributed). Re-run that suite for any future changes to _clean_terms / build_document_pdf / _render_receipt_pdf.",
+  "rca of the issue": {
+    "bug": "iteration_36 CRITICAL — POST /api/doc-template/preview 500 for kind=quotation when terms contained <i style=..>/<b class=..>/<br .../> from Chrome contentEditable.",
+    "reproduction": "curl POST /api/doc-template/preview {kind:'quotation', quotation_terms:'<i style=\"color:red\">x</i>'} previously → 500 text/plain (reportlab paraparser 'saw </i> instead of expected </para>'). Now returns 200 application/pdf.",
+    "root_cause": "Whitelist regex in _clean_terms only kept bare <b>/<i>/<u> opening tags; attributed variants were stripped while bare closings were kept, producing unbalanced markup for reportlab.",
+    "mitigation": "Main agent added normalization step in _clean_terms that rewrites <(/?)(b|i|u)(\\s[^>]*)?> → <\\1\\2> and <br ...> → <br/> before the strip pass. Verified via 14 pytest cases and full E2E UI flow."
+  }
+}

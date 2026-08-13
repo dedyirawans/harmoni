@@ -1,0 +1,55 @@
+{
+  "summary": "Tested BUG FIX for Settings → Template Dokumen preview + rich-text Terms editor. Backend pytest 8/8 PASS (all preview kinds return 200 application/pdf with dirty <br>/<ol>/<ul>/<b>/<i>/<u> payloads; PUT/GET /api/doc-template persists rich HTML; regression: staff invoice/quotation PDF still 200). Frontend E2E: Login → Settings → tab Template Dokumen works, RichText toolbar buttons (bold/italic/underline/insertOrderedList/insertUnorderedList) present for both invoice & quotation terms with correct data-testids. 'Simpan template' returns PUT 200 and toast success. Preview PDF works for kind=Invoice (200 application/pdf) and kind=Kwitansi (200 application/pdf). CRITICAL BUG FOUND: Preview PDF for kind=Quotation returns HTTP 500 when the RichText editor produced <i style=\"...\">…</i> markup (which is what Chrome's execCommand('italic') actually emits in this app because the editor inherits inline styles). Root cause: _clean_terms sanitizer's whitelist regex `<(?!/?(?:b|i|u)>|br/>)[^>]*>` only preserves *bare* opening tags like `<b>`, `<i>`, `<u>` (immediately followed by `>`). When the browser emits `<i style=\"font-size:0.875rem; color:rgb(15,23,41)\">…</i>`, the opening tag has attributes and is STRIPPED, but the matching closing `</i>` is KEPT (it still matches the whitelist), producing unbalanced markup like `<para>Syarat quotation</i>Berlaku 30 hari</i></para>` which crashes reportlab paraparser (`ValueError: saw </i> instead of expected </para>`). Same class of bug also affects `<b …>`, `<u …>`, and `<br …>` / `<br />` (space) shapes.",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "POST /api/doc-template/preview (kind=quotation, and any kind)",
+        "issue": "500 InternalServerError when quotation_terms/invoice_terms contains tags with attributes like `<i style=\"...\">`. _clean_terms only preserves bare `<b>/<i>/<u>` and strips their attribute-carrying variants, leaving orphan closing tags → reportlab paraparser raises `Parse error: saw </i> instead of expected </para>`. Reproduced with body {\"kind\":\"quotation\",\"quotation_terms\":\"<i style=\\\"color:red\\\">Syarat quotation</i><ul><li><i>Berlaku 30 hari</i></li></ul>\"} → 500. Same input with plain `<i>` → 200. Currently persisted quotation_terms in DB is `<i style=\"font-size: 0.875rem; color: rgb(15, 23, 41);\">Syarat quotation</i><div><i style=\"...\">Berlaku 30 hari</i></div>` so *any* subsequent quotation preview and any quotation PDF that references saved terms will 500 until fixed.",
+        "priority": "CRITICAL"
+      }
+    ],
+    "minor": [
+      {"endpoint": "POST /api/doc-template/preview", "issue": "Returns 500 as text/plain instead of a structured JSON error; frontend surfaces generic 'Gagal membuat preview' toast without server detail."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "RichText editor (Settings → Template Dokumen)", "issue": "execCommand('italic'/'bold'/'underline') on selected text emits `<i style=\"...\">` / `<font color=\"...\">` / `<span style=\"...\">` rather than bare `<b>/<i>/<u>` because the contentEditable inherits inline typography styles. That output round-trips into save and preview and triggers the backend 500 above. Recommendation: normalize output at the client (strip inline styles, unwrap non-b/i/u/br/ol/ul/li tags) before sending, OR (preferred) fix _clean_terms to handle attributed variants.", "selector": "[data-testid=\"tpl-quotation-terms\"] / [data-testid=\"tpl-invoice-terms\"]", "priority": "HIGH"}
+    ],
+    "integration_issues": [
+      {"flow": "Settings → Template Dokumen → Preview PDF (kind=Quotation)", "issue": "After typing 'Syarat quotation' + Italic + Unordered List and clicking 'Preview PDF', backend returns 500 and iframe shows toast 'Gagal membuat preview'. Same flow for Invoice and Kwitansi works (200 application/pdf).", "affected_selectors": ["[data-testid=\"preview-kind\"]","[data-testid=\"preview-doctpl-button\"]","[data-testid=\"doctpl-preview\"]"]}
+    ],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_doc_template_preview.py",
+    "/app/test_reports/pytest/doctpl_preview.xml"
+  ],
+  "action_items": [
+    "Fix _clean_terms regex whitelist to keep <b>/<i>/<u>/<br> tags WITH attributes, not only bare forms. Suggested replacement: after existing <ol>/<ul>/<p>/<div>/<br> normalization, run: s = re.sub(r'<(/?)(b|i|u)(\\s[^>]*)?>', r'<\\1\\2>', s, flags=re.I) to normalize to bare tags; THEN strip any remaining `<...>` that isn't `</?(b|i|u)>` or `<br/>`. Also strip <font ...>/<span ...> (they slip through today because current strip regex actually does remove them, but their content is fine — the real problem is only the asymmetric b/i/u case).",
+    "Alternative/complementary: sanitize the RichText output on the FRONTEND in Settings.jsx (Settings.jsx RichText.getHTML) before PUT/preview: replace `<i[^>]*>` → `<i>`, same for b/u; drop <font>/<span> wrappers; keep only b/i/u/br/ol/ul/li.",
+    "Add a unit test at the backend for _clean_terms with an `<i style=\"...\">…</i>` payload to lock the regression.",
+    "Return JSON error body (not text/plain) from POST /api/doc-template/preview on 500 so the UI can show the underlying detail."
+  ],
+  "critical_code_review_comments": [
+    "_clean_terms whitelist regex `<(?!/?(?:b|i|u)>|br/>)[^>]*>` only matches BARE opening/closing tags — real browser output from contentEditable+execCommand always includes attributes (style, color), so the sanitizer strips openings but keeps closings, producing malformed input for reportlab.",
+    "server.py is still 8344 lines; the entire PDF/document module (build_document_pdf, _render_receipt_pdf, _clean_terms) should be moved into a separate module (e.g. backend/pdf.py) for testability.",
+    "doc_template_preview does not wrap build_document_pdf/_render_receipt_pdf in a try/except that returns a structured 400/500 JSON — a paraparser exception bubbles up as raw 500 text/plain.",
+    "RichText.getHTML in Settings.jsx should sanitize contenteditable HTML on the client (strip font/span/style) — currently persists browser-specific markup that varies across engines."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_doc_template_preview.py (new — 8 tests: preview all kinds with dirty HTML, PUT/GET terms persistence, invoice+quotation PDF regression)"
+  ],
+  "success_rate": {"backend": "8/8 pytest = 100% for the synthesized-payload happy paths; but real-world Chrome contentEditable payload FAILS (kind=quotation) → 500, so effective quotation-preview success is 0% until sanitizer is hardened", "frontend": "Invoice preview PASS, Kwitansi preview PASS, Quotation preview FAIL (500). Save template PASS. RichText toolbar UI PASS."},
+  "test_credentials": "Super Admin dedyirawan18@gmail.com/Admin@123 ✓",
+  "seed_data_creation": "None. Only doc_template settings were mutated (invoice_terms/quotation_terms/footer_text) via UI + curl; these are singleton settings and will be overwritten by main agent's next save.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Bug is 100% reproducible via a single curl: POST /api/doc-template/preview {\"kind\":\"quotation\",\"quotation_terms\":\"<i style=\\\"color:red\\\">x</i>\"} → 500 with 'Parse error: saw </i> instead of expected </para>' in /var/log/supervisor/backend.err.log. Plain-<i> variants return 200. Invoice preview does not fail in the current DB state only because the saved invoice_terms happens to have <font color> instead of <i style> markup. As soon as user italicizes invoice terms, the SAME 500 will hit. After main agent fixes _clean_terms (or the RichText sanitizer), re-run /app/backend/tests/test_doc_template_preview.py AND repeat the UI flow: type + Italic + insertUnorderedList in tpl-quotation-terms, save, then Preview for kind=Quotation — must return 200 application/pdf.",
+  "rca of the issue": {
+    "bug": "POST /api/doc-template/preview 500 for kind=quotation (and any kind whose terms contain attributed <i>/<b>/<u> tags).",
+    "reproduction": "1) Login as Super Admin. 2) Settings → Template Dokumen. 3) Focus quotation-terms editor, type text, Ctrl+A, click italic button, then insertUnorderedList. 4) Save (PUT succeeds). 5) Set preview-kind = Quotation, click Preview PDF. Observed: toast 'Gagal membuat preview' + 500 text/plain. Backend log: 'Parse error: saw </i> instead of expected </para>' at reportlab paraparser, called from build_document_pdf line 3622 via _clean_terms.",
+    "root_cause": "_clean_terms regex `<(?!/?(?:b|i|u)>|br/>)[^>]*>` requires the opening tag to be *bare* (`<b>`, `<i>`, `<u>`), i.e. character immediately after tag letter is `>`. Real contentEditable output is `<i style=\"font-size:0.875rem; color:rgb(15,23,41)\">…</i>` — the opening does NOT match the whitelist and gets stripped, while `</i>` (bare closing) DOES match and stays. Result: unbalanced `</i>` orphan tags inside <para>, which crashes reportlab.paraparser.end_i().",
+    "mitigation": "Normalize b/i/u tags before applying the strip pass. Minimal patch in _clean_terms (before the final strip): `s = re.sub(r'<(/?)(b|i|u)(\\s[^>]*)?>', r'<\\1\\2>', s, flags=re.I)`. Additionally strip inline wrappers like <font …>/<span …>. Also wrap doc_template_preview in try/except returning JSONResponse(status_code=422, content={'detail': str(e)}) so the UI can surface the underlying reason."
+  }
+}
