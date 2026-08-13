@@ -67,6 +67,11 @@ export default function BookingDetail() {
     try { const r = await api.post(`/bookings/${id}/invoices/regenerate-all`); toast.success(`${r.data.updated} invoice diperbarui`); load(); }
     catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); }
   };
+  const syncPax = async () => {
+    if (!window.confirm("Samakan pax booking dengan jumlah peserta terdaftar & perbarui invoice?")) return;
+    try { const r = await api.post(`/bookings/${id}/sync-pax`); toast.success(`Pax booking = ${r.data.pax}, ${r.data.invoices_updated} invoice diperbarui`); load(); }
+    catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); }
+  };
 
   const changeStatus = async (v) => {
     if (v === b.status) return;
@@ -135,7 +140,10 @@ export default function BookingDetail() {
           <Card className="border-slate-200"><CardContent className="p-4 space-y-3" data-testid="travelers-list">
             <div className="flex items-center justify-between flex-wrap gap-2">
               {canTravel && <Button size="sm" onClick={() => setTravOpen(true)} className="bg-blue-600 hover:bg-blue-700" data-testid="add-traveler-button"><Plus className="h-4 w-4 mr-1" />Tambah Peserta</Button>}
-              <PaxCountBadge registered={data.travelers.length} pax={b.pax} />
+              <div className="flex items-center gap-2 flex-wrap">
+                <PaxCountBadge registered={data.travelers.length} pax={b.pax} />
+                {data.travelers.length !== (b.pax || 0) && hasPerm("booking.manage") && <Button size="sm" variant="outline" onClick={syncPax} data-testid="sync-pax-button"><RefreshCw className="h-4 w-4 mr-1" />Sinkron Pax</Button>}
+              </div>
             </div>
             {data.travelers.length === 0 ? <p className="text-sm text-slate-400 text-center py-4">Belum ada peserta.</p>
               : data.travelers.map((t) => (

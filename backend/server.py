@@ -1172,14 +1172,16 @@ async def _collect_approvals(user, type_filter=None):
                 "type": "REFUND", "reference": d.get("booking_number") or d.get("cancellation_number", ""),
                 "customer": d.get("customer_name", ""), "amount": d.get("approved_refund") or d.get("proposed_refund") or 0,
                 "requested_by": d.get("created_by") or "System", "requested_date": d.get("created_at"),
-                "status": _ac_norm_status(d.get("status")), "decided_date": _ac_last_at(d.get("timeline")), "actionable": False, "link": "/approvals"})
+                "status": _ac_norm_status(d.get("status")), "decided_date": _ac_last_at(d.get("timeline")),
+                "actionable": role == "super_admin" and d.get("status") == "ACCOUNTING_REVIEWED", "link": "/approvals"})
     if role in ("super_admin", "accounting") and (not type_filter or type_filter == "CANCELLATION"):
         async for d in db.cancellation_requests.find({}):
             rows.append({"source": "cancellation", "id": str(d["_id"]), "approval_number": d.get("cancellation_number"),
                 "type": "CANCELLATION", "reference": d.get("booking_number", ""), "customer": d.get("customer_name", ""),
                 "amount": d.get("penalty") or d.get("refund_amount") or 0, "requested_by": d.get("created_by", ""),
                 "requested_date": d.get("created_at"), "status": _ac_norm_status(d.get("status")),
-                "decided_date": _ac_last_at(d.get("timeline")), "actionable": False, "link": "/approvals"})
+                "decided_date": _ac_last_at(d.get("timeline")),
+                "actionable": role == "super_admin" and d.get("status") == "ACCOUNTING_REVIEWED", "link": "/approvals"})
     if role == "super_admin" and (not type_filter or type_filter == "COMMISSION"):
         async for d in db.commission_closings.find({"status": {"$nin": ["DRAFT", "CALCULATING"]}}):
             sa = d.get("sa_approval")
@@ -5070,6 +5072,29 @@ async def regenerate_all_invoices(bid: str, request: Request, user: dict = Depen
     return {"updated": updated, "pax": amounts["pax"], "total_each": amounts["total"]}
 
 
+@api_router.post("/bookings/{bid}/sync-pax")
+async def sync_booking_pax(bid: str, request: Request, user: dict = Depends(require_permission("booking.manage"))):
+    b = await db.bookings.find_one({"_id": ObjectId(bid)}) if ObjectId.is_valid(bid) else None
+    if not b:
+        raise HTTPException(status_code=404, detail="Booking not found")
+    tc = await db.travelers.count_documents({"booking_id": bid, "cancelled": {"$ne": True}})
+    if tc <= 0:
+        raise HTTPException(status_code=400, detail="Belum ada peserta terdaftar")
+    amounts = await _booking_invoice_amounts(b, pax_count=tc)
+    old_pax = b.get("pax")
+    await db.bookings.update_one({"_id": ObjectId(bid)}, {"$set": {
+        "pax": amounts["pax"], "per_pax_price": amounts["per_pax_price"],
+        "subtotal": amounts["subtotal"], "discount_amount": amounts["discount_amount"],
+        "discount_percent": amounts["discount_percent"], "tax_amount": amounts["tax_amount"],
+        "tax_percent": amounts["tax_percent"], "total": amounts["total"]}})
+    invs = await db.invoices.find({"booking_id": bid}).to_list(500)
+    for inv in invs:
+        await db.invoices.update_one({"_id": inv["_id"]}, {"$set": amounts})
+        await _recompute_invoice_status(str(inv["_id"]))
+    await log_audit(user, "booking", "sync_pax", request, record_id=bid, old={"pax": old_pax}, new={"pax": amounts["pax"], "invoices_updated": len(invs)})
+    return {"pax": amounts["pax"], "per_pax_price": amounts["per_pax_price"], "total": amounts["total"], "invoices_updated": len(invs)}
+
+
 @api_router.post("/approval-center/action/{source}/{aid}")
 async def approval_center_action(source: str, aid: str, body: dict, request: Request, user: dict = Depends(require_role("super_admin"))):
     action = (body.get("action") or "").upper()
@@ -5101,6 +5126,10 @@ async def approval_center_action(source: str, aid: str, body: dict, request: Req
             "sa_approval_by": user["name"], "sa_approval_at": now_iso()}})
         await log_audit(user, "commission", "sa_approval", request, record_id=aid, new={"decision": decision, "reason": reason})
         return serialize(await _get_closing(aid))
+    if source == "cancellation":
+        return await approve_cancellation(aid, {"action": action, "reason": reason}, request, user)
+    if source == "refund":
+        return await approve_refund(aid, {"action": action, "reason": reason}, request, user)
     raise HTTPException(status_code=400, detail="Sumber approval ini harus diproses di halaman terkait")
 
 

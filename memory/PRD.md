@@ -1,3 +1,8 @@
+## Enhancement Batch 4 — Inline Approval (Cancellation/Refund) + Sinkron Pax (2026-06) — DONE (curl E2E + screenshot)
+- **Approval inline Cancellation/Refund**: `_collect_approvals` set `actionable=True` untuk cancellation/refund saat status `ACCOUNTING_REVIEWED` (giliran Super Admin). Endpoint terpadu `POST /api/approval-center/action/{source}/{aid}` kini mendispatch source `cancellation`→`approve_cancellation` & `refund`→`approve_refund` (Approve/Reject/Revise langsung dari Approval Center, tetap menghormati langkah Accounting Review). Reject/Revise wajib reason (400 bila kosong).
+- **Sinkron Pax↔Peserta**: `POST /api/bookings/{bid}/sync-pax` (booking.manage) set `pax` = jumlah peserta aktif, hitung ulang harga (tiered utk PRIVATE) + regenerate semua invoice. Tombol "Sinkron Pax" di tab Peserta BookingDetail (muncul saat mismatch). Verified: pax 1→3, total 15jt, invoice updated.
+
+
 ## Enhancement Batch 3 — Regenerate All + PIC Report + Tiered Pricing + Approval Buttons (2026-06) — DONE (curl E2E + screenshots)
 - **Regenerate Semua**: `POST /api/bookings/{bid}/invoices/regenerate-all` (invoice.manage) hitung ulang semua invoice satu booking. Tombol "Regenerate Semua" di tab Invoice BookingDetail.
 - **Laporan Perpindahan PIC**: `GET /api/reports/pic-changes` (super_admin) dari `lead_activities type=pic_change` (waktu, customer, dari→ke, Satuan/Massal, oleh). Tab "Perpindahan PIC" di Reports (super_admin only via flag admin).
