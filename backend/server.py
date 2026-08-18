@@ -9008,6 +9008,72 @@ async def wa_send(cid: str, body: dict, request: Request, user: dict = Depends(r
     return serialize(msg)
 
 
+WA_MEDIA_TYPES = {"image", "document", "audio", "video"}
+
+
+def _wa_media_sig(mid):
+    return _hmac.new(os.environ["JWT_SECRET"].encode(), f"wamedia:{mid}".encode(), _hashlib.sha256).hexdigest()[:32]
+
+
+@api_router.post("/whatsapp/conversations/{cid}/send-media")
+async def wa_send_media(cid: str, request: Request, media_type: str = Form(...), file: UploadFile = File(...),
+                        caption: str = Form(""), user: dict = Depends(require_role("super_admin"))):
+    conv = await db.whatsapp_conversations.find_one({"_id": ObjectId(cid)}) if ObjectId.is_valid(cid) else None
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    mtype = (media_type or "").lower()
+    if mtype not in WA_MEDIA_TYPES:
+        raise HTTPException(status_code=400, detail="Tipe media tidak valid (image/document/audio/video)")
+    data = await file.read()
+    if len(data) > 16 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Ukuran file maksimal 16MB")
+    allowed, _r = await _wa_outbound_allowed(conv.get("customer_id"))
+    if not allowed:
+        raise HTTPException(status_code=400, detail=f"Pengiriman diblokir: {_r}")
+    media_id = str(_uuid.uuid4())
+    ext = file.filename.split(".")[-1].lower() if file.filename and "." in file.filename else "bin"
+    path = f"{_APP_NAME}/whatsapp/media/{cid}/{media_id}.{ext}"
+    result = put_object(path, data, file.content_type or "application/octet-stream")
+    await db.wa_media.insert_one({"id": media_id, "conversation_id": cid, "storage_path": result["path"],
+        "content_type": file.content_type or "application/octet-stream", "original_filename": file.filename,
+        "size": result.get("size", len(data)), "media_type": mtype, "created_at": now_iso()})
+    media_url = f"{_public_base({})}/api/public/wa-media/{media_id}?sig={_wa_media_sig(media_id)}"
+    svc = await get_wa_provider()
+    if not svc.key:
+        raise HTTPException(status_code=400, detail="Api.co.id belum dikonfigurasi. Isi API Key di menu Provider.")
+    res = await svc.send_message(conv["wa_number"], mtype, content=caption or "", media_url=media_url)
+    mid = f"out-{now_iso()}"
+    if not res["ok"]:
+        await _wa_log(conv.get("account_id", "apico"), "SEND", "OUT", mid, False, res.get("error", ""))
+        raise HTTPException(status_code=502, detail=f"Gagal mengirim media ({res.get('category')}).")
+    data_r = res.get("data") or {}
+    inner = data_r.get("data") if isinstance(data_r, dict) else {}
+    mid = (inner or {}).get("message_id") or data_r.get("message_id") or mid
+    await _wa_log(conv.get("account_id", "apico"), "SEND", "OUT", str(mid), True, "")
+    msg = {"message_id": str(mid), "conversation_id": cid, "account_id": conv.get("account_id", "apico"),
+           "external_provider": APICO_PROVIDER, "external_message_id": str(mid),
+           "sender": "SALES", "sender_type": "SALES", "receiver": conv["wa_number"],
+           "direction": "OUTBOUND", "type": mtype, "message_type": mtype, "content": caption or "",
+           "media_url": media_url, "media_type": mtype, "media_filename": file.filename,
+           "timestamp": now_iso(), "created_at": now_iso(), "sent_at": now_iso(),
+           "ai_generated": False, "human_generated": True, "delivery_status": "SENT", "status": "SENT", "read_status": False}
+    await db.whatsapp_messages.insert_one(msg)
+    await db.whatsapp_conversations.update_one({"_id": conv["_id"]}, {"$set": {
+        "last_message": (f"[{mtype}] " + (caption or file.filename or ""))[:200], "last_activity": now_iso(), "status": "WAITING CUSTOMER"}})
+    return serialize(msg)
+
+
+@api_router.get("/public/wa-media/{media_id}")
+async def public_wa_media(media_id: str, sig: str = Query("")):
+    if not sig or not _hmac.compare_digest(sig, _wa_media_sig(media_id)):
+        raise HTTPException(status_code=403, detail="Invalid signature")
+    rec = await db.wa_media.find_one({"id": media_id})
+    if not rec:
+        raise HTTPException(status_code=404, detail="Not found")
+    content, ct = get_object(rec["storage_path"])
+    return Response(content=content, media_type=rec.get("content_type") or ct)
+
+
 @api_router.get("/whatsapp/logs")
 async def wa_logs(kind: str = "", user: dict = Depends(require_role("super_admin"))):
     q = {} if not kind else ({"kind": {"$ne": "API"}} if kind == "wa" else {"kind": kind})
@@ -9058,7 +9124,7 @@ async def wa_ai_simulate(body: dict, user: dict = Depends(require_role("super_ad
     return {"conversation_id": convid, **result}
 
 
-WA_HANDOVER_KEYWORDS = ["sales", "admin", "manusia", "customer service", " cs ", "komplain", "complain", "bicara dengan", "telepon", "hubungi saya", "orang asli", "marah", "kecewa", "keluhan", "refund", "batal", "pembatalan", "cancel", "nego", "negosiasi", "tawar", "diskon", "permintaan khusus", "special request"]
+WA_HANDOVER_KEYWORDS = ["sales", "admin", "manusia", "customer service", " cs ", "komplain", "complain", "bicara dengan", "telepon", "hubungi saya", "orang asli", "marah", "kecewa", "keluhan", "refund", "batal", "pembatalan", "cancel", "permintaan khusus", "special request"]
 
 
 async def _wa_ai_config():
@@ -9102,6 +9168,7 @@ def _journey_prompt(base, tool_catalog):
         "(4) Jika customer minta DIDAFTARKAN / BOOKING / INVOICE → kumpulkan data (nama, paket, pax, tanggal keberangkatan), lalu KONFIRMASI ringkas ke customer (mis. 'Saya daftarkan a.n. X, paket Y, 2 pax, brgkt Z, ya?'). Setelah customer menjawab YA, jalankan berurutan: (a) SEARCH_PACKAGE untuk memperoleh package_id & departure_id yang VALID (WAJIB — jangan menebak id), (b) CREATE_CUSTOMER bila customer baru (butuh full_name & whatsapp), (c) CREATE_LEAD, (d) CREATE_BOOKING dengan params.confirmed=true beserta customer_id, package_id, departure_id, pax. Semua otomatis ter-tag AUTO SALES.\n"
         "(5) DISKON: hanya bila diminta/relevan, sertakan discount_type ('PERCENT' atau 'NOMINAL') & discount_value di params CREATE_BOOKING. Sistem otomatis membatasi diskon ke maksimal per paket. WAJIB: setelah CREATE_BOOKING berhasil, sampaikan angka PERSIS dari OBSERVATION (invoice_number, discount_amount/discount_percent, total, payment_status) — JANGAN menyebut angka/persentase diskon versi Anda sendiri atau versi yang diminta customer bila berbeda dari OBSERVATION. Bila diskon yang diminta melebihi batas, jelaskan dengan sopan bahwa diskon yang dapat diberikan adalah yang tercantum di OBSERVATION. AI TIDAK PERNAH menandai LUNAS/PAID — status selalu 'Unpaid'; verifikasi pembayaran dilakukan admin.\n"
         "(6) Jawab status pembayaran dengan data aktual CRM (GET_PAYMENT_STATUS).\n"
+        "(7) PERTANYAAN DISKON: bila customer menanyakan/meminta diskon, JANGAN eskalasi ke manusia. Cek field 'max_discount_value'/'discount_available'/'max_discount_note' dari SEARCH_PACKAGE/GET_PACKAGE paket terkait. Bila discount_available true → sampaikan batas diskon maksimal yang tersedia (sesuai max_discount_note) dengan sopan. Bila discount_available false / max_discount_value 0 → sampaikan dengan sopan bahwa 'belum ada diskon untuk paket ini saat ini' (JANGAN mengarang diskon). Saat CREATE_BOOKING, sistem otomatis membatasi diskon ke batas tsb.\n"
         "\nUNTUK MENGAKSES DATA/AKSI CRM, balas TEPAT satu baris diawali 'ACTION:' diikuti JSON, contoh:\n"
         "ACTION: {\"tool\":\"SEARCH_PACKAGE\",\"params\":{\"q\":\"umrah\"}}\n"
         "Sistem akan membalas 'OBSERVATION' lalu lanjutkan. Tool tersedia:\n" + tool_catalog +
@@ -9892,11 +9959,16 @@ async def _ai_audit(tool, params, result, ok, ctx, approval_required=False):
 
 
 def _ai_pkg_public(p):
+    _mdt = (p.get("max_discount_type") or "PERCENT").upper()
+    _mdv = float(p.get("max_discount_value") or 0)
     return {"id": str(p["_id"]), "package_name": p.get("package_name"), "package_code": p.get("package_code"),
             "package_type": p.get("product_type"), "sub_category": p.get("sub_category"),
             "destination": p.get("destination"), "country": p.get("country"), "duration": p.get("duration"),
             "selling_price": p.get("selling_price"), "child_price": p.get("child_price"),
             "infant_price": p.get("infant_price"), "description": p.get("description"),
+            "max_discount_type": _mdt, "max_discount_value": _mdv,
+            "discount_available": _mdv > 0,
+            "max_discount_note": (f"Maksimal diskon {int(_mdv)}%" if _mdt == "PERCENT" else f"Maksimal diskon Rp{int(_mdv):,}") if _mdv > 0 else "Belum ada diskon untuk paket ini saat ini",
             "terms": p.get("terms"), "status": p.get("status")}  # HPP/cost/margin never exposed
 
 

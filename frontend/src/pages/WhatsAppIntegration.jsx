@@ -124,12 +124,32 @@ function ProviderTab() {
 }
 
 // ============================================================ Conversation Monitor
+function MediaBubble({ m }) {
+  if (!m.media_url) return null;
+  const t = m.media_type || m.type;
+  if (t === "image") return <img src={m.media_url} alt={m.media_filename || "image"} className="rounded max-w-full max-h-48 mb-1" data-testid="wa-media-image" />;
+  if (t === "video") return <video src={m.media_url} controls className="rounded max-w-full max-h-48 mb-1" data-testid="wa-media-video" />;
+  if (t === "audio") return <audio src={m.media_url} controls className="w-full mb-1" data-testid="wa-media-audio" />;
+  return <a href={m.media_url} target="_blank" rel="noreferrer" className="flex items-center gap-1 underline mb-1" data-testid="wa-media-doc"><FileText className="h-4 w-4" />{m.media_filename || "Dokumen"}</a>;
+}
+
+function MediaFilePreview({ file, type }) {
+  const [url, setUrl] = useState("");
+  useEffect(() => { const u = URL.createObjectURL(file); setUrl(u); return () => URL.revokeObjectURL(u); }, [file]);
+  if (type === "image") return <img src={url} alt="preview" className="h-12 w-12 object-cover rounded" />;
+  if (type === "video") return <video src={url} className="h-12 w-12 object-cover rounded" />;
+  return <span className="flex items-center gap-1 text-slate-600 truncate"><FileText className="h-4 w-4" />{file.name}</span>;
+}
+
 function MonitorTab() {
   const [convs, setConvs] = useState(null);
   const [sel, setSel] = useState(null);
   const [msgs, setMsgs] = useState([]);
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
+  const [mediaType, setMediaType] = useState("image");
+  const [mediaFile, setMediaFile] = useState(null);
+  const [uploading, setUploading] = useState(false);
   const load = useCallback(() => api.get("/whatsapp/conversations").then((r) => setConvs(r.data)).catch(() => setConvs([])), []);
   useEffect(() => { load(); }, [load]);
   const openConv = async (c) => {
@@ -142,6 +162,20 @@ function MonitorTab() {
     try { await api.post(`/whatsapp/conversations/${sel.id}/send`, { type: "text", content: text }); setText(""); await openConv(sel); }
     catch (e) { err(e); } finally { setSending(false); }
   };
+  const sendMedia = async () => {
+    if (!mediaFile || !sel) return;
+    setUploading(true);
+    try {
+      const fd = new FormData();
+      fd.append("media_type", mediaType);
+      fd.append("file", mediaFile);
+      fd.append("caption", text || "");
+      await api.post(`/whatsapp/conversations/${sel.id}/send-media`, fd, { headers: { "Content-Type": "multipart/form-data" } });
+      toast.success("Media terkirim");
+      setMediaFile(null); setText(""); await openConv(sel);
+    } catch (e) { err(e); } finally { setUploading(false); }
+  };
+  const accept = { image: "image/*", document: ".pdf,.doc,.docx,.xls,.xlsx,.txt,.csv", audio: "audio/*", video: "video/*" }[mediaType];
   if (convs === null) return <div className="p-8 flex justify-center"><Loader2 className="h-6 w-6 animate-spin text-blue-600" /></div>;
   return (
     <div className="grid md:grid-cols-3 gap-4 h-[560px]" data-testid="wa-monitor-tab">
@@ -168,18 +202,42 @@ function MonitorTab() {
             <div className="flex-1 overflow-y-auto p-4 space-y-2 bg-slate-50">
               {msgs.map((m) => (
                 <div key={m.id} className={`flex ${m.sender === "CUSTOMER" ? "justify-start" : "justify-end"}`}>
-                  <div className={`max-w-[75%] rounded-lg px-3 py-2 text-sm ${m.sender === "CUSTOMER" ? "bg-white border" : m.sender === "AI" ? "bg-blue-100 text-blue-900" : "bg-emerald-100 text-emerald-900"}`}>
+                  <div className={`max-w-[75%] rounded-lg px-3 py-2 text-sm ${m.sender === "CUSTOMER" ? "bg-white border" : m.sender === "AI" ? "bg-blue-100 text-blue-900" : "bg-emerald-100 text-emerald-900"}`} data-testid={`wa-msg-${m.id}`}>
                     <div className="text-[10px] opacity-60 mb-0.5">{m.sender}{m.ai_generated ? " · AI" : ""}</div>
-                    {m.content}
+                    <MediaBubble m={m} />
+                    {m.content && <div className="whitespace-pre-wrap">{m.content}</div>}
                     <div className="text-[10px] opacity-50 mt-0.5">{fmt(m.timestamp)}</div>
                   </div>
                 </div>
               ))}
               {msgs.length === 0 && <div className="text-center text-slate-400 text-sm py-6">Belum ada pesan.</div>}
             </div>
-            <div className="p-3 border-t flex gap-2">
-              <Input value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => e.key === "Enter" && send()} placeholder="Ketik pesan manual..." data-testid="wa-msg-input" />
-              <Button onClick={send} disabled={sending} data-testid="wa-msg-send">{sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}</Button>
+            {mediaFile && (
+              <div className="px-3 pt-2 bg-white">
+                <div className="flex items-center gap-2 text-xs bg-slate-50 border rounded p-2" data-testid="wa-media-preview">
+                  <MediaFilePreview file={mediaFile} type={mediaType} />
+                  <button className="ml-auto text-slate-400 hover:text-red-500 px-1" onClick={() => setMediaFile(null)} data-testid="wa-media-clear">✕</button>
+                </div>
+              </div>
+            )}
+            <div className="p-3 border-t flex gap-2 items-center bg-white">
+              <Select value={mediaType} onValueChange={setMediaType}>
+                <SelectTrigger className="w-[110px]" data-testid="wa-media-type"><SelectValue /></SelectTrigger>
+                <SelectContent className="bg-white">
+                  <SelectItem value="image">Gambar</SelectItem>
+                  <SelectItem value="document">Dokumen</SelectItem>
+                  <SelectItem value="audio">Audio</SelectItem>
+                  <SelectItem value="video">Video</SelectItem>
+                </SelectContent>
+              </Select>
+              <label className="cursor-pointer inline-flex items-center justify-center h-9 w-9 rounded-md border hover:bg-slate-50 shrink-0" data-testid="wa-media-attach">
+                <UploadCloud className="h-4 w-4 text-slate-600" />
+                <input type="file" accept={accept} className="hidden" onChange={(e) => setMediaFile(e.target.files?.[0] || null)} />
+              </label>
+              <Input value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => e.key === "Enter" && !mediaFile && send()} placeholder={mediaFile ? "Caption (opsional)..." : "Ketik pesan manual..."} data-testid="wa-msg-input" />
+              {mediaFile
+                ? <Button onClick={sendMedia} disabled={uploading} data-testid="wa-media-send">{uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}</Button>
+                : <Button onClick={send} disabled={sending} data-testid="wa-msg-send">{sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}</Button>}
             </div>
           </>)}
       </CardContent></Card>

@@ -1,3 +1,17 @@
+## Kirim Media WhatsApp + Diskon Otomatis AI (2026-06) — DONE ✅ (backend curl E2E; FE smoke)
+### Diskon Otomatis (AI tak lagi handover saat "diskon")
+- `WA_HANDOVER_KEYWORDS`: dihapus "diskon","nego","negosiasi","tawar" → pertanyaan/permintaan diskon TIDAK lagi memicu handover.
+- `_ai_pkg_public` kini mengekspos `max_discount_type`, `max_discount_value`, `discount_available`, `max_discount_note` (HPP tetap disembunyikan).
+- `_journey_prompt` step (7): bila customer tanya diskon → AI cek field paket; discount_available true → sampaikan batas maks; false/0 → "belum ada diskon untuk paket ini saat ini" (tak mengarang). CREATE_BOOKING tetap meng-cap otomatis.
+- Verified simulator: cap=0 → "belum tersedia program diskon" (tanpa handover); cap=10% → "diskon maksimal hingga 10%" (tanpa handover). Paket uji direset ke 0.
+
+### Kirim Media WhatsApp (gambar/dokumen/audio/video + preview)
+- Backend: `POST /whatsapp/conversations/{cid}/send-media` (super_admin, multipart: media_type/file/caption). Validasi tipe (image/document/audio/video) & ukuran ≤16MB, cek `_wa_outbound_allowed` (opt-out/blacklist). Upload ke Emergent Object Storage (`wa_media`), kirim via provider `send_message(media_url=...)`, simpan message dgn `media_url`/`media_type`/`media_filename`.
+- Penyajian publik untuk provider fetch: `GET /public/wa-media/{media_id}?sig=HMAC` (`_wa_media_sig`, HMAC JWT_SECRET). Verified: sig benar→200 image/png, sig salah→403, tipe invalid→400.
+- Frontend `WhatsAppIntegration.jsx` MonitorTab: dropdown tipe media + tombol attach (UploadCloud) + preview file (`MediaFilePreview`) + kirim; bubble merender media (`MediaBubble`: img/video/audio/link dokumen). Semua ber-data-testid (wa-media-*). Verified FE smoke: kontrol media render di /ai-hub → WhatsApp → Conversation Monitor.
+- CATATAN: pengiriman ke provider LIVE hanya bisa E2E dgn recipient nyata (uji ke nomor SIM bogus menghasilkan 502 provider — path upload/URL/serve sudah tervalidasi). media_url memakai `_public_base` (PUBLIC_BASE_URL/frontend base) agar provider bisa mengunduh.
+
+
 ## AI Auto-Registrasi + Booking + Invoice + Diskon per Paket (2026-06) — DONE ✅ (simulator E2E)
 - **Batas diskon per paket configurable**: `PackageModel` + CRUD kini punya `max_discount_type` (PERCENT/NOMINAL) & `max_discount_value` (default 0). UI form paket (create di Products.jsx & edit di ProductDetail.jsx) punya field "Maks Diskon (Tipe/Nilai)". Default 0 = AI tidak beri diskon kecuali admin set per paket.
 - **Alur AI (`_journey_prompt` + `_ai_create_booking`)**: customer minta daftar → AI konfirmasi ringkas → setelah "YA": SEARCH_PACKAGE (ambil package_id/departure_id valid — WAJIB, tak menebak) → CREATE_CUSTOMER (bila baru) → CREATE_LEAD → CREATE_BOOKING (confirmed=true). Booking di-tag `booking_source=AUTO SALES`, `ai_generated=True`, `created_by=AI AGENT`; invoice status SELALU `Unpaid` (AI tak pernah PAID/LUNAS).
