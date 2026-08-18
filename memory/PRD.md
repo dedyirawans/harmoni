@@ -1,3 +1,12 @@
+## PHASE 10G — WhatsApp Safety, Human-like Messaging & Anti-Spam — INCREMENT 1 (2026-06) — DONE ✅ (backend curl E2E)
+- **Sudah ada dari fase sebelumnya** (memenuhi 10G): API resmi Api.co.id (bukan WAHA/web-automation), read receipt (mark_as_read + read_at), typing indicator (rate-limit ≤1/3dtk), natural delay, duplicate protection (webhook idempotent + message_id dedup), handover stop-AI, opt-out guard (`_wa_outbound_allowed`), template approved-only, message status (RECEIVED/SENT + timestamps).
+- **Baru (Increment 1)**: `whatsapp_safety_settings` (GET/PUT `/whatsapp/safety`) — messaging_enabled, ai_auto_reply, read_receipt, typing_indicator, min/max_delay, typing_speed, debounce_window, rate_per_minute/hour/day, max_followup, business_hours + opening/closing, off_hours_behavior (AUTO_RESPONSE/WAIT_UNTIL_BUSINESS_HOURS/HUMAN_HANDOVER), away_message, marketing_enabled.
+- **Wired ke outbound AI** (`_wa_ai_process`): cek messaging_enabled → business hours/out-of-office behavior → **rate limiter** (per menit/jam/hari → blok + log RATE_LIMIT) → typing (bila aktif) → **delay configurable** (typing_speed + min/max + randomisasi ringan). Human-like murni untuk UX (tidak untuk bypass).
+- **Monitoring** GET `/whatsapp/messaging-monitor`: messages today, inbound/outbound, AI/human responses, failed, rate-limit events, opt-out customers, handover.
+- Verified curl: safety get/put persist, monitor 9 metrik, RBAC sales 403.
+- **BELUM (Increment 2 — backlog)**: Message Debounce (gabung pesan beruntun jadi 1 context), Outbound Queue + background worker (QUEUED→…→READ), message splitting, follow-up cooldown, Safety & Messaging **UI tab** + Messaging Monitor UI, Business Hours/Out-of-Office UI.
+
+
 ## PHASE 10F — AI Monitoring, Quality Control & Improvement (2026-06) — DONE ✅ (backend curl E2E; FE iter_47 100%)
 - Menu **AI Management → AI Monitoring** (`/ai-monitoring`, super_admin only). Page `AIMonitoring.jsx` 4 tab: Dashboard, Response Quality, Error Log, Knowledge Gaps.
 - **Dashboard** GET `/ai/monitoring/dashboard`: 10 counts (total conversations, AI handled, human handover, new customers, new leads, orders, bookings, AUTO SALES, AI→SALES, failed responses) + 6 performance rate (AI resolution, handover, lead creation, order creation, booking conversion, response failure).

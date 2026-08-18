@@ -9174,11 +9174,26 @@ async def _wa_ai_process(conv_id, text):
     if not allowed:
         await _wa_log(conv.get("account_id", "apico"), "AI", "OUT", conv_id, False, f"outbound blocked: {_reason}")
         return
+    s = await _wa_safety()
+    if not s.get("messaging_enabled", True):
+        return
+    if not _wa_business_open(s):
+        beh = s.get("off_hours_behavior", "AUTO_RESPONSE")
+        if beh == "HUMAN_HANDOVER":
+            await _wa_handover(conv, "Di luar jam kerja")
+            return
+        if beh == "WAIT_UNTIL_BUSINESS_HOURS":
+            reply = s.get("away_message") or reply
+    ok_rate, rk = await _wa_rate_check(s)
+    if not ok_rate:
+        await _wa_log(conv.get("account_id", "apico"), "RATE_LIMIT", "OUT", conv_id, False, f"rate limit {rk}")
+        return
     svc = await get_wa_provider()
     mid = f"ai-{now_iso()}"
     try:
-        await svc.send_typing(conv["wa_number"])
-        await asyncio.sleep(min(6.0, max(1.0, len(reply) / 30.0)))
+        if s.get("typing_indicator", True):
+            await svc.send_typing(conv["wa_number"])
+        await asyncio.sleep(_wa_typing_delay(reply, s))
         res = await svc.send_message(conv["wa_number"], "text", content=reply)
         if res.get("ok"):
             data = res.get("data") or {}
@@ -10549,6 +10564,82 @@ async def ai_mon_to_faq(body: dict, user: dict = Depends(require_role("super_adm
            "updated_at": now_iso(), "updated_by": user["name"]}
     r = await db.knowledge_faqs.insert_one(doc)
     return {"ok": True, "id": str(r.inserted_id)}
+
+
+WA_SAFETY_DEFAULTS = {"messaging_enabled": True, "ai_auto_reply": True, "read_receipt": True,
+    "typing_indicator": True, "min_delay": 1.0, "max_delay": 8.0, "typing_speed": 45,
+    "debounce_window": 3, "rate_per_minute": 8, "rate_per_hour": 60, "rate_per_day": 300,
+    "max_followup": 2, "business_hours_enabled": False, "opening_time": "09:00", "closing_time": "18:00",
+    "off_hours_behavior": "AUTO_RESPONSE", "away_message": "Halo Kak, pesan sudah kami terima. Tim kami akan membantu pada jam operasional.",
+    "marketing_enabled": False}
+
+
+async def _wa_safety():
+    doc = await db.whatsapp_safety_settings.find_one({"_id": "main"}) or {}
+    return {**WA_SAFETY_DEFAULTS, **{k: v for k, v in doc.items() if k != "_id"}}
+
+
+def _wa_typing_delay(reply, s):
+    import random as _rnd
+    speed = max(10, float(s.get("typing_speed") or 45))
+    dur = len(reply or "") / speed
+    dur += _rnd.uniform(0, 0.6)
+    return min(float(s.get("max_delay") or 8), max(float(s.get("min_delay") or 1), dur))
+
+
+async def _wa_rate_check(s):
+    from datetime import timedelta
+    now = datetime.now(timezone.utc)
+    async def cnt(mins):
+        since = (now - timedelta(minutes=mins)).isoformat()
+        return await db.whatsapp_messages.count_documents({"direction": "OUTBOUND", "created_at": {"$gte": since}})
+    if await cnt(1) >= int(s.get("rate_per_minute") or 8):
+        return False, "per_minute"
+    if await cnt(60) >= int(s.get("rate_per_hour") or 60):
+        return False, "per_hour"
+    if await cnt(1440) >= int(s.get("rate_per_day") or 300):
+        return False, "per_day"
+    return True, ""
+
+
+def _wa_business_open(s):
+    if not s.get("business_hours_enabled"):
+        return True
+    from datetime import datetime as _dt
+    now = _dt.now(timezone.utc)
+    hm = now.strftime("%H:%M")
+    return (s.get("opening_time") or "00:00") <= hm <= (s.get("closing_time") or "23:59")
+
+
+@api_router.get("/whatsapp/safety")
+async def wa_safety_get(user: dict = Depends(require_role("super_admin"))):
+    return await _wa_safety()
+
+
+@api_router.put("/whatsapp/safety")
+async def wa_safety_put(body: dict, user: dict = Depends(require_role("super_admin"))):
+    upd = {k: body[k] for k in WA_SAFETY_DEFAULTS if k in body}
+    upd["updated_at"] = now_iso()
+    await db.whatsapp_safety_settings.update_one({"_id": "main"}, {"$set": upd}, upsert=True)
+    return await _wa_safety()
+
+
+@api_router.get("/whatsapp/messaging-monitor")
+async def wa_messaging_monitor(user: dict = Depends(require_role("super_admin"))):
+    from datetime import timedelta
+    today = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+    q = {"created_at": {"$gte": today}}
+    inbound = await db.whatsapp_messages.count_documents({**q, "direction": "INBOUND"})
+    outbound = await db.whatsapp_messages.count_documents({**q, "direction": "OUTBOUND"})
+    ai_resp = await db.whatsapp_messages.count_documents({**q, "sender": "AI"})
+    human = await db.whatsapp_messages.count_documents({**q, "sender": "SALES"})
+    failed = await db.whatsapp_logs.count_documents({"kind": "AI", "ok": False, "created_at": {"$gte": today}})
+    rate_events = await db.whatsapp_logs.count_documents({"kind": "RATE_LIMIT", "created_at": {"$gte": today}})
+    optout = await db.customers.count_documents({"wa_consent": "OPT_OUT"})
+    handover = await db.whatsapp_conversations.count_documents({"status": "HUMAN HANDOVER"})
+    return {"messages_today": inbound + outbound, "inbound": inbound, "outbound": outbound,
+            "ai_responses": ai_resp, "human_responses": human, "failed_messages": failed,
+            "rate_limit_events": rate_events, "opt_out_customers": optout, "human_handover": handover}
 
 
 app.include_router(api_router)
