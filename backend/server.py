@@ -9095,6 +9095,7 @@ def _journey_prompt(base, tool_catalog):
 
 async def _wa_ai_journey(conv, text, ctx_extra=None):
     import json as _jj
+    import re as _rej
     cfg = await _wa_ai_config()
     kb = await _kb_build_context()
     base = _kb_system_prompt(kb, extra_style=cfg.get("style", ""), extra_rules=cfg.get("rules", ""), comm_block=await _comm_active_block())
@@ -9105,34 +9106,59 @@ async def _wa_ai_journey(conv, text, ctx_extra=None):
     catalog = "\n".join(f"- {t['tool']}: {t['label']}" for t in tools)
     sys = _journey_prompt(base, catalog)
     convo_id = str(conv["_id"])
+    # Riwayat percakapan berjalan → agar AI tidak mengulang salam/penutup di tiap pesan
+    hist_msgs = await db.whatsapp_messages.find({"conversation_id": convo_id}).sort("created_at", 1).to_list(1000)
+    prior = [m for m in hist_msgs if (m.get("content") or "").strip()][-12:]
+    is_first = not any(m.get("direction") == "OUTBOUND" for m in hist_msgs)
+    hist_text = "\n".join(f"{'Customer' if m.get('direction') == 'INBOUND' else 'Anda (AI)'}: {(m.get('content') or '')[:300]}" for m in prior)
+    sys += ("\n\n=== KONTEKS PERCAKAPAN YANG SEDANG BERLANGSUNG ===\n" + (hist_text or "(percakapan baru)")
+            + "\n\nATURAN PERCAKAPAN (WAJIB): Ini percakapan WhatsApp yang SEDANG BERLANGSUNG. "
+            + ("Ini pesan PERTAMA customer — beri salam pembuka SATU KALI secukupnya. " if is_first
+               else "Customer SUDAH pernah disapa sebelumnya — JANGAN memberi salam/greeting pembuka lagi. ")
+            + "JANGAN mengulang salam, perkenalan diri, atau kalimat penutup/closing yang sama di setiap pesan. "
+            "Langsung tanggapi inti pesan TERAKHIR customer secara natural, seperti melanjutkan obrolan.")
     ctx = {"conversation_id": convo_id, "customer_id": conv.get("customer_id"), "confirmed": (ctx_extra or {}).get("confirmed")}
     from emergentintegrations.llm.chat import LlmChat, UserMessage
     chat = LlmChat(api_key=os.environ["EMERGENT_LLM_KEY"], session_id=f"wa-j-{convo_id}", system_message=sys).with_model("gemini", "gemini-3-flash-preview")
+
+    def _clean(r):
+        out = [ln for ln in (r or "").splitlines() if not ln.strip().upper().startswith(("ACTION:", "OBSERVATION"))]
+        return "\n".join(out).strip()
+
     tools_used = []
     turn = text or ""
     reply = ""
     for _ in range(4):
         reply = ((await chat.send_message(UserMessage(text=turn))) or "").strip()
         if "[HANDOVER]" in reply.upper():
-            reason = reply.split("]", 1)[-1].strip() or "Eskalasi ke sales"
+            reason = reply.upper().split("[HANDOVER]", 1)[-1].strip(" ]:") or "Eskalasi ke sales"
             return {"handover": True, "reason": reason, "reply": None, "tools_used": tools_used}
-        s = reply.lstrip()
-        if s.upper().startswith("ACTION:"):
-            raw = s.split(":", 1)[1].strip()
-            if raw.startswith("```"):
-                raw = raw.strip("`").split("\n", 1)[-1]
+        mm = _rej.search(r'ACTION:\s*(\{.*\})', reply, _rej.DOTALL)
+        if mm:
+            raw = mm.group(1)
             try:
                 act = _jj.loads(raw)
             except Exception:
-                return {"handover": False, "reply": reply, "tools_used": tools_used}
+                act = None
+            if not act:
+                turn = ("Format ACTION tidak valid. Jika butuh data CRM, kirim ULANG tepat satu baris "
+                        "ACTION JSON yang benar. Jika sudah cukup, jawab customer langsung TANPA menuliskan ACTION/JSON.")
+                continue
             tool = (act.get("tool") or "").upper()
             params = act.get("params") or {}
             res = await _ai_tool_dispatch(tool, params, {**ctx, "confirmed": params.get("confirmed", ctx.get("confirmed")), "approved_by": "AI AGENT"})
             tools_used.append({"tool": tool, "ok": res.get("ok"), "summary": res.get("message") or res.get("error") or "ok"})
-            turn = f"OBSERVATION dari {tool}: {_jj.dumps(res)[:1500]}. Lanjutkan journey; balas ke customer bila sudah cukup."
+            turn = (f"OBSERVATION dari {tool}: {_jj.dumps(res)[:1500]}. Lanjutkan journey; jika sudah cukup, "
+                    "balas ke customer dengan bahasa natural TANPA menulis ACTION/JSON/OBSERVATION.")
             continue
-        return {"handover": False, "reply": reply, "tools_used": tools_used}
-    return {"handover": False, "reply": reply, "tools_used": tools_used}
+        cleaned = _clean(reply)
+        if cleaned:
+            return {"handover": False, "reply": cleaned, "tools_used": tools_used}
+        turn = "Jawab customer langsung dengan bahasa natural (TANPA ACTION/JSON/OBSERVATION)."
+    cleaned = _clean(reply)
+    if not cleaned:
+        return {"handover": True, "reason": "AI tidak dapat menyusun jawaban", "reply": None, "tools_used": tools_used}
+    return {"handover": False, "reply": cleaned, "tools_used": tools_used}
 
 
 async def _wa_ai_process(conv_id, text):

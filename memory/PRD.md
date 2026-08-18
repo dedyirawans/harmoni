@@ -1,4 +1,11 @@
-## MENU CONSOLIDATION & N8N REMOVAL (2026-06) — DONE ✅ (FE compile OK; backend healthy)
+## BUGFIX — AI WhatsApp: Greeting/Closing berulang & Token ACTION bocor (2026-06) — DONE ✅ (simulator E2E)
+- **Root cause 1 (greeting/closing berulang)**: `_wa_ai_journey` membuat sesi LLM baru tiap pesan TANPA riwayat percakapan → AI selalu mengira pesan pertama. **Fix**: inject 12 pesan terakhir dari `whatsapp_messages` ke system prompt + deteksi `is_first` (ada OUTBOUND sebelumnya?) + aturan wajib "jangan ulang salam/penutup; lanjutkan obrolan".
+- **Root cause 2 (token `ACTION:{...}` terkirim ke customer)**: bila JSON tool gagal di-parse, kode lama mengembalikan `reply` mentah ke customer; balasan akhir juga tak disanitasi. **Fix**: ekstraksi ACTION via regex `ACTION:\s*(\{.*\})` (di mana pun), bila parse gagal → re-prompt (bukan kirim mentah), sanitasi balasan akhir membuang baris `ACTION:`/`OBSERVATION`, dan bila kosong → handover (tidak pernah membocorkan token).
+- Verified simulator: turn 1 greet wajar tanpa leak; turn 2 (dengan riwayat) tidak mengulang greeting & query "hongkong" dijawab natural tanpa leak ACTION.
+- Live provider Api.co.id: CONNECTED, webhook terdaftar+aktif, parser inbound/outbound diselaraskan (`message.received`→inbound, `message.sent/delivered/read`→diabaikan).
+
+
+
 - **N8N dihapus dari UI**: menu "AI Automation" (/n8n) + halaman `N8N.jsx` dihapus; menu "Integration" (halaman n8n webhook/API config) + `Integration.jsx` dihapus; blok N8N di `Settings.jsx` (webhook URL, Enable N8N, SLA, template balasan cepat) dihapus. Route/perm `/n8n` & `/integration` dihapus dari nav.js & App.js.
 - **N8N dinonaktifkan di backend**: `trigger_n8n()` → no-op, `_deliver_n8n()` → return `{skipped, reason:"n8n removed"}`. 150+ call site tetap valid (tidak ada pengiriman n8n). Endpoint `/integrations/n8n/*` & machine-to-machine `/n8n/*` menjadi dorman (tidak dipakai UI). Deep-link notifikasi `/n8n` → `/ai-hub`.
 - **Konsolidasi menu AI & WhatsApp**: 6 menu (WhatsApp Integration, Knowledge Base, Communication Style, AI Tools, AI Monitoring, Auto Follow-Up) digabung jadi SATU menu **"AI & WhatsApp"** (`/ai-hub`, `AIWorkspace.jsx`) dengan 6 sub-tab yang me-render komponen halaman existing inline (Radix Tabs → hanya tab aktif yang mount). Sidebar jauh lebih ringkas.
