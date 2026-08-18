@@ -142,7 +142,7 @@ function GlobalSearch() {
     ["Payment", (res.payments || []).map((x) => ({ key: x._id, title: x.reference_number || x.invoice_number || "Payment", sub: `${x.invoice_number || ""} · Rp ${x.amount || 0}`, path: "/accounting", tid: `search-payment-${x._id}` }))],
     ["Package", (res.packages || []).map((x) => ({ key: x._id, title: x.package_name, sub: `${x.package_code || ""} · ${x.product_type || ""}`, path: "/products", tid: `search-package-${x._id}` }))],
     ["Refund", (res.refunds || []).map((x) => ({ key: x._id, title: x.refund_number, sub: `${x.customer_name || ""} · ${x.status || ""}`, path: cust(x.customer_id) || "/approvals", tid: `search-refund-${x._id}` }))],
-    ["Conversation", (res.conversations || []).map((x) => ({ key: x._id || x.conversation_id, title: x.customer_name || x.whatsapp || "Chat", sub: (x.message || "").slice(0, 40), path: cust(x.customer_id) || "/n8n", tid: `search-conv-${x._id || x.conversation_id}` }))],
+    ["Conversation", (res.conversations || []).map((x) => ({ key: x._id || x.conversation_id, title: x.customer_name || x.whatsapp || "Chat", sub: (x.message || "").slice(0, 40), path: cust(x.customer_id) || "/ai-hub", tid: `search-conv-${x._id || x.conversation_id}` }))],
   ] : [];
   const empty = res && groups.every(([, items]) => items.length === 0);
 

@@ -15,13 +15,6 @@ import { ROLE_LABELS } from "@/config/nav";
 import { toast } from "sonner";
 import { Loader2, Trash2, Plus } from "lucide-react";
 
-const DEFAULT_N8N_TEMPLATES = [
-  { label: "Jam Operasional", text: "Halo, terima kasih sudah menghubungi kami. Jam operasional CS kami Senin–Sabtu pukul 08.00–17.00 WIB. Kami akan segera membantu Anda. 🙏" },
-  { label: "Minta Data Jamaah", text: "Untuk proses pendaftaran, mohon kirimkan data jamaah: Nama sesuai paspor, NIK, No. Paspor & masa berlaku, tanggal lahir, dan nomor WhatsApp aktif. Terima kasih." },
-  { label: "Cek Ketersediaan", text: "Baik, kami cek ketersediaan seat untuk tanggal keberangkatan yang Anda inginkan terlebih dahulu ya. Mohon ditunggu sebentar." },
-  { label: "Info Pembayaran", text: "Untuk melanjutkan pemesanan, silakan lakukan pembayaran DP. Detail rekening & invoice akan kami kirimkan. Ada yang bisa kami bantu lagi?" },
-];
-
 const COMPANY_FIELDS = [
   ["company_name", "Company Name"], ["email", "Email"], ["phone", "Phone"],
   ["website", "Website"], ["npwp", "NPWP"], ["nib", "NIB"],
@@ -57,11 +50,6 @@ export default function Settings() {
     catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); }
     finally { setSavingS(false); }
   };
-
-  const tpls = () => system?.n8n_reply_templates || DEFAULT_N8N_TEMPLATES;
-  const updTpl = (i, k, v) => { const arr = [...tpls()]; arr[i] = { ...arr[i], [k]: v }; setSystem({ ...system, n8n_reply_templates: arr }); };
-  const addTpl = () => setSystem({ ...system, n8n_reply_templates: [...tpls(), { label: "", text: "" }] });
-  const rmTpl = (i) => setSystem({ ...system, n8n_reply_templates: tpls().filter((_, j) => j !== i) });
 
   if (company === null || system === null)
     return <div className="p-12 flex justify-center"><Loader2 className="h-6 w-6 animate-spin text-blue-600" /></div>;
@@ -181,26 +169,8 @@ export default function Settings() {
             </Card>
 
             <Card className="border-slate-200 shadow-sm">
-              <CardHeader><CardTitle className="font-display text-lg">Integration & Notifications</CardTitle></CardHeader>
+              <CardHeader><CardTitle className="font-display text-lg">Notifications</CardTitle></CardHeader>
               <CardContent className="space-y-4">
-                <div className="space-y-2">
-                  <Label>N8N Webhook URL</Label>
-                  <Input value={system.n8n?.webhook_url || ""} disabled={!canManage}
-                    onChange={(e) => setSystem({ ...system, n8n: { ...system.n8n, webhook_url: e.target.value } })}
-                    data-testid="n8n-url-input" />
-                </div>
-                <div className="flex items-center justify-between">
-                  <Label>Enable N8N</Label>
-                  <Switch checked={!!system.n8n?.enabled} disabled={!canManage}
-                    onCheckedChange={(v) => setSystem({ ...system, n8n: { ...system.n8n, enabled: v } })} data-testid="n8n-switch" />
-                </div>
-                <div className="space-y-2">
-                  <Label>SLA Handover (menit)</Label>
-                  <Input type="number" min="1" value={system.n8n_sla_minutes ?? 15} disabled={!canManage}
-                    onChange={(e) => setSystem({ ...system, n8n_sla_minutes: Number(e.target.value) })}
-                    data-testid="n8n-sla-input" />
-                  <p className="text-xs text-slate-400">Percakapan "Perlu CS" yang belum dibalas melebihi menit ini ditandai SLA overdue di N8N Inbox.</p>
-                </div>
                 <div className="flex items-center justify-between">
                   <Label>Email notifications</Label>
                   <Switch checked={!!system.notification?.email_enabled} disabled={!canManage}
@@ -220,34 +190,6 @@ export default function Settings() {
                     </div>
                   </div>
                 ))}
-              </CardContent>
-            </Card>
-
-            <Card className="border-slate-200 shadow-sm lg:col-span-2" data-testid="n8n-templates-card">
-              <CardHeader><CardTitle className="font-display text-lg">Template Balasan Cepat N8N Inbox</CardTitle></CardHeader>
-              <CardContent className="space-y-3">
-                <p className="text-xs text-slate-500">Template balasan cepat yang tampil sebagai chip di N8N Inbox untuk CS (klik = kirim satu ketuk). Ubah label / isi pesan lalu simpan.</p>
-                {tpls().map((t, i) => (
-                  <div key={i} className="flex gap-2 items-start" data-testid={`n8n-tpl-row-${i}`}>
-                    <Input className="w-48 shrink-0" placeholder="Label" value={t.label || ""} disabled={!canManage}
-                      onChange={(e) => updTpl(i, "label", e.target.value)} data-testid={`n8n-tpl-label-${i}`} />
-                    <Textarea className="flex-1 resize-none" rows={2} placeholder="Isi pesan balasan" value={t.text || ""} disabled={!canManage}
-                      onChange={(e) => updTpl(i, "text", e.target.value)} data-testid={`n8n-tpl-text-${i}`} />
-                    {canManage && (
-                      <Button variant="outline" size="icon" className="shrink-0" onClick={() => rmTpl(i)} data-testid={`n8n-tpl-remove-${i}`}>
-                        <Trash2 className="h-4 w-4 text-red-500" />
-                      </Button>
-                    )}
-                  </div>
-                ))}
-                {canManage && (
-                  <div className="flex gap-2 pt-1">
-                    <Button variant="outline" onClick={addTpl} data-testid="n8n-tpl-add"><Plus className="h-4 w-4 mr-1" />Tambah Template</Button>
-                    <Button onClick={saveSystem} disabled={savingS} className="bg-blue-600 hover:bg-blue-700" data-testid="n8n-tpl-save">
-                      {savingS ? "Saving..." : "Simpan Template"}
-                    </Button>
-                  </div>
-                )}
               </CardContent>
             </Card>
 

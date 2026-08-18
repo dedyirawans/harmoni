@@ -1,4 +1,11 @@
-## PHASE 10I — Natural Writing Time & Message Delivery (2026-06) — DONE ✅ (backend unit+E2E; FE render OK)
+## MENU CONSOLIDATION & N8N REMOVAL (2026-06) — DONE ✅ (FE compile OK; backend healthy)
+- **N8N dihapus dari UI**: menu "AI Automation" (/n8n) + halaman `N8N.jsx` dihapus; menu "Integration" (halaman n8n webhook/API config) + `Integration.jsx` dihapus; blok N8N di `Settings.jsx` (webhook URL, Enable N8N, SLA, template balasan cepat) dihapus. Route/perm `/n8n` & `/integration` dihapus dari nav.js & App.js.
+- **N8N dinonaktifkan di backend**: `trigger_n8n()` → no-op, `_deliver_n8n()` → return `{skipped, reason:"n8n removed"}`. 150+ call site tetap valid (tidak ada pengiriman n8n). Endpoint `/integrations/n8n/*` & machine-to-machine `/n8n/*` menjadi dorman (tidak dipakai UI). Deep-link notifikasi `/n8n` → `/ai-hub`.
+- **Konsolidasi menu AI & WhatsApp**: 6 menu (WhatsApp Integration, Knowledge Base, Communication Style, AI Tools, AI Monitoring, Auto Follow-Up) digabung jadi SATU menu **"AI & WhatsApp"** (`/ai-hub`, `AIWorkspace.jsx`) dengan 6 sub-tab yang me-render komponen halaman existing inline (Radix Tabs → hanya tab aktif yang mount). Sidebar jauh lebih ringkas.
+- Verified: login 200, tidak ada compile error, sidebar hanya menampilkan "AI & WhatsApp" (tanpa n8n/Integration), sub-tab WhatsApp (Provider CONNECTED) & Auto Follow-Up ter-render.
+
+
+
 ### A/B Testing Follow-Up (2026-06) — DONE ✅ (backend E2E; FE render OK)
 - Config (di settings follow-up): `ab_testing_enabled` (default OFF), `ab_min_sample` (20), `ab_style_a`, `ab_style_b`.
 - `_afu_ab_choose`: bila enabled & belum ada pemenang → pilih varian **A/B acak 50/50**; bila pemenang terkunci → selalu pakai pemenang. Style varian di-inject ke prompt `_afu_generate_message(variant_style=...)`. Item queue simpan `ab_variant`. Berlaku untuk lead & payment follow-up.

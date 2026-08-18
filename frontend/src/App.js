@@ -32,19 +32,18 @@ import Quotations from "@/pages/Quotations";
 import Bookings from "@/pages/Bookings";
 import BookingDetail from "@/pages/BookingDetail";
 import Accounting from "@/pages/Accounting";
-import Integration from "@/pages/Integration";
 import Commission from "@/pages/Commission";
 import Approvals from "@/pages/Approvals";
 import Tax from "@/pages/Tax";
 import Reports from "@/pages/Reports";
 import Forecast from "@/pages/Forecast";
-import N8N from "@/pages/N8N";
 import WhatsAppIntegration from "@/pages/WhatsAppIntegration";
 import KnowledgeBase from "@/pages/KnowledgeBase";
 import CommunicationStyle from "@/pages/CommunicationStyle";
 import AITools from "@/pages/AITools";
 import AIMonitoring from "@/pages/AIMonitoring";
 import AutoFollowUp from "@/pages/AutoFollowUp";
+import AIWorkspace from "@/pages/AIWorkspace";
 import Tasks from "@/pages/Tasks";
 import ApprovalCenter from "@/pages/ApprovalCenter";
 
@@ -66,13 +65,12 @@ const PAGES = {
   "/quotations": Quotations,
   "/booking": Bookings,
   "/accounting": Accounting,
-  "/integration": Integration,
   "/commission": Commission,
   "/approvals": Approvals,
   "/tax": Tax,
   "/reports": Reports,
   "/forecast": Forecast,
-  "/n8n": N8N,
+  "/ai-hub": AIWorkspace,
   "/whatsapp": WhatsAppIntegration,
   "/knowledge-base": KnowledgeBase,
   "/communication-style": CommunicationStyle,

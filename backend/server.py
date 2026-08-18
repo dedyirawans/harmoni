@@ -1074,7 +1074,7 @@ async def _run_auto_scan():
             customer_id=cid, due_date=today, priority="URGENT", notes="Customer butuh CS (handover)",
             created_by="system", source="auto_handover", dedupe=f"autohandover:{key}")
         await notify("Customer Needs Human Reply", f"{c.get('customer_name') or c.get('whatsapp', '')}",
-            link=f"/crm/{cid}" if cid else "/n8n", role="super_admin", ntype="CUSTOMER_REPLY", priority="urgent",
+            link=f"/crm/{cid}" if cid else "/ai-hub", role="super_admin", ntype="CUSTOMER_REPLY", priority="urgent",
             dedupe=f"handover:{key}:{today}")
     for b in await db.bookings.find({"status": {"$ne": "CANCELLED"}}).to_list(5000):
         bid = str(b["_id"])
@@ -3641,34 +3641,13 @@ async def _n8n_cfg():
 
 
 async def _deliver_n8n(event, data):
-    cfg = await _n8n_cfg()
-    url = cfg.get("webhook_url")
-    log = {"event": event, "data": data, "created_at": now_iso()}
-    if not cfg.get("enabled") or not url:
-        log.update({"ok": False, "skipped": True, "reason": "n8n disabled or webhook URL empty"})
-        await db.n8n_logs.insert_one(log)
-        return serialize(log)
-    events = cfg.get("events") or {}
-    if events.get(event) is False:
-        log.update({"ok": False, "skipped": True, "reason": "event disabled"})
-        await db.n8n_logs.insert_one(log)
-        return serialize(log)
-    payload = {"event": event, "timestamp": now_iso(), "data": data}
-    try:
-        async with httpx.AsyncClient(timeout=15) as client:
-            resp = await client.post(url, json=payload)
-        log.update({"ok": resp.status_code < 400, "status_code": resp.status_code, "response": resp.text[:400]})
-    except Exception as e:
-        log.update({"ok": False, "error": str(e)})
-    await db.n8n_logs.insert_one(log)
-    return serialize(log)
+    # N8N integration removed — feature disabled (tidak ada pengiriman keluar).
+    return {"ok": False, "skipped": True, "reason": "n8n removed"}
 
 
 def trigger_n8n(event, data):
-    try:
-        asyncio.create_task(_deliver_n8n(event, data))
-    except RuntimeError:
-        pass
+    # N8N integration removed — no-op.
+    return None
 
 
 async def _compute_reminders(user):

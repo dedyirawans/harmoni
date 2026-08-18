@@ -14,7 +14,7 @@ const META = {
   "/tax": ["Tax", "PPN configuration and tax reports."],
   "/commission": ["Commission", "Sales commission tracking and payouts."],
   "/reports": ["Reports", "Operational and financial reports with export."],
-  "/integration": ["Integration", "N8N, WhatsApp and third-party connections."],
+  "/integration": ["Integration", "Third-party connections."],
   "/packages": ["Packages", "Browse available travel packages."],
   "/departures": ["Departures", "Upcoming departure schedules."],
   "/notifications": ["Notifications", "Your alerts and updates."],
