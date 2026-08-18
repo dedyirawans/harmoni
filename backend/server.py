@@ -8996,7 +8996,7 @@ async def _wa_ai_process(conv_id, text):
     try:
         from emergentintegrations.llm.chat import LlmChat, UserMessage
         kb = await _kb_build_context()
-        base = _kb_system_prompt(kb, extra_style=cfg.get("style", ""), extra_rules=cfg.get("rules", ""))
+        base = _kb_system_prompt(kb, extra_style=cfg.get("style", ""), extra_rules=cfg.get("rules", ""), comm_block=await _comm_active_block())
         extra_know = (cfg.get("knowledge") or "").strip()
         sys = (base + (f"\n\n=== PENGETAHUAN TAMBAHAN (WhatsApp) ===\n{extra_know}" if extra_know else "") +
                "\n\nKONTEKS: Anda adalah AI Sales Assistant di WhatsApp. "
@@ -9182,11 +9182,14 @@ async def _kb_build_context():
     }
 
 
-def _kb_system_prompt(ctx, extra_style="", extra_rules=""):
+def _kb_system_prompt(ctx, extra_style="", extra_rules="", comm_block=""):
+    intro = ("Anda adalah AI Assistant untuk agen travel umroh, haji & tour. "
+             + ("Jawab dengan ringkas, sopan, dan profesional.\n" if comm_block
+                else "Jawab dalam Bahasa Indonesia yang ringkas, sopan, dan profesional.\n"))
     return (
-        "Anda adalah AI Knowledge Assistant untuk agen travel umroh, haji & tour. "
-        "Jawab dalam Bahasa Indonesia yang ringkas, sopan, dan profesional.\n"
-        f"{('Gaya: ' + extra_style + chr(10)) if extra_style else ''}"
+        intro
+        + (comm_block + "\n\n" if comm_block else "")
+        + f"{('Gaya: ' + extra_style + chr(10)) if extra_style else ''}"
         f"{('Aturan tambahan: ' + extra_rules + chr(10)) if extra_rules else ''}"
         "URUTAN PRIORITAS SUMBER JAWABAN: (1) DATA PAKET terkini, (2) Kebijakan Perusahaan aktif, "
         "(3) FAQ aktif, (4) Pengetahuan umum aktif. Jika ada informasi baru yang aktif, JANGAN gunakan informasi lama.\n"
@@ -9396,7 +9399,7 @@ async def kb_test_ai(body: dict, user: dict = Depends(require_role("super_admin"
     ctx = await _kb_build_context()
     try:
         from emergentintegrations.llm.chat import LlmChat, UserMessage
-        sys = _kb_system_prompt(ctx)
+        sys = _kb_system_prompt(ctx, comm_block=await _comm_active_block())
         chat = LlmChat(api_key=os.environ["EMERGENT_LLM_KEY"], session_id=f"kb-test-{now_iso()}",
                        system_message=sys).with_model("gemini", "gemini-3-flash-preview")
         answer = ((await chat.send_message(UserMessage(text=question))) or "").strip()
@@ -9411,6 +9414,226 @@ async def kb_test_ai(body: dict, user: dict = Depends(require_role("super_admin"
             "knowledge_count": len(ctx["knowledge_used"]),
         },
     }
+
+
+# ============================================================================
+# PHASE 10C — AI Communication Style, Personality & Brand Voice (Super Admin)
+# ============================================================================
+COMM_TONES = ["Friendly", "Professional", "Warm", "Helpful", "Casual", "Formal"]
+COMM_LANGUAGES = ["AUTO", "ID", "EN"]
+COMM_EMOJI = ["OFF", "LIMITED", "NORMAL"]
+COMM_LENGTH = ["SHORT", "MEDIUM", "DETAILED"]
+COMM_STATUSES = ["DRAFT", "ACTIVE", "INACTIVE", "ARCHIVED"]
+COMM_DEFAULTS = {
+    "language": "AUTO", "tone": ["Friendly", "Professional", "Helpful"], "emoji_usage": "LIMITED",
+    "response_length": "MEDIUM", "formality": "", "personality": "", "greeting_style": "",
+    "closing_style": "", "sales_style": "", "brand_voice": "", "examples": [], "do_list": [], "dont_list": [],
+}
+
+
+def _comm_style_block(p):
+    """Build the brand-voice / communication instruction text from a profile dict."""
+    if not p:
+        return ""
+    tones = ", ".join(p.get("tone") or []) or "Friendly, Professional, Helpful"
+    lang = {
+        "AUTO": "Deteksi bahasa customer (Bahasa Indonesia atau English) dan balas dalam bahasa yang SAMA. Jangan berpindah bahasa tanpa alasan.",
+        "ID": "Selalu balas dalam Bahasa Indonesia.",
+        "EN": "Always reply in English.",
+    }.get(p.get("language", "AUTO"), "Deteksi bahasa customer dan balas dalam bahasa yang sama.")
+    emoji = {
+        "OFF": "Jangan gunakan emoji sama sekali.",
+        "LIMITED": "Gunakan emoji secukupnya (maksimal satu bila benar-benar perlu).",
+        "NORMAL": "Boleh gunakan emoji wajar, tidak berlebihan.",
+    }.get(p.get("emoji_usage", "LIMITED"))
+    length = {
+        "SHORT": "Jawaban singkat, 1-2 kalimat.",
+        "MEDIUM": "Jawaban ringkas & mudah dibaca di WhatsApp; hindari paragraf terlalu panjang.",
+        "DETAILED": "Jawaban lebih lengkap namun tetap terstruktur dan mudah dibaca.",
+    }.get(p.get("response_length", "MEDIUM"))
+    parts = [
+        f"=== GAYA KOMUNIKASI & BRAND VOICE (profil: {p.get('profile_name') or '-'}) ===",
+        f"Bahasa: {lang}",
+        f"Tone: {tones}." + (f" Formality: {p.get('formality')}." if p.get('formality') else "") + (f" Kepribadian: {p.get('personality')}." if p.get('personality') else ""),
+    ]
+    if p.get("brand_voice"):
+        parts.append(f"Brand voice perusahaan: {p.get('brand_voice')}")
+    parts.append(f"Emoji: {emoji}")
+    parts.append(f"Panjang jawaban: {length}")
+    parts.append(
+        "Gaya sales: consultative selling" + (f" — {p.get('sales_style')}" if p.get('sales_style') else "") +
+        ". JANGAN memaksa, spam, memberi tekanan, membuat klaim palsu, mengatakan 'pasti', atau 'termurah' tanpa data. "
+        "Pahami kebutuhan, tanyakan jumlah pax/tanggal/budget bila relevan, rekomendasikan paket yang sesuai, dan transparan.")
+    if p.get("greeting_style"):
+        parts.append(f"Greeting: {p.get('greeting_style')} — jangan mengulang greeting yang sama berkali-kali dalam satu percakapan.")
+    if p.get("closing_style"):
+        parts.append(f"Closing: {p.get('closing_style')}")
+    do = p.get("do_list") or []
+    dont = p.get("dont_list") or []
+    if do:
+        parts.append("DO: " + "; ".join(do))
+    if dont:
+        parts.append("DON'T: " + "; ".join(dont))
+    ex = p.get("examples") or []
+    if ex:
+        parts.append("CONTOH KOMUNIKASI IDEAL (tiru GAYA-nya, bukan menyalin isinya):")
+        for e in ex[:8]:
+            if (e.get("customer") or e.get("ideal_ai")):
+                parts.append(f"- Customer: {e.get('customer','')}\n  AI ideal: {e.get('ideal_ai','')}")
+    parts.append("Personalisasi: gunakan nama customer bila dikenal & sesuai konteks, TETAPI jangan berlebihan menyebut nama di setiap pesan.")
+    parts.append("ALUR RESPONS WAJIB: (1) Pahami, (2) Ambil data, (3) Validasi, (4) Jawab, (5) Tawarkan langkah berikutnya. "
+                 "JANGAN pernah mengaku sebagai manusia. JANGAN memberikan informasi yang belum pasti.")
+    return "\n".join(parts)
+
+
+async def _comm_get_active():
+    return await db.communication_profiles.find_one({"status": "ACTIVE"})
+
+
+async def _comm_active_block():
+    return _comm_style_block(await _comm_get_active())
+
+
+def _comm_sanitize(body):
+    tone = body.get("tone")
+    if isinstance(tone, str):
+        tone = [t.strip() for t in tone.split(",") if t.strip()]
+    tone = [t for t in (tone or []) if t in COMM_TONES]
+
+    def _lines(v):
+        if isinstance(v, str):
+            return [x.strip() for x in v.splitlines() if x.strip()]
+        return [str(x).strip() for x in (v or []) if str(x).strip()]
+
+    ex = []
+    for e in (body.get("examples") or []):
+        if isinstance(e, dict) and (e.get("customer") or e.get("ideal_ai")):
+            ex.append({"customer": e.get("customer", ""), "ideal_ai": e.get("ideal_ai", "")})
+    return {
+        "profile_name": (body.get("profile_name") or "").strip(),
+        "language": body.get("language") if body.get("language") in COMM_LANGUAGES else "AUTO",
+        "tone": tone or ["Friendly", "Professional", "Helpful"],
+        "formality": body.get("formality") or "", "personality": body.get("personality") or "",
+        "greeting_style": body.get("greeting_style") or "", "closing_style": body.get("closing_style") or "",
+        "emoji_usage": body.get("emoji_usage") if body.get("emoji_usage") in COMM_EMOJI else "LIMITED",
+        "response_length": body.get("response_length") if body.get("response_length") in COMM_LENGTH else "MEDIUM",
+        "sales_style": body.get("sales_style") or "", "brand_voice": body.get("brand_voice") or "",
+        "examples": ex, "do_list": _lines(body.get("do_list")), "dont_list": _lines(body.get("dont_list")),
+    }
+
+
+@api_router.get("/communication/meta")
+async def comm_meta(user: dict = Depends(require_role("super_admin"))):
+    return {"tones": COMM_TONES, "languages": COMM_LANGUAGES, "emoji": COMM_EMOJI,
+            "lengths": COMM_LENGTH, "statuses": COMM_STATUSES, "defaults": COMM_DEFAULTS}
+
+
+@api_router.get("/communication/profiles")
+async def comm_list(user: dict = Depends(require_role("super_admin"))):
+    docs = await db.communication_profiles.find({"status": {"$ne": "ARCHIVED"}}).sort("updated_at", -1).to_list(200)
+    return [serialize(d) for d in docs]
+
+
+@api_router.get("/communication/profiles/{pid}")
+async def comm_get(pid: str, user: dict = Depends(require_role("super_admin"))):
+    doc = await db.communication_profiles.find_one({"_id": ObjectId(pid)}) if ObjectId.is_valid(pid) else None
+    if not doc:
+        raise HTTPException(status_code=404, detail="Profil tidak ditemukan")
+    return serialize(doc)
+
+
+@api_router.post("/communication/profiles")
+async def comm_create(body: dict, request: Request, user: dict = Depends(require_role("super_admin"))):
+    data = _comm_sanitize(body)
+    if not data["profile_name"]:
+        raise HTTPException(status_code=400, detail="Nama profil wajib diisi")
+    want_active = (body.get("status") or "DRAFT").upper() == "ACTIVE"
+    data.update({"status": "ACTIVE" if want_active else "DRAFT", "version": 1, "history": [],
+                 "created_at": now_iso(), "created_by": user["name"], "updated_at": now_iso(), "updated_by": user["name"]})
+    if want_active:
+        await db.communication_profiles.update_many({"status": "ACTIVE"}, {"$set": {"status": "INACTIVE"}})
+    r = await db.communication_profiles.insert_one(data)
+    await log_audit(user, "communication", "create_profile", request, record_id=str(r.inserted_id), new={"profile_name": data["profile_name"]})
+    return serialize(await db.communication_profiles.find_one({"_id": r.inserted_id}))
+
+
+@api_router.put("/communication/profiles/{pid}")
+async def comm_update(pid: str, body: dict, request: Request, user: dict = Depends(require_role("super_admin"))):
+    doc = await db.communication_profiles.find_one({"_id": ObjectId(pid)}) if ObjectId.is_valid(pid) else None
+    if not doc:
+        raise HTTPException(status_code=404, detail="Profil tidak ditemukan")
+    snapshot = {k: doc.get(k) for k in ("profile_name", "language", "tone", "formality", "personality",
+                "greeting_style", "closing_style", "emoji_usage", "response_length", "sales_style",
+                "brand_voice", "examples", "do_list", "dont_list", "status")}
+    snapshot["version"] = doc.get("version", 1)
+    snapshot["updated_by"] = doc.get("updated_by")
+    snapshot["updated_at"] = doc.get("updated_at")
+    data = _comm_sanitize(body)
+    if not data["profile_name"]:
+        raise HTTPException(status_code=400, detail="Nama profil wajib diisi")
+    data.update({"version": doc.get("version", 1) + 1, "updated_at": now_iso(), "updated_by": user["name"]})
+    await db.communication_profiles.update_one({"_id": doc["_id"]}, {"$set": data, "$push": {"history": snapshot}})
+    await log_audit(user, "communication", "update_profile", request, record_id=pid, old=snapshot, new={"profile_name": data["profile_name"]})
+    return serialize(await db.communication_profiles.find_one({"_id": doc["_id"]}))
+
+
+@api_router.post("/communication/profiles/{pid}/activate")
+async def comm_activate(pid: str, request: Request, user: dict = Depends(require_role("super_admin"))):
+    doc = await db.communication_profiles.find_one({"_id": ObjectId(pid)}) if ObjectId.is_valid(pid) else None
+    if not doc:
+        raise HTTPException(status_code=404, detail="Profil tidak ditemukan")
+    await db.communication_profiles.update_many({"status": "ACTIVE"}, {"$set": {"status": "INACTIVE"}})
+    await db.communication_profiles.update_one({"_id": doc["_id"]}, {"$set": {"status": "ACTIVE", "updated_at": now_iso(), "updated_by": user["name"]}})
+    await log_audit(user, "communication", "activate_profile", request, record_id=pid)
+    return {"ok": True, "status": "ACTIVE"}
+
+
+@api_router.get("/communication/profiles/{pid}/versions")
+async def comm_versions(pid: str, user: dict = Depends(require_role("super_admin"))):
+    doc = await db.communication_profiles.find_one({"_id": ObjectId(pid)}) if ObjectId.is_valid(pid) else None
+    if not doc:
+        raise HTTPException(status_code=404, detail="Profil tidak ditemukan")
+    return {"current_version": doc.get("version", 1), "history": list(reversed(doc.get("history") or []))}
+
+
+@api_router.delete("/communication/profiles/{pid}")
+async def comm_archive(pid: str, request: Request, user: dict = Depends(require_role("super_admin"))):
+    doc = await db.communication_profiles.find_one({"_id": ObjectId(pid)}) if ObjectId.is_valid(pid) else None
+    if not doc:
+        raise HTTPException(status_code=404, detail="Profil tidak ditemukan")
+    await db.communication_profiles.update_one({"_id": doc["_id"]}, {"$set": {"status": "ARCHIVED", "updated_at": now_iso(), "updated_by": user["name"]}})
+    await log_audit(user, "communication", "archive_profile", request, record_id=pid)
+    return {"ok": True, "status": "ARCHIVED"}
+
+
+@api_router.post("/communication/preview")
+async def comm_preview(body: dict, user: dict = Depends(require_role("super_admin"))):
+    msg = (body.get("customer_message") or body.get("question") or "").strip()
+    if not msg:
+        raise HTTPException(status_code=400, detail="Pesan customer wajib diisi")
+    if body.get("profile"):
+        prof = _comm_sanitize(body["profile"])
+        prof["profile_name"] = body["profile"].get("profile_name") or "Preview"
+    elif body.get("profile_id") and ObjectId.is_valid(body["profile_id"]):
+        prof = await db.communication_profiles.find_one({"_id": ObjectId(body["profile_id"])})
+    else:
+        prof = await _comm_get_active()
+    ctx = await _kb_build_context()
+    comm = _comm_style_block(prof)
+    cust_name = (body.get("customer_name") or "").strip()
+    if cust_name:
+        comm += f"\nNama customer yang sedang chat: {cust_name} (gunakan seperlunya)."
+    try:
+        from emergentintegrations.llm.chat import LlmChat, UserMessage
+        sys = _kb_system_prompt(ctx, comm_block=comm)
+        chat = LlmChat(api_key=os.environ["EMERGENT_LLM_KEY"], session_id=f"comm-{now_iso()}",
+                       system_message=sys).with_model("gemini", "gemini-3-flash-preview")
+        answer = ((await chat.send_message(UserMessage(text=msg))) or "").strip()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"AI tidak dapat memproses: {str(e)[:200]}")
+    return {"answer": answer or "Maaf, informasi belum tersedia. Boleh saya bantu hubungkan dengan tim sales kami?",
+            "profile_used": (prof or {}).get("profile_name") if prof else None,
+            "knowledge_used": ctx["knowledge_used"], "package_used": ctx["package_used"]}
 
 
 app.include_router(api_router)
