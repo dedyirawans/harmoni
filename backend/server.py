@@ -8636,6 +8636,312 @@ async def executive_dashboard(month: Optional[str] = None, user: dict = Depends(
 
 
 
+# ============================================================================
+# PHASE 10A — Native WhatsApp (WAHA) Integration — Tahap 1 (Super Admin)
+# ============================================================================
+import re as _re
+import json
+from fastapi.responses import PlainTextResponse
+
+
+def _wa_norm_phone(s):
+    d = _re.sub(r"\D", "", s or "")
+    return d[-12:] if len(d) > 12 else d
+
+
+def _wa_chat_id(num):
+    return f"{_re.sub(chr(92)+'D', '', num or '')}@c.us"
+
+
+async def _wa_get_account(aid):
+    acc = await db.whatsapp_accounts.find_one({"_id": ObjectId(aid)}) if ObjectId.is_valid(aid or "") else None
+    return acc
+
+
+def _wa_headers(acc):
+    key = _dec(acc.get("api_key_enc") or "")
+    return {"X-Api-Key": key} if key else {}
+
+
+def _wa_public(acc):
+    return {"id": str(acc["_id"]), "name": acc.get("name"), "base_url": acc.get("base_url"),
+            "session": acc.get("session"), "engine": acc.get("engine"), "display_name": acc.get("display_name"),
+            "wa_number": acc.get("wa_number"), "webhook_status": acc.get("webhook_status", "UNKNOWN"),
+            "connection_status": acc.get("connection_status", "DISCONNECTED"), "status": acc.get("status", "ACTIVE"),
+            "api_key_mask": _mask(_dec(acc.get("api_key_enc") or "")), "has_hmac": bool(acc.get("hmac_secret_enc")),
+            "verify_token": acc.get("verify_token"), "created_at": acc.get("created_at")}
+
+
+async def _wa_log(account_id, kind, direction, ref, ok, error="", payload=None):
+    await db.whatsapp_logs.insert_one({"account_id": account_id, "kind": kind, "direction": direction,
+        "ref": ref, "ok": bool(ok), "error": (error or "")[:500],
+        "payload": payload if isinstance(payload, dict) else None, "created_at": now_iso()})
+
+
+@api_router.get("/whatsapp/accounts")
+async def wa_list_accounts(user: dict = Depends(require_role("super_admin"))):
+    accs = await db.whatsapp_accounts.find({}).sort("created_at", -1).to_list(100)
+    return [_wa_public(a) for a in accs]
+
+
+@api_router.post("/whatsapp/accounts")
+async def wa_create_account(body: dict, request: Request, user: dict = Depends(require_role("super_admin"))):
+    import secrets as _secrets
+    doc = {"name": (body.get("name") or "WhatsApp Account").strip(),
+           "base_url": (body.get("base_url") or "").rstrip("/"), "session": body.get("session") or "default",
+           "engine": body.get("engine") or "WEBJS", "display_name": body.get("display_name") or "",
+           "wa_number": body.get("wa_number") or "", "api_key_enc": _enc(body.get("api_key") or ""),
+           "hmac_secret_enc": _enc(body.get("hmac_secret") or "") if body.get("hmac_secret") else "",
+           "verify_token": _secrets.token_urlsafe(16), "webhook_status": "PENDING",
+           "connection_status": "DISCONNECTED", "status": "ACTIVE", "created_at": now_iso(), "created_by": user["name"]}
+    r = await db.whatsapp_accounts.insert_one(doc)
+    await log_audit(user, "whatsapp", "create_account", request, record_id=str(r.inserted_id), new={"name": doc["name"]})
+    acc = await db.whatsapp_accounts.find_one({"_id": r.inserted_id})
+    return _wa_public(acc)
+
+
+@api_router.put("/whatsapp/accounts/{aid}")
+async def wa_update_account(aid: str, body: dict, request: Request, user: dict = Depends(require_role("super_admin"))):
+    acc = await _wa_get_account(aid)
+    if not acc:
+        raise HTTPException(status_code=404, detail="Account not found")
+    upd = {}
+    for k in ("name", "base_url", "session", "engine", "display_name", "wa_number", "status"):
+        if k in body:
+            upd[k] = body[k].rstrip("/") if k == "base_url" and body[k] else body[k]
+    if body.get("api_key"):
+        upd["api_key_enc"] = _enc(body["api_key"])
+    if body.get("hmac_secret") is not None:
+        upd["hmac_secret_enc"] = _enc(body["hmac_secret"]) if body["hmac_secret"] else ""
+    await db.whatsapp_accounts.update_one({"_id": ObjectId(aid)}, {"$set": upd})
+    await log_audit(user, "whatsapp", "update_account", request, record_id=aid, new={k: v for k, v in upd.items() if "enc" not in k})
+    return _wa_public(await _wa_get_account(aid))
+
+
+@api_router.delete("/whatsapp/accounts/{aid}")
+async def wa_delete_account(aid: str, request: Request, user: dict = Depends(require_role("super_admin"))):
+    acc = await _wa_get_account(aid)
+    if not acc:
+        raise HTTPException(status_code=404, detail="Account not found")
+    await db.whatsapp_accounts.update_one({"_id": ObjectId(aid)}, {"$set": {"status": "ARCHIVED", "connection_status": "DISCONNECTED"}})
+    await log_audit(user, "whatsapp", "archive_account", request, record_id=aid)
+    return {"ok": True}
+
+
+def _wa_call(acc, method, path, **kw):
+    url = f"{acc.get('base_url','').rstrip('/')}{path}"
+    kw.setdefault("timeout", 20)
+    kw.setdefault("headers", {})
+    kw["headers"].update(_wa_headers(acc))
+    return _requests.request(method, url, **kw)
+
+
+@api_router.post("/whatsapp/accounts/{aid}/connect")
+async def wa_connect(aid: str, request: Request, user: dict = Depends(require_role("super_admin"))):
+    acc = await _wa_get_account(aid)
+    if not acc:
+        raise HTTPException(status_code=404, detail="Account not found")
+    if not acc.get("base_url"):
+        raise HTTPException(status_code=400, detail="WAHA Base URL belum diisi. Lengkapi konfigurasi terlebih dahulu.")
+    try:
+        r = _wa_call(acc, "POST", "/api/sessions/start", json={"name": acc.get("session", "default")})
+        ok = r.status_code < 400
+        await db.whatsapp_accounts.update_one({"_id": ObjectId(aid)}, {"$set": {"connection_status": "CONNECTING" if ok else "ERROR"}})
+        await _wa_log(aid, "CONNECT", "OUT", "start", ok, "" if ok else r.text[:200])
+        if not ok:
+            raise HTTPException(status_code=502, detail="Gagal memulai sesi WAHA. Periksa Base URL/API Key.")
+        return {"connection_status": "CONNECTING", "message": "Sesi dimulai. Scan QR untuk menyambungkan."}
+    except HTTPException:
+        raise
+    except Exception as e:
+        await db.whatsapp_accounts.update_one({"_id": ObjectId(aid)}, {"$set": {"connection_status": "ERROR"}})
+        await _wa_log(aid, "CONNECT", "OUT", "start", False, str(e))
+        raise HTTPException(status_code=502, detail="Tidak dapat menghubungi server WAHA. Periksa koneksi & konfigurasi.")
+
+
+@api_router.get("/whatsapp/accounts/{aid}/qr")
+async def wa_qr(aid: str, user: dict = Depends(require_role("super_admin"))):
+    acc = await _wa_get_account(aid)
+    if not acc or not acc.get("base_url"):
+        raise HTTPException(status_code=400, detail="Akun/Base URL belum dikonfigurasi")
+    try:
+        r = _wa_call(acc, "GET", f"/api/{acc.get('session','default')}/auth/qr", params={"format": "image"})
+        if r.status_code >= 400:
+            raise HTTPException(status_code=502, detail="QR belum tersedia. Coba Connect ulang.")
+        import base64 as _b64
+        return {"qr": "data:image/png;base64," + _b64.b64encode(r.content).decode()}
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=502, detail="Tidak dapat mengambil QR dari WAHA.")
+
+
+@api_router.post("/whatsapp/accounts/{aid}/test")
+async def wa_test(aid: str, user: dict = Depends(require_role("super_admin"))):
+    acc = await _wa_get_account(aid)
+    if not acc or not acc.get("base_url"):
+        raise HTTPException(status_code=400, detail="Base URL belum diisi")
+    try:
+        r = _wa_call(acc, "GET", f"/api/sessions/{acc.get('session','default')}")
+        ok = r.status_code < 400
+        status = "CONNECTED" if ok and ("WORKING" in r.text or "CONNECTED" in r.text.upper()) else ("CONNECTED" if ok else "ERROR")
+        await db.whatsapp_accounts.update_one({"_id": ObjectId(aid)}, {"$set": {"connection_status": status}})
+        await _wa_log(aid, "TEST", "OUT", "status", ok, "" if ok else r.text[:200])
+        return {"connection_status": status, "ok": ok}
+    except Exception as e:
+        await db.whatsapp_accounts.update_one({"_id": ObjectId(aid)}, {"$set": {"connection_status": "ERROR"}})
+        await _wa_log(aid, "TEST", "OUT", "status", False, str(e))
+        raise HTTPException(status_code=502, detail="Test koneksi gagal. Periksa Base URL/API Key.")
+
+
+@api_router.post("/whatsapp/accounts/{aid}/disconnect")
+async def wa_disconnect(aid: str, request: Request, user: dict = Depends(require_role("super_admin"))):
+    acc = await _wa_get_account(aid)
+    if not acc:
+        raise HTTPException(status_code=404, detail="Account not found")
+    try:
+        if acc.get("base_url"):
+            _wa_call(acc, "POST", "/api/sessions/stop", json={"name": acc.get("session", "default")})
+    except Exception:
+        pass
+    await db.whatsapp_accounts.update_one({"_id": ObjectId(aid)}, {"$set": {"connection_status": "DISCONNECTED"}})
+    await _wa_log(aid, "DISCONNECT", "OUT", "stop", True)
+    await log_audit(user, "whatsapp", "disconnect", request, record_id=aid)
+    return {"connection_status": "DISCONNECTED"}
+
+
+async def _wa_upsert_conversation(account_id, wa_number, name=""):
+    num = _wa_norm_phone(wa_number)
+    cust = await db.customers.find_one({"phone": {"$regex": num + "$"}}) if num else None
+    conv = await db.whatsapp_conversations.find_one({"account_id": account_id, "wa_number": num})
+    if conv:
+        return conv, cust
+    doc = {"account_id": account_id, "wa_number": num, "customer_id": str(cust["_id"]) if cust else None,
+           "customer_name": (cust.get("full_name") if cust else name) or num, "is_new_customer": cust is None,
+           "status": "AI ACTIVE", "assigned_sales_id": (cust.get("sales_pic_id") if cust else None),
+           "ai_status": "ACTIVE", "handover_status": "NONE", "created_at": now_iso(),
+           "last_message": "", "last_activity": now_iso()}
+    r = await db.whatsapp_conversations.insert_one(doc)
+    doc["_id"] = r.inserted_id
+    return doc, cust
+
+
+@api_router.api_route("/whatsapp/webhook/{aid}", methods=["GET", "POST"])
+async def wa_webhook(aid: str, request: Request):
+    acc = await _wa_get_account(aid)
+    if not acc:
+        raise HTTPException(status_code=404, detail="Unknown account")
+    if request.method == "GET":
+        vt = request.query_params.get("hub.verify_token") or request.query_params.get("verify_token")
+        if vt and vt == acc.get("verify_token"):
+            return PlainTextResponse(request.query_params.get("hub.challenge", "ok"))
+        raise HTTPException(status_code=403, detail="verify failed")
+    raw = await request.body()
+    # Optional HMAC verification
+    hmac_secret = _dec(acc.get("hmac_secret_enc") or "")
+    if hmac_secret:
+        import hmac as _hmac, hashlib as _hl
+        sig = request.headers.get("x-webhook-hmac") or request.headers.get("x-hub-signature-256", "").replace("sha256=", "")
+        expected = _hmac.new(hmac_secret.encode(), raw, _hl.sha256).hexdigest()
+        if not sig or not _hmac.compare_digest(sig, expected):
+            await _wa_log(aid, "WEBHOOK", "IN", "sig", False, "invalid signature")
+            raise HTTPException(status_code=401, detail="invalid signature")
+    try:
+        body = json.loads(raw or b"{}")
+    except Exception:
+        body = {}
+    await db.whatsapp_accounts.update_one({"_id": ObjectId(aid)}, {"$set": {"webhook_status": "RECEIVING"}})
+    event = body.get("event") or ""
+    payload = body.get("payload") or body
+    if event in ("message", "message.any", "") and (payload.get("id") or payload.get("body")):
+        mid = payload.get("id") or f"gen-{now_iso()}"
+        from_me = bool(payload.get("fromMe"))
+        wa_number = (payload.get("to") if from_me else payload.get("from")) or ""
+        wa_number = wa_number.split("@")[0]
+        conv, cust = await _wa_upsert_conversation(aid, wa_number, (payload.get("_data", {}) or {}).get("notifyName", ""))
+        msg = {"message_id": mid, "conversation_id": str(conv["_id"]), "account_id": aid,
+               "sender": "CUSTOMER" if not from_me else "SYSTEM", "receiver": "CRM" if not from_me else wa_number,
+               "type": payload.get("type") or "text", "content": payload.get("body") or "",
+               "timestamp": now_iso(), "ai_generated": False, "human_generated": False,
+               "delivery_status": "RECEIVED", "read_status": False}
+        try:
+            await db.whatsapp_messages.insert_one(msg)
+            await db.whatsapp_conversations.update_one({"_id": conv["_id"]}, {"$set": {"last_message": msg["content"][:200], "last_activity": now_iso()}})
+            await _wa_log(aid, "WEBHOOK", "IN", mid, True, "", {"from": wa_number, "type": msg["type"]})
+        except Exception as e:
+            # Duplicate message_id -> idempotent skip
+            await _wa_log(aid, "WEBHOOK", "IN", mid, True, "duplicate skipped")
+    elif event.startswith("message.ack") or event == "message.reaction":
+        st = payload.get("ack") or payload.get("status")
+        await db.whatsapp_messages.update_one({"message_id": payload.get("id")}, {"$set": {"delivery_status": str(st)}})
+        await _wa_log(aid, "WEBHOOK", "IN", payload.get("id", "ack"), True, "", {"ack": st})
+    return {"ok": True}
+
+
+@api_router.get("/whatsapp/conversations")
+async def wa_conversations(status: str = "", user: dict = Depends(require_role("super_admin"))):
+    q = {} if not status else {"status": status}
+    convs = await db.whatsapp_conversations.find(q).sort("last_activity", -1).to_list(200)
+    return [serialize(c) for c in convs]
+
+
+@api_router.get("/whatsapp/conversations/{cid}/messages")
+async def wa_conv_messages(cid: str, user: dict = Depends(require_role("super_admin"))):
+    msgs = await db.whatsapp_messages.find({"conversation_id": cid}).sort("timestamp", 1).to_list(1000)
+    return [serialize(m) for m in msgs]
+
+
+@api_router.post("/whatsapp/conversations/{cid}/send")
+async def wa_send(cid: str, body: dict, request: Request, user: dict = Depends(require_role("super_admin"))):
+    conv = await db.whatsapp_conversations.find_one({"_id": ObjectId(cid)}) if ObjectId.is_valid(cid) else None
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    acc = await _wa_get_account(conv["account_id"])
+    if not acc or not acc.get("base_url"):
+        raise HTTPException(status_code=400, detail="WAHA belum dikonfigurasi untuk akun ini")
+    mtype = body.get("type") or "text"
+    chat_id = f"{conv['wa_number']}@c.us"
+    session = acc.get("session", "default")
+    endpoint = {"text": "/api/sendText", "image": "/api/sendImage", "document": "/api/sendFile", "file": "/api/sendFile"}.get(mtype, "/api/sendText")
+    wpl = {"session": session, "chatId": chat_id}
+    if mtype == "text":
+        wpl["text"] = body.get("content") or ""
+    else:
+        wpl["file"] = {"url": body.get("url"), "filename": body.get("filename") or "file"}
+        wpl["caption"] = body.get("content") or ""
+    mid = f"out-{now_iso()}"
+    try:
+        r = _wa_call(acc, "POST", endpoint, json=wpl)
+        ok = r.status_code < 400
+        try:
+            mid = (r.json() or {}).get("id", {}).get("_serialized") or (r.json() or {}).get("id") or mid
+        except Exception:
+            pass
+        await _wa_log(conv["account_id"], "SEND", "OUT", mid, ok, "" if ok else r.text[:200])
+        if not ok:
+            raise HTTPException(status_code=502, detail="Gagal mengirim pesan via WAHA.")
+    except HTTPException:
+        raise
+    except Exception as e:
+        await _wa_log(conv["account_id"], "SEND", "OUT", mid, False, str(e))
+        raise HTTPException(status_code=502, detail="Tidak dapat menghubungi WAHA untuk mengirim pesan.")
+    msg = {"message_id": mid, "conversation_id": cid, "account_id": conv["account_id"],
+           "sender": "SALES" if not body.get("ai_generated") else "AI", "receiver": conv["wa_number"],
+           "type": mtype, "content": body.get("content") or "", "timestamp": now_iso(),
+           "ai_generated": bool(body.get("ai_generated")), "human_generated": not bool(body.get("ai_generated")),
+           "delivery_status": "SENT", "read_status": False}
+    await db.whatsapp_messages.insert_one(msg)
+    await db.whatsapp_conversations.update_one({"_id": conv["_id"]}, {"$set": {"last_message": msg["content"][:200], "last_activity": now_iso(), "status": "WAITING CUSTOMER"}})
+    return serialize(msg)
+
+
+@api_router.get("/whatsapp/logs")
+async def wa_logs(kind: str = "", user: dict = Depends(require_role("super_admin"))):
+    q = {} if not kind else ({"kind": {"$ne": "API"}} if kind == "wa" else {"kind": kind})
+    logs = await db.whatsapp_logs.find(q).sort("created_at", -1).to_list(300)
+    return [serialize(l) for l in logs]
+
+
 app.include_router(api_router)
 
 app.add_middleware(
@@ -8652,6 +8958,7 @@ app.add_middleware(
 # ----------------------------------------------------------------------------
 async def seed():
     await db.users.create_index("email", unique=True)
+    await db.whatsapp_messages.create_index("message_id", unique=True)
     await db.users.create_index("username", unique=True)
     await db.password_reset_tokens.create_index("expires_at", expireAfterSeconds=0)
     await db.customers.create_index("sales_pic_id")

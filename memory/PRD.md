@@ -1,3 +1,12 @@
+## PHASE 10A — Native WhatsApp (WAHA) Integration — TAHAP 1 (Backend) (2026-06) — DONE (curl E2E, tanpa N8N)
+- Engine: WAHA (self-hosted) — user belum hosting; kode+endpoint siap, tinggal isi Base URL/API Key. AI = Gemini (Tahap 2). Kredensial dienkripsi Fernet (`_enc/_dec`), di-mask, tidak pernah ke frontend/localStorage.
+- Endpoints (semua `require_role("super_admin")` kecuali webhook): GET/POST/PUT/DELETE `/api/whatsapp/accounts` (verify_token auto-generated, api_key masked); `/accounts/{id}/connect|qr|test|disconnect` (best-effort ke WAHA, error aman tanpa bocor token); `GET/POST /api/whatsapp/webhook/{aid}` (GET verify hub.verify_token→challenge, POST terima message + optional HMAC verify); `/conversations`, `/conversations/{id}/messages`, `/conversations/{id}/send` (text/image/document via WAHA), `/whatsapp/logs`.
+- Collections: whatsapp_accounts, whatsapp_conversations (status AI ACTIVE/WAITING CUSTOMER/HUMAN HANDOVER/CLOSED, ai_status, handover_status, assigned_sales), whatsapp_messages (unique index `message_id` untuk dedup), whatsapp_logs (WEBHOOK/SEND/CONNECT/TEST/API + IN/OUT).
+- Customer identification: match by phone suffix regex → link customer_id; jika tidak ada → is_new_customer=True, TIDAK buat customer duplikat.
+- Verified: dedup (webhook 2x id sama → 1 message/1 conversation), verify-token (200 valid / 403 salah), RBAC (sales→403), api_key masked (••••-123), no-duplicate-customer, logging.
+- BELUM: Tahap 2 (AI Agent Gemini + Knowledge/Style/Rules + Human Handover task/notif + Resume AI), Tahap 3 (frontend menu WhatsApp Integration 11 submenu + Customer 360 → Conversations).
+
+
 ## PHASE 9P — Final UAT & Production Readiness (2026-06) — DONE ✅ READY FOR PRODUCTION
 - UAT menyeluruh via testing_agent (iter 39 & 40): backend 28 PASSED / 1 SKIPPED / 0 FAILED; frontend RBAC 100%. Suite: `/app/backend/tests/test_phase9p_uat.py`. Laporan lengkap: `/app/memory/PHASE_9P_UAT.md`.
 - CRITICAL/HIGH bugs = 0. MEDIUM (AUTO SALES `sales_pic_id` placeholder pada seed BKG-00016) → FIXED (di-null-kan) & re-verified.
