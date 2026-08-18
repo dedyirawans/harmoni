@@ -1,3 +1,13 @@
+## PHASE 10F — AI Monitoring, Quality Control & Improvement (2026-06) — DONE ✅ (backend curl E2E; FE iter_47 100%)
+- Menu **AI Management → AI Monitoring** (`/ai-monitoring`, super_admin only). Page `AIMonitoring.jsx` 4 tab: Dashboard, Response Quality, Error Log, Knowledge Gaps.
+- **Dashboard** GET `/ai/monitoring/dashboard`: 10 counts (total conversations, AI handled, human handover, new customers, new leads, orders, bookings, AUTO SALES, AI→SALES, failed responses) + 6 performance rate (AI resolution, handover, lead creation, order creation, booking conversion, response failure).
+- **Response Quality** GET `/ai/monitoring/quality` + POST `/ai/monitoring/flag` (GOOD/NEEDS_IMPROVEMENT/INCORRECT/OUTDATED_KNOWLEDGE → simpan `quality_flag` + `ai_response_flags`).
+- **Error Log** GET `/ai/monitoring/errors`: AI/handover errors (whatsapp_logs ok=false), tool errors (ai_action_logs), API errors (whatsapp_api_logs).
+- **Knowledge Gaps** GET `/ai/monitoring/gaps`: top handover reasons, top packages, flagged responses → POST `/ai/monitoring/to-faq` untuk konversi ke FAQ. Perubahan knowledge tetap manual (tidak otomatis) — sesuai aturan.
+- Verified curl: dashboard 10 counts + perf, quality, errors, gaps, to-faq (create+cleanup), flag ok, RBAC sales 403. Frontend iter_47 100% (semua tab, empty states, RBAC). Data uji dibersihkan.
+- Acceptance #10 sudah dijamin oleh desain 10B–10E: AI pakai data CRM, tak mengarang harga/seat/itinerary, ikut communication style, minta konfirmasi sebelum transaksi, handover bila perlu, semua percakapan tersimpan.
+
+
 ## PHASE 10E — AI Customer Journey & Automation (2026-06) — DONE ✅ (backend curl E2E; simulator live-Gemini)
 - **Agentic journey loop** `_wa_ai_journey(conv, text)`: AI Gemini menjalankan alur customer journey memakai **AI Tools (10D)** via protokol `ACTION: {json}` (loop terkontrol maks 4 langkah, observasi di-feedback). Alur: (1) customer baru → tanya nama/kebutuhan → CREATE_CUSTOMER + CREATE_LEAD (Source WHATSAPP AI), (2) interest → CREATE/UPDATE lead, (3) rekomendasi paket (SEARCH_PACKAGE + CHECK_SEAT, tanpa mengarang harga/seat), (4) beli → KONFIRMASI → CREATE_ORDER→CREATE_BOOKING, (5) info invoice/nominal/jatuh tempo, (6) status pembayaran via GET_PAYMENT_STATUS.
 - `_wa_ai_process` di-refactor memakai journey loop; keyword handover diperkaya (marah, komplain, refund, batal, negosiasi, diskon, permintaan khusus, dll). Handover: AI emit `[HANDOVER] <alasan>` → `_wa_handover` (assign sales + task + notifikasi + stop AI). Resume via `/whatsapp/conversations/{id}/resume-ai` (existing).

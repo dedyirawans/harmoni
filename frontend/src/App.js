@@ -43,6 +43,7 @@ import WhatsAppIntegration from "@/pages/WhatsAppIntegration";
 import KnowledgeBase from "@/pages/KnowledgeBase";
 import CommunicationStyle from "@/pages/CommunicationStyle";
 import AITools from "@/pages/AITools";
+import AIMonitoring from "@/pages/AIMonitoring";
 import Tasks from "@/pages/Tasks";
 import ApprovalCenter from "@/pages/ApprovalCenter";
 
@@ -75,6 +76,7 @@ const PAGES = {
   "/knowledge-base": KnowledgeBase,
   "/communication-style": CommunicationStyle,
   "/ai-tools": AITools,
+  "/ai-monitoring": AIMonitoring,
   "/tasks": Tasks,
   "/approval-center": ApprovalCenter,
 };

@@ -10453,6 +10453,104 @@ async def wa_health(user: dict = Depends(require_role("super_admin"))):
             "webhook_error_events": err_events}
 
 
+async def _mon_rate(n, d):
+    return round((n / d) * 100, 1) if d else 0.0
+
+
+@api_router.get("/ai/monitoring/dashboard")
+async def ai_mon_dashboard(user: dict = Depends(require_role("super_admin"))):
+    total = await db.whatsapp_conversations.count_documents({})
+    handover = await db.whatsapp_conversations.count_documents({"status": "HUMAN HANDOVER"})
+    ai_handled = max(total - handover, 0)
+    new_customers = await db.customers.count_documents({"customer_source": {"$in": ["WHATSAPP", "WHATSAPP AI"]}})
+    new_leads = await db.leads.count_documents({"source": {"$in": ["WHATSAPP AI", "WHATSAPP"]}})
+    orders = await db.bookings.count_documents({"source_channel": "WHATSAPP AI"})
+    bookings = orders
+    auto_sales = await db.bookings.count_documents({"attribution": "AUTO SALES"})
+    ai_to_sales = await db.bookings.count_documents({"attribution": "AI → SALES"}) + await db.customers.count_documents({"attribution": "AI → SALES"})
+    failed = await db.whatsapp_logs.count_documents({"kind": "AI", "ok": False})
+    ai_msgs = await db.whatsapp_messages.count_documents({"sender": "AI"})
+    return {
+        "counts": {"total_conversations": total, "ai_handled": ai_handled, "human_handover": handover,
+                   "new_customers": new_customers, "new_leads": new_leads, "orders": orders, "bookings": bookings,
+                   "auto_sales": auto_sales, "ai_to_sales": ai_to_sales, "failed_responses": failed},
+        "performance": {
+            "ai_resolution_rate": await _mon_rate(ai_handled, total),
+            "human_handover_rate": await _mon_rate(handover, total),
+            "lead_creation_rate": await _mon_rate(new_leads, total),
+            "order_creation_rate": await _mon_rate(orders, total),
+            "booking_conversion": await _mon_rate(bookings, new_leads),
+            "response_failure_rate": await _mon_rate(failed, ai_msgs)},
+    }
+
+
+@api_router.get("/ai/monitoring/quality")
+async def ai_mon_quality(user: dict = Depends(require_role("super_admin"))):
+    msgs = await db.whatsapp_messages.find({"sender": "AI"}).sort("created_at", -1).to_list(80)
+    conv_cache = {}
+    out = []
+    for m in msgs:
+        cid = m.get("conversation_id")
+        if cid and cid not in conv_cache:
+            conv_cache[cid] = await db.whatsapp_conversations.find_one({"_id": ObjectId(cid)}) if ObjectId.is_valid(cid) else None
+        conv = conv_cache.get(cid) or {}
+        out.append({"id": str(m["_id"]), "message_id": m.get("message_id"), "conversation_id": cid,
+                    "customer_name": conv.get("customer_name"), "content": m.get("content"),
+                    "created_at": m.get("created_at"), "quality_flag": m.get("quality_flag")})
+    return out
+
+
+@api_router.post("/ai/monitoring/flag")
+async def ai_mon_flag(body: dict, user: dict = Depends(require_role("super_admin"))):
+    flag = (body.get("flag") or "").upper()
+    if flag not in ("GOOD", "NEEDS_IMPROVEMENT", "INCORRECT", "OUTDATED_KNOWLEDGE"):
+        raise HTTPException(status_code=400, detail="flag tidak valid")
+    mid = body.get("message_id")
+    await db.whatsapp_messages.update_one({"message_id": mid}, {"$set": {"quality_flag": flag}})
+    await db.ai_response_flags.insert_one({"message_id": mid, "conversation_id": body.get("conversation_id"),
+        "flag": flag, "note": body.get("note", ""), "content": body.get("content", ""),
+        "created_at": now_iso(), "by": user["name"]})
+    return {"ok": True, "flag": flag}
+
+
+@api_router.get("/ai/monitoring/errors")
+async def ai_mon_errors(user: dict = Depends(require_role("super_admin"))):
+    wa = await db.whatsapp_logs.find({"ok": False}).sort("created_at", -1).to_list(100)
+    tools = await db.ai_action_logs.find({"ok": False}).sort("timestamp", -1).to_list(100)
+    apis = await db.whatsapp_api_logs.find({"ok": False}).sort("created_at", -1).to_list(50)
+    return {
+        "ai_errors": [{"kind": l.get("kind"), "ref": l.get("ref"), "error": l.get("error"), "at": l.get("created_at")} for l in wa],
+        "tool_errors": [{"tool": t.get("tool"), "error": (t.get("result") or {}).get("error"), "at": t.get("timestamp")} for t in tools],
+        "api_errors": [{"endpoint": a.get("endpoint"), "category": a.get("error_category"), "at": a.get("created_at")} for a in apis],
+    }
+
+
+@api_router.get("/ai/monitoring/gaps")
+async def ai_mon_gaps(user: dict = Depends(require_role("super_admin"))):
+    reasons = await db.whatsapp_logs.aggregate([{"$match": {"kind": "HANDOVER"}},
+        {"$group": {"_id": "$error", "count": {"$sum": 1}}}, {"$sort": {"count": -1}}, {"$limit": 10}]).to_list(10)
+    pkgs = await db.bookings.aggregate([{"$match": {"source_channel": "WHATSAPP AI"}},
+        {"$group": {"_id": "$package_name", "count": {"$sum": 1}}}, {"$sort": {"count": -1}}, {"$limit": 10}]).to_list(10)
+    flagged = await db.ai_response_flags.find({"flag": {"$in": ["INCORRECT", "OUTDATED_KNOWLEDGE", "NEEDS_IMPROVEMENT"]}}).sort("created_at", -1).to_list(40)
+    return {
+        "top_handover_reasons": [{"reason": r["_id"] or "—", "count": r["count"]} for r in reasons],
+        "top_packages": [{"package": p["_id"] or "—", "count": p["count"]} for p in pkgs],
+        "flagged_responses": [{"id": str(f["_id"]), "flag": f.get("flag"), "content": f.get("content"), "note": f.get("note"), "at": f.get("created_at")} for f in flagged],
+    }
+
+
+@api_router.post("/ai/monitoring/to-faq")
+async def ai_mon_to_faq(body: dict, user: dict = Depends(require_role("super_admin"))):
+    q = (body.get("question") or "").strip()
+    if not q:
+        raise HTTPException(status_code=400, detail="question wajib diisi")
+    doc = {"question": q, "answer": body.get("answer") or "", "category": body.get("category") or "FAQ",
+           "keywords": [], "status": "ACTIVE", "created_at": now_iso(), "created_by": user["name"],
+           "updated_at": now_iso(), "updated_by": user["name"]}
+    r = await db.knowledge_faqs.insert_one(doc)
+    return {"ok": True, "id": str(r.inserted_id)}
+
+
 app.include_router(api_router)
 
 app.add_middleware(
