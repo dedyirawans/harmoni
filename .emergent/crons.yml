@@ -6,3 +6,10 @@ crons:
     method: POST
     # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
     enabled: true
+  - name: ai-followup-scan
+    description: "Evaluates lead eligibility and schedules/sends context-aware AI WhatsApp follow-ups (Phase 10H)"
+    cron: "*/15 * * * *"
+    endpoint: "{{BASE_URL}}/api/cron/ai-followup"
+    method: POST
+    # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
+    enabled: true

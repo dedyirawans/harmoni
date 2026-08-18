@@ -44,6 +44,7 @@ import KnowledgeBase from "@/pages/KnowledgeBase";
 import CommunicationStyle from "@/pages/CommunicationStyle";
 import AITools from "@/pages/AITools";
 import AIMonitoring from "@/pages/AIMonitoring";
+import AutoFollowUp from "@/pages/AutoFollowUp";
 import Tasks from "@/pages/Tasks";
 import ApprovalCenter from "@/pages/ApprovalCenter";
 
@@ -77,6 +78,7 @@ const PAGES = {
   "/communication-style": CommunicationStyle,
   "/ai-tools": AITools,
   "/ai-monitoring": AIMonitoring,
+  "/auto-followup": AutoFollowUp,
   "/tasks": Tasks,
   "/approval-center": ApprovalCenter,
 };

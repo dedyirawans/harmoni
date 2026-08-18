@@ -1,0 +1,27 @@
+{
+  "summary": "Frontend E2E testing for Phase 10H — AI Auto Follow-Up (/auto-followup). All 6 acceptance criteria PASS: sidebar menu visibility, 4-tab render, Analytics (11 metric cards + refresh), Settings persistence across reload with master switch OFF default, Queue dry-run scan with Rudi row + cancel, Leads AI Preview generating context-aware Indonesian Umrah message + Pause/Resume/Stop status transitions, and RBAC blocking Sales user from both sidebar and direct URL.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Queue tab", "issues": ["Queue count badges show SCHEDULED:0 immediately after 'Jalankan Scan (dry-run)' even though a SCHEDULED Rudi row (with cancel button) is visible. After cancel, CANCELLED:1 correctly updates. Likely the counts aggregation excludes dry-run items or is stale on first load. Non-blocking, but inconsistent with the visible row."]}
+    ]
+  },
+  "test_report_links": [],
+  "action_items": [
+    "(Minor/optional) Reconcile Queue count badges with visible dry-run items — SCHEDULED count should reflect newly scheduled dry-run entries so admins see consistent numbers vs the table."
+  ],
+  "critical_code_review_comments": [
+    "AutoFollowUp.jsx (258 lines) — clean, RBAC guard at top (redirect to /dashboard for non-super_admin), all interactive elements have afu-* data-testid, proper loading states with Loader2, and toast feedback on all mutations. No file-size or DRY violations.",
+    "Preview panel correctly gates by has_conversation (preview button disabled when lead has no chat) which is good defensive UX."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "N/A (frontend-only scope)", "frontend": "100%"},
+  "test_credentials": "Super Admin dedyirawan18@gmail.com/Admin@123 and Sales sales@safarcrm.com/Sales@123 — both verified working.",
+  "seed_data_creation": "Used existing seed LEAD-AFU-DEMO (Rudi Follow-Up). Settings were mutated: max=5, min_interval=12h, daily=3, rule delays=24/48/72h — main agent may wish to reset after cleanup. Rudi lead was set to STOPPED at end of test.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Phase 10H AI Auto Follow-Up UI fully functional. Detailed observations: (1) SA sidebar shows 'Auto Follow-Up' menu, (2) all 4 tabs render (afu-tab-analytics/settings/queue/leads), (3) Analytics renders exactly 11 metric cards + 3 rate cards, refresh works, (4) Settings master switch default OFF and stays OFF after reload, all limit/rule/business-hours inputs persist across page reload, (5) Queue 'Jalankan Scan (dry-run)' returns toast 'Scan selesai: X dijadwalkan, Y dibatalkan', Rudi Follow-Up row appears with '(dry-run)' marker, Cancel updates CANCELLED count to 1, (6) Leads table shows LEAD-AFU-DEMO/Rudi Follow-Up with Umrah Reguler 9 Hari + AVAILABILITY_INQUIRY intent; Preview button generated a 492-char Indonesian AI message referencing 'Umrah Reguler 9 Hari', jadwal 20-29 September 2026, Rp27.500.000 — fully context-aware. Pause→Resume→Stop transitions all applied and status badge switched to STOPPED. (7) RBAC: sales user has no 'Auto Follow-Up' in sidebar and hitting /auto-followup does NOT render auto-followup-page (silent redirect via <Navigate to='/dashboard'>). Note: on Sales, URL bar still shows /auto-followup but the page content is dashboard — this is due to React <Navigate replace> behavior together with fast SPA nav; visually and functionally the user is on Dashboard. Only observed minor: Queue count SCHEDULED badge shows 0 initially despite a visible SCHEDULED row.",
+  "rca of the issue": "N/A — no functional bug found. Minor cosmetic: Queue.counts aggregation in GET /api/ai/followup/queue likely computes counts before including the just-scheduled dry-run items, or excludes dry_run=true from the count aggregation. Reproduction: SA → /auto-followup → Queue tab → click 'Jalankan Scan (dry-run)' → observe SCHEDULED:0 badge but Rudi row present in table with (dry-run) marker. Mitigation: include dry_run items in count aggregation or refresh counts after mutation completes."
+}

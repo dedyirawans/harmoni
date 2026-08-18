@@ -10797,6 +10797,424 @@ async def wa_outbound_queue(user: dict = Depends(require_role("super_admin"))):
     return {"items": [serialize(i) for i in items], "counts": counts}
 
 
+# ============================================================================
+# PHASE 10H — AI Auto Follow-Up & Lead Nurturing (Super Admin)
+# ============================================================================
+AFU_ELIGIBLE_STAGES = ["NEW", "CONTACTED", "QUALIFIED", "QUOTATION", "NEGOTIATION"]
+AFU_INTENTS = ["PACKAGE_INQUIRY", "PRICE_INQUIRY", "AVAILABILITY_INQUIRY", "DOCUMENT_INQUIRY",
+               "BOOKING_INTENT", "PAYMENT_PENDING", "QUOTATION_PENDING", "GENERAL_INTEREST"]
+AFU_QUEUE_STATUSES = ["SCHEDULED", "READY", "PROCESSING", "SENT", "CANCELLED", "FAILED"]
+AFU_DEFAULTS = {
+    "enabled": False, "max_followup": 3, "min_interval_hours": 24, "daily_limit_per_customer": 1,
+    "business_hours_enabled": False, "opening_time": "09:00", "closing_time": "18:00",
+    "schedule": [{"number": 1, "delay_hours": 24}, {"number": 2, "delay_hours": 72}, {"number": 3, "delay_hours": 168}],
+    "intent_guidance": {}, "handover_on_booking_intent": True,
+}
+AFU_SETTING_KEYS = list(AFU_DEFAULTS.keys())
+
+
+async def _afu_settings():
+    doc = await db.autofollowup_settings.find_one({"_id": "main"}) or {}
+    return {**AFU_DEFAULTS, **{k: v for k, v in doc.items() if k != "_id"}}
+
+
+def _afu_hours_since(iso):
+    if not iso:
+        return 1e9
+    try:
+        dt = datetime.fromisoformat(str(iso).replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return (datetime.now(timezone.utc) - dt).total_seconds() / 3600.0
+    except Exception:
+        return 1e9
+
+
+def _afu_detect_intent(text, has_quotation, has_unpaid_booking):
+    if has_unpaid_booking:
+        return "PAYMENT_PENDING"
+    if has_quotation:
+        return "QUOTATION_PENDING"
+    low = (text or "").lower()
+    kw = [
+        ("BOOKING_INTENT", ["booking sekarang", "mau booking", "daftar", "pesan sekarang", "ambil paket", "jadi ikut", "deal", "fix ikut"]),
+        ("DOCUMENT_INQUIRY", ["dokumen", "paspor", "passport", "visa", "syarat", "berkas"]),
+        ("PRICE_INQUIRY", ["harga", "biaya", "berapa", "price", "budget"]),
+        ("AVAILABILITY_INQUIRY", ["kursi", "seat", "tersedia", "kuota", "tanggal", "jadwal", "keberangkatan", "berangkat"]),
+        ("PACKAGE_INQUIRY", ["paket", "umrah", "umroh", "haji", "tour", "wisata"]),
+    ]
+    for intent, words in kw:
+        if any(w in low for w in words):
+            return intent
+    return "GENERAL_INTEREST"
+
+
+async def _afu_pkg_snapshot(package_id):
+    if not package_id or not ObjectId.is_valid(package_id):
+        return ""
+    p = await db.packages.find_one({"_id": ObjectId(package_id)})
+    if not p:
+        return ""
+    today = today_str()
+    deps = await db.departures.find({"package_id": str(p["_id"])}).sort("departure_date", 1).to_list(30)
+    upcoming = [d for d in deps if (d.get("departure_date") or "") >= today]
+    lines = []
+    for d in upcoming[:4]:
+        seat = max(0, int(d.get("quota") or 0) - int(d.get("confirmed_pax") or 0)) if d.get("available_seat") is None else int(d.get("available_seat") or 0)
+        lines.append(f"{d.get('departure_date','-')} | harga Rp{int(d.get('price') or p.get('selling_price') or 0):,} | sisa kursi {seat}")
+    dep_txt = "; ".join(lines) if lines else "(belum ada jadwal keberangkatan mendatang)"
+    return (f"PAKET DIMINATI (data TERBARU CRM): [{p.get('package_code','')}] {p.get('package_name','')} — "
+            f"destinasi {p.get('destination') or '-'}, durasi {p.get('duration') or '-'}, status {p.get('status')}, "
+            f"harga dasar Rp{int(p.get('selling_price') or 0):,}.\nJadwal terbaru: {dep_txt}")
+
+
+async def _afu_generate_message(lead, conv, settings, followup_number, intent):
+    msgs = await db.whatsapp_messages.find({"conversation_id": str(conv["_id"])}).sort("created_at", 1).to_list(1000)
+    tail = msgs[-12:]
+    hist = "\n".join(
+        f"{'Customer' if m.get('direction') == 'INBOUND' else 'Kami'}: {(m.get('content') or '')[:300]}"
+        for m in tail if (m.get("content") or "").strip()
+    ) or "(belum ada riwayat pesan)"
+    pkg_snap = await _afu_pkg_snapshot(lead.get("package_id"))
+    guidance = (settings.get("intent_guidance") or {}).get(intent, "")
+    kb = await _kb_build_context()
+    base = _kb_system_prompt(kb, comm_block=await _comm_active_block())
+    sys = base + (
+        "\n\nTUGAS: Buat SATU pesan FOLLOW-UP WhatsApp yang natural, sopan, dan CONTEXT-AWARE untuk lead yang belum closing. "
+        "Rujuk topik/paket yang customer tanyakan sebelumnya (lihat riwayat). Gunakan HANYA data paket TERBARU di bawah "
+        "(harga & sisa kursi terkini) — JANGAN mengarang dan JANGAN membuat false urgency (mis. 'seat tinggal 1!') kecuali "
+        "data CRM benar menunjukkannya. Jangan menyapa generik seperti 'apakah masih tertarik?'. "
+        "Balas HANYA teks pesan siap kirim (tanpa tanda kutip, tanpa 'ACTION:', tanpa penjelasan)."
+    )
+    prompt = (
+        f"Ini follow-up ke-{followup_number}. Customer intent: {intent}.\n"
+        + (f"Panduan gaya intent: {guidance}\n" if guidance else "")
+        + (f"\n{pkg_snap}\n" if pkg_snap else "")
+        + f"\nRIWAYAT PERCAKAPAN TERAKHIR:\n{hist}\n\nTulis pesan follow-up sekarang."
+    )
+    try:
+        from emergentintegrations.llm.chat import LlmChat, UserMessage
+        chat = LlmChat(api_key=os.environ["EMERGENT_LLM_KEY"], session_id=f"afu-{str(lead['_id'])}-{followup_number}",
+                       system_message=sys).with_model("gemini", "gemini-3-flash-preview")
+        reply = ((await chat.send_message(UserMessage(text=prompt))) or "").strip()
+        reply = reply.strip('"').strip()
+        return reply
+    except Exception as e:
+        logger.error(f"[AFU] generate failed: {e}")
+        return ""
+
+
+async def _afu_terminal(lead, status, reason):
+    await db.leads.update_one({"_id": lead["_id"]}, {"$set": {
+        "auto_followup_status": status, "followup_stopped_reason": reason, "followup_updated_at": now_iso()}})
+    await db.ai_followup_queue.update_many({"lead_id": str(lead["_id"]), "status": {"$in": ["SCHEDULED", "READY", "PROCESSING"]}},
+                                           {"$set": {"status": "CANCELLED", "cancel_reason": reason, "updated_at": now_iso()}})
+
+
+async def _afu_evaluate_and_schedule(dry_run_default=True):
+    """Evaluasi eligibility semua lead & jadwalkan follow-up. Kembalikan ringkasan."""
+    s = await _afu_settings()
+    sched_map = {int(r.get("number")): int(r.get("delay_hours")) for r in (s.get("schedule") or []) if r.get("number")}
+    summary = {"evaluated": 0, "scheduled": 0, "cancelled": 0, "handover": 0, "skipped": 0}
+    leads = await db.leads.find({"is_deleted": {"$ne": True}, "status": {"$in": AFU_ELIGIBLE_STAGES}}).to_list(2000)
+    for lead in leads:
+        summary["evaluated"] += 1
+        lid = str(lead["_id"])
+        afu_status = lead.get("auto_followup_status", "ACTIVE")
+        if afu_status in ("STOPPED", "PAUSED", "OPTED OUT", "COMPLETED", "CONVERTED", "HANDOVER"):
+            summary["skipped"] += 1
+            continue
+        cid = lead.get("customer_id")
+        if not cid or not ObjectId.is_valid(cid):
+            summary["skipped"] += 1
+            continue
+        cust = await db.customers.find_one({"_id": ObjectId(cid)})
+        if not cust:
+            summary["skipped"] += 1
+            continue
+        # opt-out / blacklist
+        if (cust.get("wa_consent") == "OPT_OUT") or cust.get("wa_blacklisted"):
+            await _afu_terminal(lead, "OPTED OUT", "customer_opted_out"); summary["cancelled"] += 1
+            continue
+        # booking / paid → converted
+        booking = await db.bookings.find_one({"customer_id": cid, "status": {"$ne": "CANCELLED"}})
+        if booking:
+            if (booking.get("payment_status") == "PAID"):
+                await _afu_terminal(lead, "CONVERTED", "customer_paid")
+            else:
+                await _afu_terminal(lead, "CONVERTED", "customer_booked")
+            summary["cancelled"] += 1
+            continue
+        # conversation basis (safety: hanya lead dgn interaksi WhatsApp)
+        conv = await db.whatsapp_conversations.find_one({"customer_id": cid})
+        if not conv:
+            summary["skipped"] += 1
+            continue
+        if conv.get("status") == "HUMAN HANDOVER":
+            await _afu_terminal(lead, "HANDOVER", "sales_handover"); summary["cancelled"] += 1
+            continue
+        cvid = str(conv["_id"])
+        last_msg = await db.whatsapp_messages.find_one({"conversation_id": cvid}, sort=[("created_at", -1)])
+        last_in = await db.whatsapp_messages.find_one({"conversation_id": cvid, "direction": "INBOUND"}, sort=[("created_at", -1)])
+        # customer replied / active (spoke last) → STOP: batalkan follow-up terjadwal
+        if last_msg and last_msg.get("direction") == "INBOUND":
+            r = await db.ai_followup_queue.update_many({"lead_id": lid, "status": {"$in": ["SCHEDULED", "READY", "PROCESSING"]}},
+                                                       {"$set": {"status": "CANCELLED", "cancel_reason": "customer_responded", "updated_at": now_iso()}})
+            summary["cancelled"] += (r.modified_count if r else 0)
+            summary["skipped"] += 1
+            continue
+        # detect intent
+        has_q = bool(await db.quotations.find_one({"customer_id": cid, "status": {"$nin": ["CONVERTED", "EXPIRED", "REJECTED"]}}))
+        intent = _afu_detect_intent((last_in or {}).get("content", ""), has_q, False)
+        # high purchase intent → sales handover (bukan auto follow-up)
+        if s.get("handover_on_booking_intent", True) and intent == "BOOKING_INTENT":
+            await _wa_handover(conv, "High purchase intent — lead siap closing")
+            await _afu_terminal(lead, "HANDOVER", "high_purchase_intent"); summary["handover"] += 1
+            continue
+        count = int(lead.get("followup_count") or 0)
+        number = count + 1
+        if number > int(s.get("max_followup") or 3):
+            await _afu_terminal(lead, "COMPLETED", "max_followup_reached"); summary["skipped"] += 1
+            continue
+        # pending?
+        if await db.ai_followup_queue.find_one({"lead_id": lid, "status": {"$in": ["SCHEDULED", "READY", "PROCESSING"]}}):
+            summary["skipped"] += 1
+            continue
+        # timing
+        ref = (last_in or {}).get("created_at") or conv.get("created_at")
+        elapsed = _afu_hours_since(ref)
+        threshold = sched_map.get(number, 24 * (number))
+        if elapsed < threshold:
+            summary["skipped"] += 1
+            continue
+        if _afu_hours_since(lead.get("last_followup_at")) < float(s.get("min_interval_hours") or 24):
+            summary["skipped"] += 1
+            continue
+        # daily limit per customer
+        day0 = (datetime.now(timezone.utc).date()).isoformat()
+        sent_today = await db.ai_followup_queue.count_documents({"customer_id": cid, "status": "SENT", "sent_at": {"$gte": day0}})
+        if sent_today >= int(s.get("daily_limit_per_customer") or 1):
+            summary["skipped"] += 1
+            continue
+        # generate message
+        message = await _afu_generate_message(lead, conv, s, number, intent)
+        if not message:
+            summary["skipped"] += 1
+            continue
+        dry = dry_run_default or (not s.get("enabled"))
+        item = {"lead_id": lid, "customer_id": cid, "conversation_id": cvid, "wa_number": conv.get("wa_number"),
+                "customer_name": cust.get("full_name"), "followup_number": number, "intent": intent,
+                "reason": f"No response {int(elapsed)}h ≥ {threshold}h (FU#{number})", "message": message,
+                "package_id": lead.get("package_id"), "status": "SCHEDULED" if dry else "READY",
+                "dry_run": dry, "scheduled_at": now_iso(), "sent_at": None, "created_at": now_iso(), "updated_at": now_iso()}
+        await db.ai_followup_queue.insert_one(item)
+        await db.leads.update_one({"_id": lead["_id"]}, {"$set": {"auto_followup_status": "ACTIVE", "customer_intent": intent, "followup_updated_at": now_iso()}})
+        summary["scheduled"] += 1
+    return summary
+
+
+async def _afu_process_ready():
+    """Kirim item READY via antrean WhatsApp Phase 10G (menghormati safety)."""
+    s = await _afu_settings()
+    summary = {"sent": 0, "cancelled": 0, "skipped": 0}
+    if not s.get("enabled"):
+        return summary
+    wa = await _wa_safety()
+    if not wa.get("messaging_enabled", True):
+        return summary
+    # business hours (khusus follow-up)
+    if s.get("business_hours_enabled"):
+        hm = datetime.now(timezone.utc).strftime("%H:%M")
+        if not ((s.get("opening_time") or "00:00") <= hm <= (s.get("closing_time") or "23:59")):
+            return summary
+    items = await db.ai_followup_queue.find({"status": "READY"}).sort("created_at", 1).to_list(100)
+    for it in items:
+        cid = it.get("customer_id")
+        lead = await db.leads.find_one({"_id": ObjectId(it["lead_id"])}) if ObjectId.is_valid(it["lead_id"]) else None
+        conv = await db.whatsapp_conversations.find_one({"_id": ObjectId(it["conversation_id"])}) if ObjectId.is_valid(it["conversation_id"]) else None
+        if not lead or not conv:
+            await db.ai_followup_queue.update_one({"_id": it["_id"]}, {"$set": {"status": "CANCELLED", "cancel_reason": "missing lead/conv", "updated_at": now_iso()}})
+            summary["cancelled"] += 1
+            continue
+        # re-check stop conditions
+        if conv.get("status") == "HUMAN HANDOVER":
+            await db.ai_followup_queue.update_one({"_id": it["_id"]}, {"$set": {"status": "CANCELLED", "cancel_reason": "handover", "updated_at": now_iso()}})
+            summary["cancelled"] += 1
+            continue
+        allowed, why = await _wa_outbound_allowed(cid)
+        if not allowed:
+            await db.ai_followup_queue.update_one({"_id": it["_id"]}, {"$set": {"status": "CANCELLED", "cancel_reason": why, "updated_at": now_iso()}})
+            summary["cancelled"] += 1
+            continue
+        # min interval + daily limit re-check
+        if _afu_hours_since(lead.get("last_followup_at")) < float(s.get("min_interval_hours") or 24):
+            summary["skipped"] += 1
+            continue
+        day0 = (datetime.now(timezone.utc).date()).isoformat()
+        sent_today = await db.ai_followup_queue.count_documents({"customer_id": cid, "status": "SENT", "sent_at": {"$gte": day0}})
+        if sent_today >= int(s.get("daily_limit_per_customer") or 1):
+            summary["skipped"] += 1
+            continue
+        await db.ai_followup_queue.update_one({"_id": it["_id"]}, {"$set": {"status": "PROCESSING", "updated_at": now_iso()}})
+        await _wa_enqueue_outbound(conv, it["message"], sender="AI")
+        newcount = int(lead.get("followup_count") or 0) + 1
+        lead_upd = {"followup_count": newcount, "last_followup_at": now_iso(), "followup_updated_at": now_iso()}
+        if newcount >= int(s.get("max_followup") or 3):
+            lead_upd["auto_followup_status"] = "COMPLETED"
+            lead_upd["followup_stopped_reason"] = "max_followup_reached"
+        await db.leads.update_one({"_id": lead["_id"]}, {"$set": lead_upd})
+        await db.ai_followup_queue.update_one({"_id": it["_id"]}, {"$set": {"status": "SENT", "sent_at": now_iso(), "updated_at": now_iso()}})
+        summary["sent"] += 1
+    return summary
+
+
+async def _afu_cron_run():
+    try:
+        sch = await _afu_evaluate_and_schedule()
+        snd = await _afu_process_ready()
+        logger.info(f"[AFU] cron scheduled={sch} sent={snd}")
+    except Exception as e:
+        logger.error(f"[AFU] cron error: {e}")
+
+
+@api_router.post("/cron/ai-followup")
+async def cron_ai_followup(request: Request, background: BackgroundTasks):
+    # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
+    auth = request.headers.get("Authorization", "")
+    secret = os.environ.get("WEBHOOK_CRON_SECRET", "")
+    token = auth[7:] if auth.startswith("Bearer ") else ""
+    if not secret or not _hmac.compare_digest(token, secret):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    background.add_task(_afu_cron_run)
+    return {"accepted": True}
+
+
+@api_router.get("/ai/followup/settings")
+async def afu_get_settings(user: dict = Depends(require_role("super_admin"))):
+    return {**await _afu_settings(), "intents": AFU_INTENTS, "queue_statuses": AFU_QUEUE_STATUSES}
+
+
+@api_router.put("/ai/followup/settings")
+async def afu_put_settings(body: dict, request: Request, user: dict = Depends(require_role("super_admin"))):
+    upd = {k: body[k] for k in AFU_SETTING_KEYS if k in body}
+    upd["updated_at"] = now_iso()
+    await db.autofollowup_settings.update_one({"_id": "main"}, {"$set": upd}, upsert=True)
+    await log_audit(user, "ai_followup", "update_settings", request, new={k: v for k, v in upd.items() if k != "intent_guidance"})
+    return await _afu_settings()
+
+
+@api_router.get("/ai/followup/queue")
+async def afu_queue(status: str = "", user: dict = Depends(require_role("super_admin"))):
+    q = {} if not status else {"status": status.upper()}
+    items = await db.ai_followup_queue.find(q).sort("created_at", -1).to_list(200)
+    counts = {st: await db.ai_followup_queue.count_documents({"status": st}) for st in AFU_QUEUE_STATUSES}
+    return {"items": [serialize(i) for i in items], "counts": counts}
+
+
+@api_router.post("/ai/followup/queue/{qid}/cancel")
+async def afu_queue_cancel(qid: str, user: dict = Depends(require_role("super_admin"))):
+    if not ObjectId.is_valid(qid):
+        raise HTTPException(status_code=404, detail="Not found")
+    await db.ai_followup_queue.update_one({"_id": ObjectId(qid)}, {"$set": {"status": "CANCELLED", "cancel_reason": "manual", "updated_at": now_iso()}})
+    return {"ok": True}
+
+
+@api_router.post("/ai/followup/run")
+async def afu_run(body: dict = None, user: dict = Depends(require_role("super_admin"))):
+    dry = True if body is None else bool(body.get("dry_run", True))
+    sch = await _afu_evaluate_and_schedule(dry_run_default=dry)
+    snd = await _afu_process_ready() if not dry else {"sent": 0, "cancelled": 0, "skipped": 0}
+    return {"scheduled": sch, "sent": snd, "dry_run": dry}
+
+
+@api_router.post("/ai/followup/preview")
+async def afu_preview(body: dict, user: dict = Depends(require_role("super_admin"))):
+    lid = (body or {}).get("lead_id")
+    if not lid or not ObjectId.is_valid(lid):
+        raise HTTPException(status_code=400, detail="lead_id wajib")
+    lead = await db.leads.find_one({"_id": ObjectId(lid)})
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead tidak ditemukan")
+    cid = lead.get("customer_id")
+    conv = await db.whatsapp_conversations.find_one({"customer_id": cid}) if cid else None
+    if not conv:
+        return {"ok": False, "message": None, "note": "Lead belum punya percakapan WhatsApp (tidak ada dasar interaksi)."}
+    cvid = str(conv["_id"])
+    last_in = await db.whatsapp_messages.find_one({"conversation_id": cvid, "direction": "INBOUND"}, sort=[("created_at", -1)])
+    has_q = bool(await db.quotations.find_one({"customer_id": cid, "status": {"$nin": ["CONVERTED", "EXPIRED", "REJECTED"]}}))
+    intent = (body.get("intent") or _afu_detect_intent((last_in or {}).get("content", ""), has_q, False)).upper()
+    s = await _afu_settings()
+    number = int(lead.get("followup_count") or 0) + 1
+    msg = await _afu_generate_message(lead, conv, s, number, intent)
+    return {"ok": bool(msg), "message": msg, "intent": intent, "followup_number": number,
+            "customer_name": lead.get("customer_name"), "last_message": (last_in or {}).get("content", "")}
+
+
+@api_router.get("/ai/followup/leads")
+async def afu_leads(user: dict = Depends(require_role("super_admin"))):
+    leads = await db.leads.find({"is_deleted": {"$ne": True}, "status": {"$in": AFU_ELIGIBLE_STAGES}}).sort("created_at", -1).to_list(500)
+    out = []
+    for l in leads:
+        cid = l.get("customer_id")
+        conv = await db.whatsapp_conversations.find_one({"customer_id": cid}) if cid and ObjectId.is_valid(cid) else None
+        out.append({"id": str(l["_id"]), "lead_code": l.get("lead_code"), "customer_name": l.get("customer_name"),
+                    "stage": l.get("status"), "auto_followup_status": l.get("auto_followup_status", "ACTIVE"),
+                    "followup_count": int(l.get("followup_count") or 0), "customer_intent": l.get("customer_intent"),
+                    "last_followup_at": l.get("last_followup_at"), "interested_package": l.get("interested_package"),
+                    "has_conversation": bool(conv), "stopped_reason": l.get("followup_stopped_reason")})
+    return out
+
+
+@api_router.post("/ai/followup/leads/{lid}/status")
+async def afu_lead_status(lid: str, body: dict, user: dict = Depends(require_role("super_admin"))):
+    st = (body or {}).get("status", "").upper()
+    if st not in ("ACTIVE", "PAUSED", "STOPPED"):
+        raise HTTPException(status_code=400, detail="status harus ACTIVE/PAUSED/STOPPED")
+    if not ObjectId.is_valid(lid):
+        raise HTTPException(status_code=404, detail="Not found")
+    await db.leads.update_one({"_id": ObjectId(lid)}, {"$set": {"auto_followup_status": st, "followup_updated_at": now_iso()}})
+    if st in ("PAUSED", "STOPPED"):
+        await db.ai_followup_queue.update_many({"lead_id": lid, "status": {"$in": ["SCHEDULED", "READY", "PROCESSING"]}},
+                                               {"$set": {"status": "CANCELLED", "cancel_reason": f"admin_{st.lower()}", "updated_at": now_iso()}})
+    return {"ok": True, "auto_followup_status": st}
+
+
+@api_router.get("/ai/followup/analytics")
+async def afu_analytics(user: dict = Depends(require_role("super_admin"))):
+    total_leads = await db.leads.count_documents({"is_deleted": {"$ne": True}, "status": {"$in": AFU_ELIGIBLE_STAGES}})
+    active = await db.leads.count_documents({"is_deleted": {"$ne": True}, "auto_followup_status": "ACTIVE", "status": {"$in": AFU_ELIGIBLE_STAGES}})
+    sent = await db.ai_followup_queue.count_documents({"status": "SENT"})
+    scheduled = await db.ai_followup_queue.count_documents({"status": {"$in": ["SCHEDULED", "READY", "PROCESSING"]}})
+    stopped = await db.leads.count_documents({"auto_followup_status": {"$in": ["STOPPED", "PAUSED", "COMPLETED"]}})
+    optout = await db.leads.count_documents({"auto_followup_status": "OPTED OUT"})
+    handover = await db.leads.count_documents({"auto_followup_status": "HANDOVER"})
+    converted = await db.leads.count_documents({"auto_followup_status": "CONVERTED"})
+    # response: customers who replied AFTER a follow-up was sent
+    response = 0
+    revenue = 0
+    booking_cnt = 0
+    async for it in db.ai_followup_queue.find({"status": "SENT"}):
+        cvid = it.get("conversation_id")
+        reply = await db.whatsapp_messages.find_one({"conversation_id": cvid, "direction": "INBOUND", "created_at": {"$gt": it.get("sent_at") or ""}})
+        if reply:
+            response += 1
+    # bookings & revenue from leads that got at least one follow-up
+    fu_customers = await db.ai_followup_queue.distinct("customer_id", {"status": "SENT"})
+    for cid in fu_customers:
+        b = await db.bookings.find_one({"customer_id": cid, "status": {"$ne": "CANCELLED"}})
+        if b:
+            booking_cnt += 1
+            revenue += float(b.get("total_amount") or b.get("total") or 0)
+    rate = lambda n, d: round((n / d) * 100, 1) if d else 0.0
+    return {
+        "total_leads": total_leads, "active_followup": active, "followup_sent": sent, "followup_scheduled": scheduled,
+        "followup_response": response, "followup_converted": converted, "followup_booking": booking_cnt,
+        "followup_revenue": revenue, "stopped_followup": stopped, "opt_out": optout, "human_handover": handover,
+        "response_rate": rate(response, sent), "conversion_rate": rate(converted, total_leads),
+        "booking_rate": rate(booking_cnt, len(fu_customers)),
+    }
+
+
 app.include_router(api_router)
 
 app.add_middleware(
