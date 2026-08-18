@@ -8995,12 +8995,13 @@ async def _wa_ai_process(conv_id, text):
         return
     try:
         from emergentintegrations.llm.chat import LlmChat, UserMessage
-        ctx = await _wa_pkg_context()
-        sys = (f"Anda AI Sales Assistant WhatsApp untuk travel umroh & haji. Gaya bahasa: {cfg.get('style','')}. "
-               f"Aturan: {cfg.get('rules','')}. Pengetahuan tambahan: {cfg.get('knowledge','')}. "
-               f"Gunakan HANYA data paket berikut (jangan mengarang harga/ketersediaan):\n{ctx}\n"
-               f"Jika pertanyaan di luar kemampuan Anda atau customer ingin bicara dengan sales/manusia, "
-               f"jawab HANYA dengan token persis: [HANDOVER]")
+        kb = await _kb_build_context()
+        base = _kb_system_prompt(kb, extra_style=cfg.get("style", ""), extra_rules=cfg.get("rules", ""))
+        extra_know = (cfg.get("knowledge") or "").strip()
+        sys = (base + (f"\n\n=== PENGETAHUAN TAMBAHAN (WhatsApp) ===\n{extra_know}" if extra_know else "") +
+               "\n\nKONTEKS: Anda adalah AI Sales Assistant di WhatsApp. "
+               "Jika pertanyaan di luar kemampuan Anda atau customer ingin bicara dengan sales/manusia, "
+               "jawab HANYA dengan token persis: [HANDOVER]")
         chat = LlmChat(api_key=os.environ["EMERGENT_LLM_KEY"], session_id=f"wa-{conv_id}", system_message=sys).with_model("gemini", "gemini-3-flash-preview")
         reply = ((await chat.send_message(UserMessage(text=text or ""))) or "").strip()
     except Exception as e:
@@ -9062,6 +9063,354 @@ async def wa_manual_handover(cid: str, body: dict, user: dict = Depends(require_
         raise HTTPException(status_code=404, detail="Conversation not found")
     await _wa_handover(conv, (body or {}).get("reason") or "Handover manual")
     return {"status": "HUMAN HANDOVER"}
+
+
+# ============================================================================
+# PHASE 10B — AI Knowledge Base Center (Super Admin)
+# ============================================================================
+KNOWLEDGE_CATEGORIES = [
+    "PRODUCT", "PACKAGE TOUR", "PACKAGE UMRAH", "DESTINATION", "ITINERARY", "HOTEL",
+    "AIRLINE", "VISA", "DOCUMENT", "PAYMENT", "REFUND", "CANCELLATION", "FAQ",
+    "COMPANY INFORMATION", "TERMS & CONDITIONS", "CUSTOMER SERVICE", "OTHER",
+]
+ARTICLE_STATUSES = ["DRAFT", "ACTIVE", "INACTIVE", "ARCHIVED"]
+# Categories treated as "Active Company Policy" (priority 2, above FAQ)
+KB_POLICY_CATS = {"COMPANY INFORMATION", "TERMS & CONDITIONS", "PAYMENT", "REFUND",
+                  "CANCELLATION", "VISA", "DOCUMENT", "CUSTOMER SERVICE"}
+
+
+def _kb_today():
+    return datetime.now(timezone.utc).date().isoformat()
+
+
+def _kb_date_active(doc, today=None):
+    today = today or _kb_today()
+    frm = (doc.get("effective_from") or "").strip()
+    unt = (doc.get("effective_until") or "").strip()
+    if frm and today < frm:
+        return False
+    if unt and today > unt:
+        return False
+    return True
+
+
+async def _kb_active_articles():
+    """Return ACTIVE articles that are within their effective window (sorted by priority desc)."""
+    docs = await db.knowledge_articles.find({"status": "ACTIVE"}).to_list(500)
+    out = [d for d in docs if _kb_date_active(d)]
+    out.sort(key=lambda d: (d.get("priority") or 0), reverse=True)
+    return out
+
+
+async def _kb_active_faqs():
+    docs = await db.knowledge_faqs.find({"status": "ACTIVE"}).to_list(500)
+    return docs
+
+
+async def _kb_package_knowledge(limit=50):
+    """Assemble AI-usable package data directly from CRM Package Master (single source of truth)."""
+    pkgs = await db.packages.find({"status": {"$ne": "ARCHIVED"}}).sort("created_at", -1).to_list(limit)
+    out = []
+    for p in pkgs:
+        pid = str(p["_id"])
+        deps = await db.departures.find({"package_id": pid}).sort("departure_date", 1).to_list(20)
+        dep_rows = []
+        for d in deps:
+            if (d.get("status") or "").upper() in ("CANCELLED", "CLOSED"):
+                continue
+            dep_rows.append({
+                "departure_date": d.get("departure_date"), "return_date": d.get("return_date"),
+                "price": d.get("price") or p.get("selling_price"),
+                "available_seat": d.get("available_seat"), "quota": d.get("quota"),
+                "hotel": d.get("hotel"), "airline": d.get("flight"), "status": d.get("status"),
+            })
+        out.append({
+            "id": pid, "package_name": p.get("package_name"), "package_code": p.get("package_code"),
+            "package_type": p.get("product_type"), "sub_category": p.get("sub_category"),
+            "destination": p.get("destination"), "country": p.get("country"),
+            "duration": p.get("duration"), "selling_price": p.get("selling_price"),
+            "child_price": p.get("child_price"), "infant_price": p.get("infant_price"),
+            "description": p.get("description"), "terms": p.get("terms"),
+            "status": p.get("status"), "departures": dep_rows,
+        })
+    return out
+
+
+async def _kb_build_context():
+    """Build prioritized context blocks + the lists of sources actually used (for preview)."""
+    pkgs = await _kb_package_knowledge(limit=40)
+    articles = await _kb_active_articles()
+    faqs = await _kb_active_faqs()
+
+    pkg_lines, pkg_used = [], []
+    for p in pkgs:
+        deps = p.get("departures") or []
+        if deps:
+            dep_txt = "; ".join(
+                f"{d.get('departure_date','-')}→{d.get('return_date','-')} | Rp{int(d.get('price') or 0):,} | sisa kursi {d.get('available_seat') if d.get('available_seat') is not None else '-'}"
+                for d in deps[:6])
+        else:
+            dep_txt = "(belum ada jadwal keberangkatan)"
+        pkg_lines.append(
+            f"- [{p.get('package_code','')}] {p.get('package_name','')} | tipe {p.get('package_type') or ''}/{p.get('sub_category') or ''} | "
+            f"destinasi {p.get('destination') or '-'} | durasi {p.get('duration') or '-'} | harga dasar Rp{int(p.get('selling_price') or 0):,} | "
+            f"status {p.get('status')}\n    Jadwal: {dep_txt}")
+        pkg_used.append({"id": p["id"], "package_name": p.get("package_name"), "package_code": p.get("package_code")})
+
+    policy_lines, general_lines, kn_used = [], [], []
+    for a in articles:
+        block = f"- ({a.get('category')}) {a.get('title')}: {a.get('content')}"
+        if (a.get("category") or "") in KB_POLICY_CATS:
+            policy_lines.append(block)
+        else:
+            general_lines.append(block)
+        kn_used.append({"id": str(a["_id"]), "title": a.get("title"), "category": a.get("category"),
+                        "type": "ARTICLE", "version": a.get("version", 1)})
+
+    faq_lines = []
+    for f in faqs:
+        faq_lines.append(f"- Q: {f.get('question')}\n  A: {f.get('answer')}")
+        kn_used.append({"id": str(f["_id"]), "title": f.get("question"), "category": f.get("category"),
+                        "type": "FAQ"})
+
+    return {
+        "pkg_text": "\n".join(pkg_lines) or "(belum ada paket aktif)",
+        "policy_text": "\n".join(policy_lines) or "(belum ada kebijakan perusahaan aktif)",
+        "faq_text": "\n".join(faq_lines) or "(belum ada FAQ aktif)",
+        "general_text": "\n".join(general_lines) or "(belum ada pengetahuan umum aktif)",
+        "package_used": pkg_used, "knowledge_used": kn_used,
+    }
+
+
+def _kb_system_prompt(ctx, extra_style="", extra_rules=""):
+    return (
+        "Anda adalah AI Knowledge Assistant untuk agen travel umroh, haji & tour. "
+        "Jawab dalam Bahasa Indonesia yang ringkas, sopan, dan profesional.\n"
+        f"{('Gaya: ' + extra_style + chr(10)) if extra_style else ''}"
+        f"{('Aturan tambahan: ' + extra_rules + chr(10)) if extra_rules else ''}"
+        "URUTAN PRIORITAS SUMBER JAWABAN: (1) DATA PAKET terkini, (2) Kebijakan Perusahaan aktif, "
+        "(3) FAQ aktif, (4) Pengetahuan umum aktif. Jika ada informasi baru yang aktif, JANGAN gunakan informasi lama.\n"
+        "ATURAN KERAS — JANGAN MENGARANG: harga, sisa kursi (seat), jadwal keberangkatan, itinerary, hotel, "
+        "maskapai, visa, atau kebijakan perusahaan. Gunakan HANYA data yang tersedia di bawah ini. "
+        "Jika informasi yang diminta TIDAK tersedia dalam data, katakan dengan jujur bahwa informasi belum tersedia "
+        "dan sarankan agar customer dihubungkan dengan tim sales (human handover). Jangan menebak.\n\n"
+        f"=== DATA PAKET (SUMBER UTAMA) ===\n{ctx['pkg_text']}\n\n"
+        f"=== KEBIJAKAN PERUSAHAAN AKTIF ===\n{ctx['policy_text']}\n\n"
+        f"=== FAQ AKTIF ===\n{ctx['faq_text']}\n\n"
+        f"=== PENGETAHUAN UMUM AKTIF ===\n{ctx['general_text']}"
+    )
+
+
+# ---- Categories ----
+@api_router.get("/knowledge/categories")
+async def kb_categories(user: dict = Depends(require_role("super_admin"))):
+    return {"categories": KNOWLEDGE_CATEGORIES, "article_statuses": ARTICLE_STATUSES}
+
+
+# ---- Articles ----
+@api_router.get("/knowledge/articles")
+async def kb_list_articles(category: str = "", status: str = "", q: str = "",
+                           user: dict = Depends(require_role("super_admin"))):
+    query = {}
+    if category:
+        query["category"] = category
+    if status:
+        query["status"] = status
+    if q:
+        rx = {"$regex": _re.escape(q), "$options": "i"}
+        query["$or"] = [{"title": rx}, {"content": rx}]
+    docs = await db.knowledge_articles.find(query).sort("updated_at", -1).to_list(500)
+    for d in docs:
+        d["is_effective_now"] = _kb_date_active(d)
+    return [serialize(d) for d in docs]
+
+
+@api_router.get("/knowledge/articles/{aid}")
+async def kb_get_article(aid: str, user: dict = Depends(require_role("super_admin"))):
+    doc = await db.knowledge_articles.find_one({"_id": ObjectId(aid)}) if ObjectId.is_valid(aid) else None
+    if not doc:
+        raise HTTPException(status_code=404, detail="Artikel tidak ditemukan")
+    return serialize(doc)
+
+
+@api_router.post("/knowledge/articles")
+async def kb_create_article(body: dict, request: Request, user: dict = Depends(require_role("super_admin"))):
+    cat = (body.get("category") or "OTHER").strip()
+    if cat not in KNOWLEDGE_CATEGORIES:
+        raise HTTPException(status_code=400, detail="Kategori tidak valid")
+    st = (body.get("status") or "DRAFT").strip().upper()
+    if st not in ARTICLE_STATUSES:
+        raise HTTPException(status_code=400, detail="Status tidak valid")
+    doc = {
+        "title": (body.get("title") or "").strip(), "category": cat, "content": body.get("content") or "",
+        "status": st, "priority": int(body.get("priority") or 0),
+        "effective_from": (body.get("effective_from") or "").strip(),
+        "effective_until": (body.get("effective_until") or "").strip(),
+        "version": 1, "history": [], "created_at": now_iso(), "created_by": user["name"],
+        "updated_at": now_iso(), "updated_by": user["name"],
+    }
+    if not doc["title"]:
+        raise HTTPException(status_code=400, detail="Judul wajib diisi")
+    r = await db.knowledge_articles.insert_one(doc)
+    await log_audit(user, "knowledge", "create_article", request, record_id=str(r.inserted_id), new={"title": doc["title"], "category": cat})
+    return serialize(await db.knowledge_articles.find_one({"_id": r.inserted_id}))
+
+
+@api_router.put("/knowledge/articles/{aid}")
+async def kb_update_article(aid: str, body: dict, request: Request, user: dict = Depends(require_role("super_admin"))):
+    doc = await db.knowledge_articles.find_one({"_id": ObjectId(aid)}) if ObjectId.is_valid(aid) else None
+    if not doc:
+        raise HTTPException(status_code=404, detail="Artikel tidak ditemukan")
+    # snapshot previous version (never delete history)
+    snapshot = {"version": doc.get("version", 1), "title": doc.get("title"), "category": doc.get("category"),
+                "content": doc.get("content"), "status": doc.get("status"), "priority": doc.get("priority"),
+                "effective_from": doc.get("effective_from"), "effective_until": doc.get("effective_until"),
+                "updated_by": doc.get("updated_by"), "updated_at": doc.get("updated_at")}
+    upd = {}
+    for k in ("title", "content", "priority"):
+        if k in body:
+            upd[k] = int(body[k]) if k == "priority" else body[k]
+    if "category" in body:
+        if body["category"] not in KNOWLEDGE_CATEGORIES:
+            raise HTTPException(status_code=400, detail="Kategori tidak valid")
+        upd["category"] = body["category"]
+    if "status" in body:
+        st = (body["status"] or "").upper()
+        if st not in ARTICLE_STATUSES:
+            raise HTTPException(status_code=400, detail="Status tidak valid")
+        upd["status"] = st
+    for k in ("effective_from", "effective_until"):
+        if k in body:
+            upd[k] = (body[k] or "").strip()
+    upd["version"] = doc.get("version", 1) + 1
+    upd["updated_at"] = now_iso()
+    upd["updated_by"] = user["name"]
+    await db.knowledge_articles.update_one({"_id": doc["_id"]}, {"$set": upd, "$push": {"history": snapshot}})
+    await log_audit(user, "knowledge", "update_article", request, record_id=aid, old=snapshot, new={k: v for k, v in upd.items() if k != "version"})
+    return serialize(await db.knowledge_articles.find_one({"_id": doc["_id"]}))
+
+
+@api_router.get("/knowledge/articles/{aid}/versions")
+async def kb_article_versions(aid: str, user: dict = Depends(require_role("super_admin"))):
+    doc = await db.knowledge_articles.find_one({"_id": ObjectId(aid)}) if ObjectId.is_valid(aid) else None
+    if not doc:
+        raise HTTPException(status_code=404, detail="Artikel tidak ditemukan")
+    return {"current_version": doc.get("version", 1), "history": list(reversed(doc.get("history") or []))}
+
+
+@api_router.delete("/knowledge/articles/{aid}")
+async def kb_archive_article(aid: str, request: Request, reason: str = "", user: dict = Depends(require_role("super_admin"))):
+    doc = await db.knowledge_articles.find_one({"_id": ObjectId(aid)}) if ObjectId.is_valid(aid) else None
+    if not doc:
+        raise HTTPException(status_code=404, detail="Artikel tidak ditemukan")
+    snapshot = {"version": doc.get("version", 1), "title": doc.get("title"), "content": doc.get("content"),
+                "status": doc.get("status"), "updated_by": doc.get("updated_by"), "updated_at": doc.get("updated_at")}
+    await db.knowledge_articles.update_one({"_id": doc["_id"]}, {
+        "$set": {"status": "ARCHIVED", "version": doc.get("version", 1) + 1, "updated_at": now_iso(), "updated_by": user["name"]},
+        "$push": {"history": snapshot}})
+    await log_audit(user, "knowledge", "archive_article", request, record_id=aid, reason=reason or "archived")
+    return {"ok": True, "status": "ARCHIVED"}
+
+
+# ---- FAQ ----
+@api_router.get("/knowledge/faqs")
+async def kb_list_faqs(category: str = "", status: str = "", q: str = "",
+                       user: dict = Depends(require_role("super_admin"))):
+    query = {}
+    if category:
+        query["category"] = category
+    if status:
+        query["status"] = status
+    if q:
+        rx = {"$regex": _re.escape(q), "$options": "i"}
+        query["$or"] = [{"question": rx}, {"answer": rx}, {"keywords": rx}]
+    docs = await db.knowledge_faqs.find(query).sort("updated_at", -1).to_list(500)
+    return [serialize(d) for d in docs]
+
+
+@api_router.post("/knowledge/faqs")
+async def kb_create_faq(body: dict, request: Request, user: dict = Depends(require_role("super_admin"))):
+    cat = (body.get("category") or "FAQ").strip()
+    if cat not in KNOWLEDGE_CATEGORIES:
+        raise HTTPException(status_code=400, detail="Kategori tidak valid")
+    kws = body.get("keywords")
+    if isinstance(kws, str):
+        kws = [k.strip() for k in kws.split(",") if k.strip()]
+    doc = {"question": (body.get("question") or "").strip(), "answer": body.get("answer") or "",
+           "category": cat, "keywords": kws or [], "status": (body.get("status") or "ACTIVE").upper(),
+           "created_at": now_iso(), "created_by": user["name"], "updated_at": now_iso(), "updated_by": user["name"]}
+    if not doc["question"]:
+        raise HTTPException(status_code=400, detail="Pertanyaan wajib diisi")
+    r = await db.knowledge_faqs.insert_one(doc)
+    await log_audit(user, "knowledge", "create_faq", request, record_id=str(r.inserted_id), new={"question": doc["question"]})
+    return serialize(await db.knowledge_faqs.find_one({"_id": r.inserted_id}))
+
+
+@api_router.put("/knowledge/faqs/{fid}")
+async def kb_update_faq(fid: str, body: dict, request: Request, user: dict = Depends(require_role("super_admin"))):
+    doc = await db.knowledge_faqs.find_one({"_id": ObjectId(fid)}) if ObjectId.is_valid(fid) else None
+    if not doc:
+        raise HTTPException(status_code=404, detail="FAQ tidak ditemukan")
+    upd = {}
+    for k in ("question", "answer"):
+        if k in body:
+            upd[k] = body[k]
+    if "category" in body and body["category"] in KNOWLEDGE_CATEGORIES:
+        upd["category"] = body["category"]
+    if "status" in body:
+        upd["status"] = (body["status"] or "").upper()
+    if "keywords" in body:
+        kws = body["keywords"]
+        if isinstance(kws, str):
+            kws = [k.strip() for k in kws.split(",") if k.strip()]
+        upd["keywords"] = kws or []
+    upd["updated_at"] = now_iso()
+    upd["updated_by"] = user["name"]
+    await db.knowledge_faqs.update_one({"_id": doc["_id"]}, {"$set": upd})
+    await log_audit(user, "knowledge", "update_faq", request, record_id=fid, new={k: v for k, v in upd.items() if k in ("question", "status")})
+    return serialize(await db.knowledge_faqs.find_one({"_id": doc["_id"]}))
+
+
+@api_router.delete("/knowledge/faqs/{fid}")
+async def kb_delete_faq(fid: str, request: Request, user: dict = Depends(require_role("super_admin"))):
+    doc = await db.knowledge_faqs.find_one({"_id": ObjectId(fid)}) if ObjectId.is_valid(fid) else None
+    if not doc:
+        raise HTTPException(status_code=404, detail="FAQ tidak ditemukan")
+    await db.knowledge_faqs.delete_one({"_id": doc["_id"]})
+    await log_audit(user, "knowledge", "delete_faq", request, record_id=fid)
+    return {"ok": True}
+
+
+# ---- Package Knowledge (read-only view of CRM data the AI can use) ----
+@api_router.get("/knowledge/packages")
+async def kb_packages(user: dict = Depends(require_role("super_admin"))):
+    return await _kb_package_knowledge(limit=100)
+
+
+# ---- Test AI Knowledge ----
+@api_router.post("/knowledge/test-ai")
+async def kb_test_ai(body: dict, user: dict = Depends(require_role("super_admin"))):
+    question = (body.get("question") or "").strip()
+    if not question:
+        raise HTTPException(status_code=400, detail="Pertanyaan wajib diisi")
+    ctx = await _kb_build_context()
+    try:
+        from emergentintegrations.llm.chat import LlmChat, UserMessage
+        sys = _kb_system_prompt(ctx)
+        chat = LlmChat(api_key=os.environ["EMERGENT_LLM_KEY"], session_id=f"kb-test-{now_iso()}",
+                       system_message=sys).with_model("gemini", "gemini-3-flash-preview")
+        answer = ((await chat.send_message(UserMessage(text=question))) or "").strip()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"AI tidak dapat memproses: {str(e)[:200]}")
+    return {
+        "answer": answer or "Maaf, informasi belum tersedia. Silakan dihubungkan dengan tim sales kami.",
+        "knowledge_used": ctx["knowledge_used"],
+        "package_used": ctx["package_used"],
+        "source_data": {
+            "packages_count": len(ctx["package_used"]),
+            "knowledge_count": len(ctx["knowledge_used"]),
+        },
+    }
 
 
 app.include_router(api_router)

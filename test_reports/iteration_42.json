@@ -1,0 +1,28 @@
+{
+  "summary": "Phase 10B Knowledge Base frontend + RBAC validated end-to-end via Playwright. Super Admin can access /knowledge-base with all 4 tabs; Articles CRUD (create -> edit bumps v2 -> versions dialog shows v1 history -> archive works and appears under ARCHIVED filter). FAQ CRUD (create -> edit -> delete) works. Package Knowledge lists 7 packages from CRM with blue single-source-of-truth notice and expandable departures. Test AI returns a real Gemini answer with Package Used and Knowledge Used badge lists; sample chip fills input. RBAC: Sales & Accounting do NOT see 'Knowledge Base' in sidebar; direct nav to /knowledge-base does NOT render the KB page.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "/knowledge-base RBAC block", "issues": ["Spec says non-super_admin should redirect to /dashboard; current implementation instead lands on the shared 403 Forbidden page (URL stays at /knowledge-base). Access is still enforced (KB page not rendered, backend also enforces role), so functionally safe, but behavior differs from stated requirement. Consider using <Navigate to='/dashboard' replace/> inside the RouteGuard or KnowledgeBase root if strict redirect is desired."]}
+    ]
+  },
+  "test_report_links": [],
+  "action_items": [
+    "Optional: change RBAC guard for /knowledge-base to redirect to /dashboard (as per spec) instead of showing 403 Forbidden page for Sales/Accounting."
+  ],
+  "critical_code_review_comments": [
+    "KnowledgeBase.jsx (~390 lines) is fine but four sub-tabs in one file — if it grows, split ArticlesTab/FaqTab/PackagesTab/TestAiTab into separate files.",
+    "Article edit dialog does not preload effective dates format validation; empty strings are sent — backend seems to handle it, but consider clearing to null.",
+    "Archive uses window.confirm — matches app pattern but shadcn AlertDialog would be more consistent with rest of app."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "n/a (skipped as requested)", "frontend": "100%"},
+  "test_credentials": "Super Admin dedyirawan18@gmail.com/Admin@123, Sales sales@safarcrm.com/Sales@123, Accounting accounting@safarcrm.com/Account@123 — all valid.",
+  "seed_data_creation": "Created 1 TEST_KB_* article (archived at end of test) and 1 TEST_FAQ_* (deleted). Article is archived (soft-cleaned).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Phase 10B KB fully working. Only nit: /knowledge-base for non-super_admin shows 403 page instead of redirecting to /dashboard. Note: Radix Select options appear twice in DOM due to app-wide instrumentation; use .first or exact=True when clicking options. Login form has two inputs with no explicit type='email' — index them.",
+  "rca of the issue": "n/a — no bugs found."
+}

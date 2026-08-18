@@ -1,7 +1,7 @@
 import {
   LayoutDashboard, Users2, Briefcase, Package, CalendarCheck, Calculator,
   Receipt, Percent, FileBarChart, Plug, UserCog, Settings, ScrollText,
-  Plane, PlaneTakeoff, Bell, Wallet, TrendingUp, ListChecks, FileText, ShieldCheck, CheckSquare, Building2, Activity, Bot, MessageCircle,
+  Plane, PlaneTakeoff, Bell, Wallet, TrendingUp, ListChecks, FileText, ShieldCheck, CheckSquare, Building2, Activity, Bot, MessageCircle, BrainCircuit,
 } from "lucide-react";
 
 // Route -> permission required (mirrors backend). null = any authenticated user.
@@ -22,6 +22,7 @@ export const ROUTE_PERMS = {
   "/forecast": "super_admin",
   "/n8n": null,
   "/whatsapp": "super_admin",
+  "/knowledge-base": "super_admin",
   "/integration": "integration.view",
   "/users": "users.view",
   "/settings": "settings.view",
@@ -57,6 +58,7 @@ export const MENUS = {
     { label: "Reports", path: "/reports", icon: FileBarChart },
     { label: "Forecasting", path: "/forecast", icon: TrendingUp },
     { label: "AI Automation", path: "/n8n", icon: Bot },
+    { label: "Knowledge Base", path: "/knowledge-base", icon: BrainCircuit },
     { label: "WhatsApp Integration", path: "/whatsapp", icon: MessageCircle },
     { label: "Integration", path: "/integration", icon: Plug },
     { label: "User Management", path: "/users", icon: UserCog },
