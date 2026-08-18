@@ -1,10 +1,18 @@
+## PHASE 10A — WhatsApp (WAHA) — TAHAP 3 (Frontend Super Admin UI) (2026-06) — DONE ✅ (testing_agent iter_41: FE 100%)
+- Menu baru "WhatsApp Integration" (super_admin only) → route `/whatsapp` (`WhatsAppIntegration.jsx`); `ROUTE_PERMS['/whatsapp']='super_admin'`; Sales/Accounting tidak melihat menu & diarahkan ke /dashboard (RBAC terverifikasi).
+- 11 tab dalam 1 halaman: Accounts (CRUD akun WAHA, api_key masked, dialog tambah/edit/archive), Connection+QR (status koneksi, Connect/Test/Disconnect, tampil QR image dari `/qr`), Configuration (Webhook URL + Verify Token + Salin), Conversation Monitor (list + thread bubble + kirim manual), AI Agent (toggle enabled, greeting, handover keywords), AI Knowledge, AI Style, AI Rules (4 tab UI dari satu config `/whatsapp/ai-config`, save parsial via PUT), Human Handover (list HUMAN HANDOVER + Aktifkan AI/resume-ai), WhatsApp Logs (kind=wa), API Logs (kind=API).
+- Wiring ke endpoint backend Tahap 1&2 yang sudah ada (tanpa endpoint baru). WAHA belum di-host → Connect/QR/Send error 4xx/502 ditangani dengan toast, UI tidak crash.
+- Semua elemen ber-`data-testid`. Verified iter_41: seluruh 11 tab render, buat/edit/hapus akun, simpan 4 AI config, empty states, RBAC Sales/Accounting.
+- BELUM: Tahap 4 (Sales frontend — Customer 360 tab WhatsApp, takeover/chat, kirim template manual); sambungkan QR ke engine WAHA saat URL tersedia.
+
+
 ## PHASE 10A — WhatsApp (WAHA) — TAHAP 2 (AI Agent) (2026-06) — DONE (curl E2E, Gemini)
 - AI auto-reply via Gemini (gemini-3-flash-preview, Emergent LLM key) dipicu di webhook saat pesan customer masuk & conversation `ai_status=ACTIVE`. Konteks = paket CRM aktif (nama/harga/destinasi/durasi/sisa kursi) — TANPA HPP; pakai AI Style/Rules/Knowledge dari config.
 - Config: `GET/PUT /api/whatsapp/ai-config` (super_admin): enabled, knowledge, style, rules, greeting, handover_keywords. Disimpan di `whatsapp_ai_config` (_id=main).
 - Human Handover: keyword customer (mis. "bicara dengan sales") atau AI balas token `[HANDOVER]` → status=HUMAN HANDOVER, ai_status=PAUSED, buat Task (source=whatsapp_handover) untuk assigned sales + notifikasi + AI berhenti auto-reply.
 - `POST /api/whatsapp/conversations/{id}/resume-ai` (sales/super_admin) → AI aktif kembali; `POST .../handover` manual.
 - Verified: pertanyaan paket → balasan Gemini Bahasa Indonesia pakai data paket asli; keyword → HUMAN HANDOVER + task; resume-ai → AI ACTIVE. Data uji dibersihkan.
-- BELUM: Tahap 3 (frontend menu WhatsApp Integration 11 submenu + Customer 360 → Conversations).
+- Tahap 3 (frontend) → SELESAI (lihat entri Tahap 3 di atas).
 
 
 ## PHASE 10A — Native WhatsApp (WAHA) Integration — TAHAP 1 (Backend) (2026-06) — DONE (curl E2E, tanpa N8N)

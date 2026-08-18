@@ -39,6 +39,7 @@ import Tax from "@/pages/Tax";
 import Reports from "@/pages/Reports";
 import Forecast from "@/pages/Forecast";
 import N8N from "@/pages/N8N";
+import WhatsAppIntegration from "@/pages/WhatsAppIntegration";
 import Tasks from "@/pages/Tasks";
 import ApprovalCenter from "@/pages/ApprovalCenter";
 
@@ -67,6 +68,7 @@ const PAGES = {
   "/reports": Reports,
   "/forecast": Forecast,
   "/n8n": N8N,
+  "/whatsapp": WhatsAppIntegration,
   "/tasks": Tasks,
   "/approval-center": ApprovalCenter,
 };
