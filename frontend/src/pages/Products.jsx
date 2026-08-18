@@ -20,7 +20,7 @@ const EMPTY = {
   package_name: "", product_type: "TOUR", category: "", destination: "", country: "", duration: "",
   description: "", cover_image: "", min_pax: 1, max_pax: 40, selling_price: 0, child_price: 0,
   infant_price: 0, single_supplement: 0, currency: "IDR", tax_treatment: "Non-PPN",
-  commission_eligibility: true, status: "DRAFT", promo_text: "", terms: "", umrah: {},
+  commission_eligibility: true, max_discount_type: "PERCENT", max_discount_value: 0, status: "DRAFT", promo_text: "", terms: "", umrah: {},
 };
 
 export default function Products() {
@@ -58,6 +58,7 @@ export default function Products() {
         selling_price: Number(form.selling_price), child_price: Number(form.child_price),
         infant_price: Number(form.infant_price), single_supplement: Number(form.single_supplement),
         min_quota_pax: Number(form.min_quota_pax || 0), tour_price_portion: Number(form.tour_price_portion || 0),
+        max_discount_type: form.max_discount_type || "PERCENT", max_discount_value: Number(form.max_discount_value || 0),
         pricing_tiers: (form.pricing_tiers || []).map((t) => ({ min_pax: Number(t.min_pax || 0), max_pax: Number(t.max_pax || 0), price: Number(t.price || 0) })) };
       await api.post("/packages", p);
       toast.success("Package created"); setOpen(false); setForm(EMPTY); load();
@@ -87,6 +88,8 @@ export default function Products() {
                 <F label="Status"><Select value={form.status} onValueChange={set("status")}><SelectTrigger data-testid="package-status-select"><SelectValue /></SelectTrigger><SelectContent className="bg-white">{PACKAGE_STATUSES.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent></Select></F>
                 <ProductAdvancedFields f={form} set={set} />
                 <F label="Selling Price"><Input type="number" value={form.selling_price} onChange={(e) => set("selling_price")(e.target.value)} data-testid="package-price-input" /></F>
+                <F label="Maks Diskon (Tipe)"><Select value={form.max_discount_type} onValueChange={set("max_discount_type")}><SelectTrigger data-testid="package-max-discount-type"><SelectValue /></SelectTrigger><SelectContent className="bg-white"><SelectItem value="PERCENT">Persen (%)</SelectItem><SelectItem value="NOMINAL">Nominal (Rp)</SelectItem></SelectContent></Select></F>
+                <F label="Maks Diskon (Nilai)"><Input type="number" value={form.max_discount_value} onChange={(e) => set("max_discount_value")(e.target.value)} data-testid="package-max-discount-value" /></F>
                 <F label="Child Price"><Input type="number" value={form.child_price} onChange={(e) => set("child_price")(e.target.value)} /></F>
                 <F label="Infant Price"><Input type="number" value={form.infant_price} onChange={(e) => set("infant_price")(e.target.value)} /></F>
                 <F label="Single Supplement"><Input type="number" value={form.single_supplement} onChange={(e) => set("single_supplement")(e.target.value)} /></F>

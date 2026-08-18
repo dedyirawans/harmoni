@@ -319,6 +319,7 @@ function PackageEditDialog({ pkg, onClose, onSaved }) {
         min_quota_pax: Number(f.min_quota_pax || 0), tour_price_portion: Number(f.tour_price_portion || 0),
         pricing_tiers: (f.pricing_tiers || []).map((t) => ({ min_pax: Number(t.min_pax || 0), max_pax: Number(t.max_pax || 0), price: Number(t.price || 0) })),
         tax_treatment: f.tax_treatment, commission_eligibility: f.commission_eligibility, status: f.status,
+        max_discount_type: f.max_discount_type || "PERCENT", max_discount_value: Number(f.max_discount_value || 0),
         promo_text: f.promo_text, terms: f.terms, umrah: f.umrah };
       await api.put(`/packages/${pkg._id}`, body); toast.success("Package updated"); onSaved();
     } catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); }
@@ -333,6 +334,8 @@ function PackageEditDialog({ pkg, onClose, onSaved }) {
           <EF label="Destination"><Input value={f.destination} onChange={(e) => set("destination")(e.target.value)} /></EF>
           <EF label="Duration"><Input value={f.duration} onChange={(e) => set("duration")(e.target.value)} /></EF>
           <EF label="Selling Price"><Input type="number" value={f.selling_price} onChange={(e) => set("selling_price")(e.target.value)} data-testid="edit-price-input" /></EF>
+          <EF label="Maks Diskon (Tipe)"><Select value={f.max_discount_type || "PERCENT"} onValueChange={set("max_discount_type")}><SelectTrigger data-testid="edit-max-discount-type"><SelectValue /></SelectTrigger><SelectContent className="bg-white"><SelectItem value="PERCENT">Persen (%)</SelectItem><SelectItem value="NOMINAL">Nominal (Rp)</SelectItem></SelectContent></Select></EF>
+          <EF label="Maks Diskon (Nilai)"><Input type="number" value={f.max_discount_value ?? 0} onChange={(e) => set("max_discount_value")(e.target.value)} data-testid="edit-max-discount-value" /></EF>
           <EF label="Child Price"><Input type="number" value={f.child_price} onChange={(e) => set("child_price")(e.target.value)} /></EF>
           <EF label="Status"><Select value={f.status} onValueChange={set("status")}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent className="bg-white">{PACKAGE_STATUSES.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent></Select></EF>
           <EF label="Product Type"><Select value={f.product_type} onValueChange={set("product_type")}><SelectTrigger data-testid="edit-type-select"><SelectValue /></SelectTrigger><SelectContent className="bg-white">{PRODUCT_TYPES.map((t) => <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>)}</SelectContent></Select></EF>

@@ -2588,6 +2588,8 @@ class PackageModel(BaseModel):
     currency: Optional[str] = "IDR"
     tax_treatment: Optional[str] = "Non-PPN"
     commission_eligibility: Optional[bool] = True
+    max_discount_type: Optional[str] = "PERCENT"
+    max_discount_value: Optional[float] = 0
     status: Optional[str] = "DRAFT"
     promo_text: Optional[str] = ""
     terms: Optional[str] = ""
@@ -9027,6 +9029,7 @@ async def wa_ai_simulate(body: dict, user: dict = Depends(require_role("super_ad
     reset = bool(body.get("reset"))
     conv = await db.whatsapp_conversations.find_one({"wa_number": "628000000000"})
     if conv and reset:
+        await db.whatsapp_messages.delete_many({"conversation_id": str(conv["_id"])})
         await db.whatsapp_conversations.delete_one({"_id": conv["_id"]})
         conv = None
     if not conv:
@@ -9035,10 +9038,24 @@ async def wa_ai_simulate(body: dict, user: dict = Depends(require_role("super_ad
     if conv.get("ai_status") != "ACTIVE":
         return {"conversation_id": str(conv["_id"]), "handover": True,
                 "reason": "Conversation dalam status HANDOVER. Gunakan reset untuk mulai ulang.", "reply": None, "tools_used": []}
+    convid = str(conv["_id"])
+    await db.whatsapp_messages.insert_one({
+        "message_id": f"sim-in-{now_iso()}", "conversation_id": convid, "account_id": conv.get("account_id", "apico"),
+        "external_provider": APICO_PROVIDER, "sender": "CUSTOMER", "sender_type": "CUSTOMER", "receiver": "CRM",
+        "direction": "INBOUND", "type": "text", "message_type": "text", "content": msg,
+        "timestamp": now_iso(), "created_at": now_iso(), "ai_generated": False, "human_generated": False,
+        "delivery_status": "RECEIVED", "status": "RECEIVED", "read_status": False, "simulated": True})
     result = await _wa_ai_journey(conv, msg, ctx_extra={"confirmed": bool(body.get("confirmed"))})
     if result.get("handover"):
         await _wa_handover(conv, result.get("reason") or "Eskalasi")
-    return {"conversation_id": str(conv["_id"]), **result}
+    elif result.get("reply"):
+        await db.whatsapp_messages.insert_one({
+            "message_id": f"sim-out-{now_iso()}", "conversation_id": convid, "account_id": conv.get("account_id", "apico"),
+            "external_provider": APICO_PROVIDER, "sender": "AI", "sender_type": "AI", "receiver": conv["wa_number"],
+            "direction": "OUTBOUND", "type": "text", "message_type": "text", "content": result["reply"],
+            "timestamp": now_iso(), "created_at": now_iso(), "ai_generated": True, "human_generated": False,
+            "delivery_status": "SENT", "status": "SENT", "read_status": False, "simulated": True})
+    return {"conversation_id": convid, **result}
 
 
 WA_HANDOVER_KEYWORDS = ["sales", "admin", "manusia", "customer service", " cs ", "komplain", "complain", "bicara dengan", "telepon", "hubungi saya", "orang asli", "marah", "kecewa", "keluhan", "refund", "batal", "pembatalan", "cancel", "nego", "negosiasi", "tawar", "diskon", "permintaan khusus", "special request"]
@@ -9082,8 +9099,8 @@ def _journey_prompt(base, tool_catalog):
         "(1) Customer baru → tanyakan nama & kebutuhannya, lalu buat Customer + Lead (Source WHATSAPP AI).\n"
         "(2) Jika customer tertarik → buat/perbarui Lead (paket, destinasi, tanggal, pax, budget bila ada).\n"
         "(3) Rekomendasikan paket sesuai destinasi/tanggal/pax/budget/ketersediaan. WAJIB CHECK_SEAT sebelum menyebut ketersediaan; JANGAN mengarang harga/seat.\n"
-        "(4) Jika customer ingin membeli → KONFIRMASI dulu ke customer, baru CREATE_ORDER lalu CREATE_BOOKING.\n"
-        "(5) Sampaikan invoice/nominal/jatuh tempo/instruksi pembayaran.\n"
+        "(4) Jika customer minta DIDAFTARKAN / BOOKING / INVOICE → kumpulkan data (nama, paket, pax, tanggal keberangkatan), lalu KONFIRMASI ringkas ke customer (mis. 'Saya daftarkan a.n. X, paket Y, 2 pax, brgkt Z, ya?'). Setelah customer menjawab YA, jalankan berurutan: (a) SEARCH_PACKAGE untuk memperoleh package_id & departure_id yang VALID (WAJIB — jangan menebak id), (b) CREATE_CUSTOMER bila customer baru (butuh full_name & whatsapp), (c) CREATE_LEAD, (d) CREATE_BOOKING dengan params.confirmed=true beserta customer_id, package_id, departure_id, pax. Semua otomatis ter-tag AUTO SALES.\n"
+        "(5) DISKON: hanya bila diminta/relevan, sertakan discount_type ('PERCENT' atau 'NOMINAL') & discount_value di params CREATE_BOOKING. Sistem otomatis membatasi diskon ke maksimal per paket. WAJIB: setelah CREATE_BOOKING berhasil, sampaikan angka PERSIS dari OBSERVATION (invoice_number, discount_amount/discount_percent, total, payment_status) — JANGAN menyebut angka/persentase diskon versi Anda sendiri atau versi yang diminta customer bila berbeda dari OBSERVATION. Bila diskon yang diminta melebihi batas, jelaskan dengan sopan bahwa diskon yang dapat diberikan adalah yang tercantum di OBSERVATION. AI TIDAK PERNAH menandai LUNAS/PAID — status selalu 'Unpaid'; verifikasi pembayaran dilakukan admin.\n"
         "(6) Jawab status pembayaran dengan data aktual CRM (GET_PAYMENT_STATUS).\n"
         "\nUNTUK MENGAKSES DATA/AKSI CRM, balas TEPAT satu baris diawali 'ACTION:' diikuti JSON, contoh:\n"
         "ACTION: {\"tool\":\"SEARCH_PACKAGE\",\"params\":{\"q\":\"umrah\"}}\n"
@@ -10075,12 +10092,34 @@ async def _ai_create_booking(pr):
         dep = compute_departure(serialize(dep))
         if int(dep.get("available_seat") or 0) < pax:
             raise ValueError("Kursi tidak mencukupi (departure penuh)")
+    existing = await db.bookings.find_one({
+        "customer_id": cid, "package_id": pid, "departure_id": did, "pax": pax,
+        "booking_source": "AUTO SALES", "ai_generated": True, "status": {"$ne": "CANCELLED"}})
+    if existing:
+        einv = await db.invoices.find_one({"booking_id": str(existing["_id"])})
+        return {"idempotent": True, "id": str(existing["_id"]), "booking_number": existing.get("booking_number"),
+                "invoice_number": (einv or {}).get("invoice_number"), "total": existing.get("total"),
+                "pax": existing.get("pax"), "discount_amount": existing.get("discount_amount"),
+                "discount_percent": existing.get("discount_percent"), "payment_status": (einv or {}).get("status", "Unpaid"),
+                "package_name": existing.get("package_name"), "source": "WHATSAPP AI"}
     settings = await get_settings_dict()
     per_pax = compute_pax_price(pkg, pax)
     subtotal = per_pax * pax
+    # Diskon dalam batas maksimal per paket (nominal/persen). AI tidak boleh melebihi batas.
+    d_type = (pr.get("discount_type") or "").upper()
+    d_val = float(pr.get("discount_value") or 0)
+    max_type = (pkg.get("max_discount_type") or "PERCENT").upper()
+    max_val = float(pkg.get("max_discount_value") or 0)
+    disc_amt = 0
+    if d_val > 0 and max_val > 0:
+        req_amt = round(subtotal * d_val / 100) if d_type == "PERCENT" else round(d_val)
+        cap_amt = round(subtotal * max_val / 100) if max_type == "PERCENT" else round(max_val)
+        disc_amt = max(0, min(req_amt, cap_amt, subtotal))
+    disc_pct = round(disc_amt / subtotal * 100, 2) if subtotal else 0
+    taxable = subtotal - disc_amt
     pct, _amt = resolve_category_tax(pkg, settings)
-    tax_amount = round(subtotal * pct / 100)
-    total = subtotal + tax_amount
+    tax_amount = round(taxable * pct / 100)
+    total = taxable + tax_amount
     number = await next_number((settings.get("numbering") or {}).get("booking_prefix", "BKG"), db.bookings, "booking_number")
     booking = {"booking_number": number, "quotation_id": None, "customer_id": cid, "customer_name": cust.get("full_name"),
                "package_id": pid, "package_name": pkg.get("package_name"), "package_version": pkg.get("version", 1),
@@ -10088,7 +10127,7 @@ async def _ai_create_booking(pr):
                "room_type": pr.get("room_type", ""), "addons": [], "booking_source": "AUTO SALES",
                "source_channel": "WHATSAPP AI", "attribution": "AUTO SALES", "ai_generated": True,
                "sales_type": "AUTO", "sales_user_id": None, "sales_name": "AUTO SALES",
-               "per_pax_price": per_pax, "subtotal": subtotal, "discount_percent": 0, "discount_amount": 0,
+               "per_pax_price": per_pax, "subtotal": subtotal, "discount_percent": disc_pct, "discount_amount": disc_amt,
                "tax_percent": pct, "tax_amount": tax_amount, "total": total, "payment_schedule": [],
                "status": "CONFIRMED", "sales_pic_id": None, "sales_pic_name": "AUTO SALES", "branch": "",
                "external_booking_id": ext, "created_at": now_iso(), "created_by": "AI AGENT"}
@@ -10097,16 +10136,17 @@ async def _ai_create_booking(pr):
     if did:
         await db.departures.update_one({"_id": ObjectId(did)}, {"$inc": {"confirmed_pax": pax}})
     inv_number = await next_number((settings.get("numbering") or {}).get("invoice_prefix", "INV"), db.invoices, "invoice_number")
-    _inv_snap = await tax_snapshot(now_iso()[:10], subtotal)
+    _inv_snap = await tax_snapshot(now_iso()[:10], taxable)
     await db.invoices.insert_one({**_inv_snap, "invoice_number": inv_number, "booking_id": bid, "booking_number": number,
         "customer_id": cid, "customer_name": cust.get("full_name"), "package_id": pid, "package_name": pkg.get("package_name"),
-        "pax": pax, "amount": subtotal, "discount_amount": 0, "discount_percent": 0, "tax_percent": pct,
+        "pax": pax, "amount": subtotal, "discount_amount": disc_amt, "discount_percent": disc_pct, "tax_percent": pct,
         "tax_amount": tax_amount, "total": total, "paid_amount": 0, "outstanding": total, "due_date": pr.get("due_date", ""),
         "status": "Unpaid", "sales_pic_id": None, "sales_pic_name": "AUTO SALES", "branch": "",
         "terms": pkg.get("terms", ""), "created_at": now_iso(), "created_by": "AI AGENT"})
     if ext:
         await db.idempotency_keys.update_one({"key": ext}, {"$set": {"booking_id": bid, "created_at": now_iso()}}, upsert=True)
     return {"id": bid, "booking_number": number, "invoice_number": inv_number, "total": total, "pax": pax,
+            "discount_amount": disc_amt, "discount_percent": disc_pct, "payment_status": "Unpaid",
             "package_name": pkg.get("package_name"), "source": "WHATSAPP AI"}
 
 
