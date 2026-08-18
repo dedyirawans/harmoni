@@ -11,208 +11,111 @@ import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription,
-} from "@/components/ui/dialog";
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from "@/components/ui/select";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
 import { toast } from "sonner";
 import {
-  MessageCircle, Smartphone, QrCode, Settings2, MessagesSquare, Bot, BookOpen,
-  Palette, ShieldAlert, UserCog, ScrollText, Activity, Loader2, Plus, Trash2,
-  Pencil, RefreshCw, PlugZap, Power, Send, CheckCircle2, PlayCircle,
+  MessageCircle, PlugZap, MessagesSquare, Bot, BookOpen, Palette, ShieldAlert,
+  UserCog, ScrollText, Activity, Loader2, RefreshCw, Send, CheckCircle2, PlayCircle, Save,
 } from "lucide-react";
 
 const fmt = (t) => (t || "—").toString().replace("T", " ").slice(0, 19);
 const connColor = (s) =>
   s === "CONNECTED" ? "bg-emerald-50 text-emerald-700 border-emerald-200"
-    : s === "CONNECTING" ? "bg-amber-50 text-amber-700 border-amber-200"
-      : s === "ERROR" ? "bg-red-50 text-red-700 border-red-200"
-        : "bg-slate-100 text-slate-600 border-slate-200";
+    : s === "ERROR" ? "bg-red-50 text-red-700 border-red-200"
+      : "bg-slate-100 text-slate-600 border-slate-200";
 const statusColor = (s) =>
   s === "AI ACTIVE" ? "bg-blue-50 text-blue-700 border-blue-200"
     : s === "HUMAN HANDOVER" ? "bg-red-50 text-red-700 border-red-200"
       : s === "WAITING CUSTOMER" ? "bg-amber-50 text-amber-700 border-amber-200"
         : "bg-slate-100 text-slate-600 border-slate-200";
-
 const err = (e) => toast.error(formatApiErrorDetail(e?.response?.data?.detail) || "Terjadi kesalahan");
 
-// ============================================================ Accounts
-function AccountsTab({ accounts, reload, loading }) {
-  const [open, setOpen] = useState(false);
-  const [edit, setEdit] = useState(null);
-  const [form, setForm] = useState({});
-  const [saving, setSaving] = useState(false);
-
-  const openNew = () => { setEdit(null); setForm({ engine: "WEBJS", session: "default" }); setOpen(true); };
-  const openEdit = (a) => { setEdit(a); setForm({ name: a.name, base_url: a.base_url, session: a.session, engine: a.engine, display_name: a.display_name, wa_number: a.wa_number }); setOpen(true); };
+// ============================================================ Provider (Api.co.id)
+function ProviderTab() {
+  const [cfg, setCfg] = useState(null);
+  const [form, setForm] = useState({ base_url: "", api_key: "", phone_number_id: "" });
+  const [phones, setPhones] = useState([]);
+  const [busy, setBusy] = useState("");
+  const load = useCallback(() => api.get("/whatsapp/provider").then((r) => {
+    setCfg(r.data); setForm((f) => ({ ...f, base_url: r.data.base_url || "", phone_number_id: r.data.phone_number_id || "" }));
+  }).catch(() => setCfg({})), []);
+  useEffect(() => { load(); }, [load]);
 
   const save = async () => {
-    setSaving(true);
+    setBusy("save");
     try {
-      if (edit) await api.put(`/whatsapp/accounts/${edit.id}`, form);
-      else await api.post("/whatsapp/accounts", form);
-      toast.success(edit ? "Akun diperbarui" : "Akun dibuat");
-      setOpen(false); await reload();
-    } catch (e) { err(e); } finally { setSaving(false); }
-  };
-  const remove = async (a) => {
-    if (!window.confirm(`Arsipkan akun "${a.name}"?`)) return;
-    try { await api.delete(`/whatsapp/accounts/${a.id}`); toast.success("Akun diarsipkan"); await reload(); }
-    catch (e) { err(e); }
-  };
-
-  return (
-    <div className="space-y-4" data-testid="wa-accounts-tab">
-      <div className="flex items-center justify-between">
-        <div><h3 className="text-lg font-semibold text-slate-800">Akun WhatsApp (WAHA)</h3>
-          <p className="text-sm text-slate-500">Kelola koneksi WhatsApp Business melalui engine WAHA.</p></div>
-        <Button onClick={openNew} data-testid="wa-add-account-btn"><Plus className="h-4 w-4 mr-1" />Tambah Akun</Button>
-      </div>
-      <Card><CardContent className="p-0">
-        <Table>
-          <TableHeader><TableRow>
-            <TableHead>Nama</TableHead><TableHead>Base URL</TableHead><TableHead>Session</TableHead>
-            <TableHead>Nomor</TableHead><TableHead>API Key</TableHead><TableHead>Koneksi</TableHead><TableHead>Aksi</TableHead>
-          </TableRow></TableHeader>
-          <TableBody>
-            {loading ? (<TableRow><TableCell colSpan={7} className="text-center py-8"><Loader2 className="h-5 w-5 animate-spin mx-auto text-blue-600" /></TableCell></TableRow>)
-              : accounts.length === 0 ? (<TableRow><TableCell colSpan={7} className="text-center py-8 text-slate-400">Belum ada akun. Klik "Tambah Akun".</TableCell></TableRow>)
-                : accounts.map((a) => (
-                  <TableRow key={a.id} data-testid={`wa-account-row-${a.id}`}>
-                    <TableCell className="font-medium">{a.name}</TableCell>
-                    <TableCell className="text-slate-500 text-xs">{a.base_url || "—"}</TableCell>
-                    <TableCell>{a.session}</TableCell>
-                    <TableCell>{a.wa_number || "—"}</TableCell>
-                    <TableCell className="font-mono text-xs">{a.api_key_mask || "—"}</TableCell>
-                    <TableCell><Badge variant="outline" className={connColor(a.connection_status)}>{a.connection_status}</Badge></TableCell>
-                    <TableCell className="flex gap-1">
-                      <Button size="icon" variant="ghost" onClick={() => openEdit(a)} data-testid={`wa-edit-account-${a.id}`}><Pencil className="h-4 w-4" /></Button>
-                      <Button size="icon" variant="ghost" onClick={() => remove(a)} data-testid={`wa-delete-account-${a.id}`}><Trash2 className="h-4 w-4 text-red-500" /></Button>
-                    </TableCell>
-                  </TableRow>
-                ))}
-          </TableBody>
-        </Table>
-      </CardContent></Card>
-
-      <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent data-testid="wa-account-dialog">
-          <DialogHeader><DialogTitle>{edit ? "Edit Akun" : "Tambah Akun WhatsApp"}</DialogTitle>
-            <DialogDescription>Isi konfigurasi WAHA. API Key & HMAC disimpan terenkripsi.</DialogDescription></DialogHeader>
-          <div className="space-y-3">
-            <div><Label>Nama Akun</Label><Input value={form.name || ""} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="WhatsApp Utama" data-testid="wa-account-name" /></div>
-            <div><Label>WAHA Base URL</Label><Input value={form.base_url || ""} onChange={(e) => setForm({ ...form, base_url: e.target.value })} placeholder="https://waha.example.com" data-testid="wa-account-baseurl" /></div>
-            <div className="grid grid-cols-2 gap-3">
-              <div><Label>Session</Label><Input value={form.session || ""} onChange={(e) => setForm({ ...form, session: e.target.value })} placeholder="default" /></div>
-              <div><Label>Engine</Label><Input value={form.engine || ""} onChange={(e) => setForm({ ...form, engine: e.target.value })} placeholder="WEBJS" /></div>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div><Label>Display Name</Label><Input value={form.display_name || ""} onChange={(e) => setForm({ ...form, display_name: e.target.value })} /></div>
-              <div><Label>Nomor WhatsApp</Label><Input value={form.wa_number || ""} onChange={(e) => setForm({ ...form, wa_number: e.target.value })} placeholder="+62..." /></div>
-            </div>
-            <div><Label>API Key {edit && <span className="text-xs text-slate-400">(kosongkan bila tidak diubah)</span>}</Label><Input type="password" value={form.api_key || ""} onChange={(e) => setForm({ ...form, api_key: e.target.value })} data-testid="wa-account-apikey" /></div>
-            <div><Label>HMAC Secret (opsional)</Label><Input type="password" value={form.hmac_secret || ""} onChange={(e) => setForm({ ...form, hmac_secret: e.target.value })} /></div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setOpen(false)}>Batal</Button>
-            <Button onClick={save} disabled={saving} data-testid="wa-account-save">{saving && <Loader2 className="h-4 w-4 mr-1 animate-spin" />}Simpan</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </div>
-  );
-}
-
-// ============================================================ Connection + QR
-function ConnectionTab({ accounts, reload }) {
-  const [sel, setSel] = useState("");
-  const [qr, setQr] = useState("");
-  const [busy, setBusy] = useState("");
-  const acc = accounts.find((a) => a.id === sel) || accounts[0];
-  useEffect(() => { if (!sel && accounts[0]) setSel(accounts[0].id); }, [accounts, sel]);
-
-  const act = async (kind) => {
-    if (!acc) return;
-    setBusy(kind); setQr("");
-    try {
-      if (kind === "connect") { const r = await api.post(`/whatsapp/accounts/${acc.id}/connect`); toast.success(r.data?.message || "Sesi dimulai"); await loadQr(); }
-      else if (kind === "test") { const r = await api.post(`/whatsapp/accounts/${acc.id}/test`); toast.success(`Status: ${r.data?.connection_status}`); }
-      else if (kind === "disconnect") { await api.post(`/whatsapp/accounts/${acc.id}/disconnect`); toast.success("Terputus"); }
-      await reload();
+      const body = { base_url: form.base_url, phone_number_id: form.phone_number_id };
+      if (form.api_key) body.api_key = form.api_key;
+      const sel = phones.find((p) => (p.id || p.phone_number_id) === form.phone_number_id);
+      if (sel) { body.phone_number = sel.phone_number || sel.display_phone_number; body.phone_display_name = sel.display_name || sel.verified_name; }
+      const r = await api.put("/whatsapp/provider", body);
+      setCfg(r.data); setForm((f) => ({ ...f, api_key: "" }));
+      toast.success("Konfigurasi disimpan");
     } catch (e) { err(e); } finally { setBusy(""); }
   };
-  const loadQr = async () => {
-    if (!acc) return;
-    setBusy("qr"); setQr("");
-    try { const r = await api.get(`/whatsapp/accounts/${acc.id}/qr`); setQr(r.data?.qr || ""); }
+  const test = async () => {
+    setBusy("test");
+    try { const r = await api.post("/whatsapp/provider/test-connection"); setCfg((c) => ({ ...c, connection_status: r.data.connection_status }));
+      r.data.ok ? toast.success(r.data.message) : toast.error(r.data.message || "Koneksi gagal"); }
+    catch (e) { err(e); } finally { setBusy(""); }
+  };
+  const loadPhones = async () => {
+    setBusy("phones");
+    try { const r = await api.get("/whatsapp/provider/phone-numbers"); setPhones(r.data.phone_numbers || []);
+      toast.success(`${(r.data.phone_numbers || []).length} nomor ditemukan`); }
     catch (e) { err(e); } finally { setBusy(""); }
   };
 
-  if (!acc) return <div className="text-slate-400 py-8 text-center" data-testid="wa-connection-tab">Tambahkan akun terlebih dahulu di tab Accounts.</div>;
+  if (!cfg) return <div className="p-8 flex justify-center"><Loader2 className="h-6 w-6 animate-spin text-blue-600" /></div>;
   return (
-    <div className="space-y-4" data-testid="wa-connection-tab">
-      <div className="flex flex-wrap items-center gap-2">
-        {accounts.map((a) => (
-          <Button key={a.id} size="sm" variant={a.id === acc.id ? "default" : "outline"} onClick={() => { setSel(a.id); setQr(""); }} data-testid={`wa-conn-select-${a.id}`}>{a.name}</Button>
-        ))}
+    <div className="space-y-4 max-w-2xl" data-testid="wa-provider-tab">
+      <div className="p-3 rounded-lg bg-emerald-50 border border-emerald-100 text-sm text-emerald-800">
+        Provider WhatsApp: <b>API.CO.ID</b> (Chat Gateway resmi). API Key disimpan server-side terenkripsi & tidak pernah ditampilkan ke browser.
       </div>
-      <div className="grid md:grid-cols-2 gap-4">
-        <Card><CardContent className="p-5 space-y-3">
-          <div className="flex items-center justify-between">
-            <span className="font-medium text-slate-700">Status Koneksi</span>
-            <Badge variant="outline" className={connColor(acc.connection_status)} data-testid="wa-conn-status">{acc.connection_status}</Badge>
-          </div>
-          <div className="text-sm text-slate-500">Webhook: <Badge variant="outline">{acc.webhook_status}</Badge></div>
-          <div className="flex flex-wrap gap-2 pt-2">
-            <Button size="sm" onClick={() => act("connect")} disabled={!!busy} data-testid="wa-connect-btn">{busy === "connect" ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <PlugZap className="h-4 w-4 mr-1" />}Connect</Button>
-            <Button size="sm" variant="outline" onClick={() => act("test")} disabled={!!busy} data-testid="wa-test-btn">{busy === "test" ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <RefreshCw className="h-4 w-4 mr-1" />}Test</Button>
-            <Button size="sm" variant="outline" onClick={loadQr} disabled={!!busy} data-testid="wa-refresh-qr-btn"><QrCode className="h-4 w-4 mr-1" />Muat QR</Button>
-            <Button size="sm" variant="destructive" onClick={() => act("disconnect")} disabled={!!busy} data-testid="wa-disconnect-btn"><Power className="h-4 w-4 mr-1" />Disconnect</Button>
-          </div>
-        </CardContent></Card>
-        <Card><CardContent className="p-5">
-          <div className="font-medium text-slate-700 mb-3 flex items-center gap-2"><QrCode className="h-4 w-4" />Scan QR Code</div>
-          <div className="flex items-center justify-center h-56 bg-slate-50 rounded-lg border border-dashed">
-            {busy === "qr" ? <Loader2 className="h-6 w-6 animate-spin text-blue-600" />
-              : qr ? <img src={qr} alt="WhatsApp QR" className="h-52 w-52 object-contain" data-testid="wa-qr-img" />
-                : <span className="text-sm text-slate-400 text-center px-4">Klik "Connect" lalu "Muat QR" untuk menyambungkan WhatsApp.</span>}
-          </div>
-        </CardContent></Card>
-      </div>
-    </div>
-  );
-}
-
-// ============================================================ Configuration
-function ConfigTab({ accounts }) {
-  const [sel, setSel] = useState("");
-  const acc = accounts.find((a) => a.id === sel) || accounts[0];
-  useEffect(() => { if (!sel && accounts[0]) setSel(accounts[0].id); }, [accounts, sel]);
-  if (!acc) return <div className="text-slate-400 py-8 text-center" data-testid="wa-config-tab">Tambahkan akun terlebih dahulu di tab Accounts.</div>;
-  const base = `${process.env.REACT_APP_BACKEND_URL}/api/whatsapp/webhook/${acc.id}`;
-  const rows = [
-    ["Nama Akun", acc.name], ["Base URL WAHA", acc.base_url || "—"], ["Session", acc.session],
-    ["Engine", acc.engine], ["Webhook URL", base], ["Verify Token", acc.verify_token || "—"],
-    ["HMAC Aktif", acc.has_hmac ? "Ya" : "Tidak"], ["API Key", acc.api_key_mask || "—"],
-  ];
-  const copy = (t) => { navigator.clipboard?.writeText(t); toast.success("Disalin"); };
-  return (
-    <div className="space-y-4" data-testid="wa-config-tab">
-      <div className="flex flex-wrap items-center gap-2">
-        {accounts.map((a) => (<Button key={a.id} size="sm" variant={a.id === acc.id ? "default" : "outline"} onClick={() => setSel(a.id)}>{a.name}</Button>))}
-      </div>
-      <Card><CardContent className="p-5 space-y-1">
-        <p className="text-sm text-slate-500 mb-3">Gunakan Webhook URL & Verify Token berikut untuk mengonfigurasi WAHA/Meta.</p>
-        {rows.map(([k, v]) => (
-          <div key={k} className="flex items-center justify-between py-2 border-b last:border-0 gap-3">
-            <span className="text-sm text-slate-500 shrink-0">{k}</span>
-            <div className="flex items-center gap-2 min-w-0">
-              <span className="text-sm font-mono text-slate-700 truncate" title={v}>{v}</span>
-              {(k === "Webhook URL" || k === "Verify Token") && <Button size="sm" variant="ghost" onClick={() => copy(v)}>Salin</Button>}
-            </div>
-          </div>
-        ))}
+      <Card><CardContent className="p-5 space-y-4">
+        <div className="flex items-center justify-between">
+          <span className="font-medium text-slate-700">Status Koneksi</span>
+          <Badge variant="outline" className={connColor(cfg.connection_status)} data-testid="wa-conn-status">{cfg.connection_status || "UNKNOWN"}</Badge>
+        </div>
+        <div><Label>Provider</Label><Input value="API.CO.ID" disabled data-testid="wa-provider-name" /></div>
+        <div><Label>Base URL</Label><Input value={form.base_url} onChange={(e) => setForm({ ...form, base_url: e.target.value })} placeholder="https://chat.api.co.id" data-testid="wa-base-url" /></div>
+        <div><Label>API Key {cfg.has_key && <span className="text-xs text-slate-400">(tersimpan: {cfg.api_key_mask} — kosongkan bila tak diubah)</span>}</Label>
+          <Input type="password" value={form.api_key} onChange={(e) => setForm({ ...form, api_key: e.target.value })} placeholder="Bearer API Key" data-testid="wa-api-key" /></div>
+        <div><Label>WhatsApp Phone Number ID</Label>
+          {phones.length > 0 ? (
+            <Select value={form.phone_number_id} onValueChange={(v) => setForm({ ...form, phone_number_id: v })}>
+              <SelectTrigger data-testid="wa-phone-select"><SelectValue placeholder="Pilih nomor" /></SelectTrigger>
+              <SelectContent>{phones.map((p) => {
+                const id = p.id || p.phone_number_id;
+                return <SelectItem key={id} value={id}>{(p.display_name || p.verified_name || "WA")} · {p.phone_number || p.display_phone_number || id}{p.is_primary ? " (Primary)" : ""}</SelectItem>;
+              })}</SelectContent>
+            </Select>
+          ) : (
+            <Input value={form.phone_number_id} onChange={(e) => setForm({ ...form, phone_number_id: e.target.value })} placeholder="Klik 'Load Phone Numbers' atau isi manual" data-testid="wa-phone-id" />
+          )}
+          {cfg.phone_number && <p className="text-xs text-slate-400 mt-1">Aktif: {cfg.phone_display_name || ""} {cfg.phone_number}</p>}
+        </div>
+        {phones.length > 0 && (
+          <Card><CardContent className="p-0"><Table>
+            <TableHeader><TableRow><TableHead>ID</TableHead><TableHead>Nama</TableHead><TableHead>Nomor</TableHead><TableHead>Primary</TableHead></TableRow></TableHeader>
+            <TableBody>{phones.map((p) => { const id = p.id || p.phone_number_id; return (
+              <TableRow key={id} data-testid={`wa-phone-row-${id}`}>
+                <TableCell className="font-mono text-xs">{id}</TableCell>
+                <TableCell>{p.display_name || p.verified_name || "—"}</TableCell>
+                <TableCell>{p.phone_number || p.display_phone_number || "—"}</TableCell>
+                <TableCell>{p.is_primary ? <CheckCircle2 className="h-4 w-4 text-emerald-600" /> : "—"}</TableCell>
+              </TableRow>); })}</TableBody>
+          </Table></CardContent></Card>
+        )}
+        <div className="flex flex-wrap gap-2 pt-1">
+          <Button variant="outline" onClick={test} disabled={!!busy} data-testid="wa-test-connection-btn">{busy === "test" ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <PlugZap className="h-4 w-4 mr-1" />}Test Connection</Button>
+          <Button variant="outline" onClick={loadPhones} disabled={!!busy} data-testid="wa-load-phones-btn">{busy === "phones" ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <RefreshCw className="h-4 w-4 mr-1" />}Load Phone Numbers</Button>
+          <Button onClick={save} disabled={!!busy} data-testid="wa-save-config-btn">{busy === "save" ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Save className="h-4 w-4 mr-1" />}Save Configuration</Button>
+        </div>
       </CardContent></Card>
     </div>
   );
@@ -282,7 +185,7 @@ function MonitorTab() {
   );
 }
 
-// ============================================================ AI config (shared: Agent/Knowledge/Style/Rules)
+// ============================================================ AI config (Agent/Knowledge/Style/Rules)
 function AiConfigTab({ cfg, setCfg, section }) {
   const [saving, setSaving] = useState(false);
   const [kw, setKw] = useState((cfg.handover_keywords || []).join(", "));
@@ -292,40 +195,24 @@ function AiConfigTab({ cfg, setCfg, section }) {
     try { const r = await api.put("/whatsapp/ai-config", payload); setCfg(r.data); toast.success("Konfigurasi AI disimpan"); }
     catch (e) { err(e); } finally { setSaving(false); }
   };
-
   if (section === "agent") return (
     <div className="space-y-4 max-w-2xl" data-testid="wa-ai-agent-tab">
       <div className="flex items-center justify-between p-4 rounded-lg border bg-slate-50">
-        <div><div className="font-medium text-slate-800">AI Agent Aktif</div><div className="text-sm text-slate-500">Balas otomatis pesan customer memakai Gemini.</div></div>
+        <div><div className="font-medium text-slate-800">AI Agent Aktif</div><div className="text-sm text-slate-500">Balas otomatis pesan customer memakai Gemini + Knowledge Base.</div></div>
         <Switch checked={!!cfg.enabled} onCheckedChange={(v) => setCfg({ ...cfg, enabled: v })} data-testid="wa-ai-enabled-switch" />
       </div>
-      <div><Label>Pesan Sambutan (Greeting)</Label><Textarea rows={2} value={cfg.greeting || ""} onChange={(e) => setCfg({ ...cfg, greeting: e.target.value })} placeholder="Assalamualaikum, ada yang bisa kami bantu?" data-testid="wa-ai-greeting" /></div>
+      <div><Label>Pesan Sambutan (Greeting)</Label><Textarea rows={2} value={cfg.greeting || ""} onChange={(e) => setCfg({ ...cfg, greeting: e.target.value })} data-testid="wa-ai-greeting" /></div>
       <div><Label>Kata Kunci Handover (pisahkan koma)</Label>
-        <Textarea rows={2} value={kw} onChange={(e) => setKw(e.target.value)} placeholder="sales, bicara dengan, komplain" data-testid="wa-ai-keywords" />
-        <p className="text-xs text-slate-400 mt-1">Jika customer mengetik salah satu kata, percakapan langsung dialihkan ke sales (Human Handover).</p></div>
+        <Textarea rows={2} value={kw} onChange={(e) => setKw(e.target.value)} data-testid="wa-ai-keywords" /></div>
       <Button onClick={() => save({ enabled: cfg.enabled, greeting: cfg.greeting, handover_keywords: kw.split(",").map((s) => s.trim()).filter(Boolean) })} disabled={saving} data-testid="wa-ai-agent-save">{saving && <Loader2 className="h-4 w-4 mr-1 animate-spin" />}Simpan Agent</Button>
     </div>
   );
-  if (section === "knowledge") return (
-    <div className="space-y-4 max-w-2xl" data-testid="wa-ai-knowledge-tab">
-      <div><Label>Basis Pengetahuan AI</Label>
-        <Textarea rows={12} value={cfg.knowledge || ""} onChange={(e) => setCfg({ ...cfg, knowledge: e.target.value })} placeholder="Info perusahaan, FAQ, kebijakan pembayaran, dokumen umroh, dsb." data-testid="wa-ai-knowledge" />
-        <p className="text-xs text-slate-400 mt-1">Digunakan AI sebagai konteks tambahan (selain data paket CRM yang otomatis disertakan).</p></div>
-      <Button onClick={() => save({ knowledge: cfg.knowledge })} disabled={saving} data-testid="wa-ai-knowledge-save">{saving && <Loader2 className="h-4 w-4 mr-1 animate-spin" />}Simpan Knowledge</Button>
-    </div>
-  );
-  if (section === "style") return (
-    <div className="space-y-4 max-w-2xl" data-testid="wa-ai-style-tab">
-      <div><Label>Gaya Bahasa AI</Label>
-        <Textarea rows={6} value={cfg.style || ""} onChange={(e) => setCfg({ ...cfg, style: e.target.value })} placeholder="Ramah, sopan, profesional, jawab singkat dalam Bahasa Indonesia." data-testid="wa-ai-style" /></div>
-      <Button onClick={() => save({ style: cfg.style })} disabled={saving} data-testid="wa-ai-style-save">{saving && <Loader2 className="h-4 w-4 mr-1 animate-spin" />}Simpan Style</Button>
-    </div>
-  );
+  const map = { knowledge: ["Basis Pengetahuan Tambahan", "wa-ai-knowledge"], style: ["Gaya Bahasa", "wa-ai-style"], rules: ["Aturan & Batasan", "wa-ai-rules"] };
+  const [label, tid] = map[section];
   return (
-    <div className="space-y-4 max-w-2xl" data-testid="wa-ai-rules-tab">
-      <div><Label>Aturan & Batasan AI</Label>
-        <Textarea rows={6} value={cfg.rules || ""} onChange={(e) => setCfg({ ...cfg, rules: e.target.value })} placeholder="Jangan mengarang harga di luar data. Jika tidak yakin, serahkan ke sales." data-testid="wa-ai-rules" /></div>
-      <Button onClick={() => save({ rules: cfg.rules })} disabled={saving} data-testid="wa-ai-rules-save">{saving && <Loader2 className="h-4 w-4 mr-1 animate-spin" />}Simpan Rules</Button>
+    <div className="space-y-4 max-w-2xl" data-testid={`wa-ai-${section}-tab`}>
+      <div><Label>{label}</Label><Textarea rows={section === "knowledge" ? 10 : 6} value={cfg[section] || ""} onChange={(e) => setCfg({ ...cfg, [section]: e.target.value })} data-testid={tid} /></div>
+      <Button onClick={() => save({ [section]: cfg[section] })} disabled={saving} data-testid={`${tid}-save`}>{saving && <Loader2 className="h-4 w-4 mr-1 animate-spin" />}Simpan</Button>
     </div>
   );
 }
@@ -346,12 +233,12 @@ function HandoverTab() {
     <div className="space-y-4" data-testid="wa-handover-tab">
       <div className="flex items-center justify-between">
         <div><h3 className="text-lg font-semibold text-slate-800">Human Handover</h3>
-          <p className="text-sm text-slate-500">Percakapan yang dieskalasi ke sales. Aktifkan AI kembali setelah selesai ditangani.</p></div>
+          <p className="text-sm text-slate-500">Percakapan yang dieskalasi ke sales. Aktifkan AI kembali setelah selesai.</p></div>
         <Button size="sm" variant="outline" onClick={load}><RefreshCw className="h-4 w-4 mr-1" />Muat Ulang</Button>
       </div>
       <Card><CardContent className="p-0">
         <Table>
-          <TableHeader><TableRow><TableHead>Customer</TableHead><TableHead>Nomor</TableHead><TableHead>Sales</TableHead><TableHead>Aktivitas Terakhir</TableHead><TableHead>Aksi</TableHead></TableRow></TableHeader>
+          <TableHeader><TableRow><TableHead>Customer</TableHead><TableHead>Nomor</TableHead><TableHead>Sales</TableHead><TableHead>Aktivitas</TableHead><TableHead>Aksi</TableHead></TableRow></TableHeader>
           <TableBody>
             {convs.length === 0 ? (<TableRow><TableCell colSpan={5} className="text-center py-8 text-slate-400">Tidak ada handover aktif.</TableCell></TableRow>)
               : convs.map((c) => (
@@ -370,42 +257,66 @@ function HandoverTab() {
   );
 }
 
-// ============================================================ Logs (WhatsApp + API)
-function LogsTab({ kind }) {
+// ============================================================ Logs
+function WaLogsTab() {
   const [logs, setLogs] = useState(null);
-  const load = useCallback(() => api.get("/whatsapp/logs", { params: { kind: kind === "api" ? "API" : "wa" } }).then((r) => setLogs(r.data)).catch(() => setLogs([])), [kind]);
+  const load = useCallback(() => api.get("/whatsapp/logs", { params: { kind: "wa" } }).then((r) => setLogs(r.data)).catch(() => setLogs([])), []);
   useEffect(() => { load(); }, [load]);
   if (logs === null) return <div className="p-8 flex justify-center"><Loader2 className="h-6 w-6 animate-spin text-blue-600" /></div>;
   return (
-    <div className="space-y-3" data-testid={`wa-${kind}-logs-tab`}>
+    <div className="space-y-3" data-testid="wa-wa-logs-tab">
       <div className="flex justify-end"><Button size="sm" variant="outline" onClick={load}><RefreshCw className="h-4 w-4 mr-1" />Muat Ulang</Button></div>
-      <Card><CardContent className="p-0">
-        <Table>
-          <TableHeader><TableRow><TableHead>Waktu</TableHead><TableHead>Jenis</TableHead><TableHead>Arah</TableHead><TableHead>Ref</TableHead><TableHead>Status</TableHead><TableHead>Error</TableHead></TableRow></TableHeader>
-          <TableBody>
-            {logs.length === 0 ? (<TableRow><TableCell colSpan={6} className="text-center py-8 text-slate-400">Belum ada log.</TableCell></TableRow>)
-              : logs.map((l) => (
-                <TableRow key={l.id} data-testid={`wa-log-row-${l.id}`}>
-                  <TableCell className="text-xs text-slate-500">{fmt(l.created_at)}</TableCell>
-                  <TableCell><Badge variant="outline">{l.kind}</Badge></TableCell>
-                  <TableCell className="text-xs">{l.direction}</TableCell>
-                  <TableCell className="font-mono text-xs truncate max-w-[160px]" title={l.ref}>{l.ref}</TableCell>
-                  <TableCell>{l.ok ? <CheckCircle2 className="h-4 w-4 text-emerald-600" /> : <Badge variant="outline" className="bg-red-50 text-red-700 border-red-200">FAILED</Badge>}</TableCell>
-                  <TableCell className="text-xs text-red-500 truncate max-w-[200px]" title={l.error}>{l.error || "—"}</TableCell>
-                </TableRow>
-              ))}
-          </TableBody>
-        </Table>
-      </CardContent></Card>
+      <Card><CardContent className="p-0"><Table>
+        <TableHeader><TableRow><TableHead>Waktu</TableHead><TableHead>Jenis</TableHead><TableHead>Arah</TableHead><TableHead>Ref</TableHead><TableHead>Status</TableHead><TableHead>Error</TableHead></TableRow></TableHeader>
+        <TableBody>
+          {logs.length === 0 ? (<TableRow><TableCell colSpan={6} className="text-center py-8 text-slate-400">Belum ada log.</TableCell></TableRow>)
+            : logs.map((l) => (
+              <TableRow key={l.id} data-testid={`wa-log-row-${l.id}`}>
+                <TableCell className="text-xs text-slate-500">{fmt(l.created_at)}</TableCell>
+                <TableCell><Badge variant="outline">{l.kind}</Badge></TableCell>
+                <TableCell className="text-xs">{l.direction}</TableCell>
+                <TableCell className="font-mono text-xs truncate max-w-[160px]" title={l.ref}>{l.ref}</TableCell>
+                <TableCell>{l.ok ? <CheckCircle2 className="h-4 w-4 text-emerald-600" /> : <Badge variant="outline" className="bg-red-50 text-red-700 border-red-200">FAILED</Badge>}</TableCell>
+                <TableCell className="text-xs text-red-500 truncate max-w-[200px]" title={l.error}>{l.error || "—"}</TableCell>
+              </TableRow>
+            ))}
+        </TableBody>
+      </Table></CardContent></Card>
+    </div>
+  );
+}
+
+function ApiLogsTab() {
+  const [logs, setLogs] = useState(null);
+  const load = useCallback(() => api.get("/whatsapp/api-logs").then((r) => setLogs(r.data)).catch(() => setLogs([])), []);
+  useEffect(() => { load(); }, [load]);
+  if (logs === null) return <div className="p-8 flex justify-center"><Loader2 className="h-6 w-6 animate-spin text-blue-600" /></div>;
+  return (
+    <div className="space-y-3" data-testid="wa-api-logs-tab">
+      <div className="flex justify-end"><Button size="sm" variant="outline" onClick={load}><RefreshCw className="h-4 w-4 mr-1" />Muat Ulang</Button></div>
+      <Card><CardContent className="p-0"><Table>
+        <TableHeader><TableRow><TableHead>Waktu</TableHead><TableHead>Endpoint</TableHead><TableHead>Method</TableHead><TableHead>Status</TableHead><TableHead>Durasi</TableHead><TableHead>Kategori Error</TableHead></TableRow></TableHeader>
+        <TableBody>
+          {logs.length === 0 ? (<TableRow><TableCell colSpan={6} className="text-center py-8 text-slate-400">Belum ada API call.</TableCell></TableRow>)
+            : logs.map((l) => (
+              <TableRow key={l.id} data-testid={`wa-apilog-row-${l.id}`}>
+                <TableCell className="text-xs text-slate-500">{fmt(l.created_at)}</TableCell>
+                <TableCell className="font-mono text-xs truncate max-w-[220px]" title={l.endpoint}>{l.endpoint}</TableCell>
+                <TableCell className="text-xs">{l.method}</TableCell>
+                <TableCell>{l.ok ? <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200">{l.status_code}</Badge> : <Badge variant="outline" className="bg-red-50 text-red-700 border-red-200">{l.status_code}</Badge>}</TableCell>
+                <TableCell className="text-xs">{l.duration_ms}ms</TableCell>
+                <TableCell className="text-xs text-red-500">{l.error_category || "—"}</TableCell>
+              </TableRow>
+            ))}
+        </TableBody>
+      </Table></CardContent></Card>
     </div>
   );
 }
 
 // ============================================================ Main
 const TABS = [
-  ["accounts", "Accounts", Smartphone],
-  ["connection", "Connection + QR", QrCode],
-  ["config", "Configuration", Settings2],
+  ["provider", "Provider", PlugZap],
   ["monitor", "Conversation Monitor", MessagesSquare],
   ["ai-agent", "AI Agent", Bot],
   ["ai-knowledge", "AI Knowledge", BookOpen],
@@ -418,52 +329,40 @@ const TABS = [
 
 export default function WhatsAppIntegration() {
   const { user } = useAuth();
-  const [tab, setTab] = useState("accounts");
-  const [accounts, setAccounts] = useState([]);
-  const [loadingAcc, setLoadingAcc] = useState(true);
+  const [tab, setTab] = useState("provider");
   const [cfg, setCfg] = useState(null);
-
-  const reloadAcc = useCallback(async () => {
-    setLoadingAcc(true);
-    try { const r = await api.get("/whatsapp/accounts"); setAccounts(r.data); } catch { setAccounts([]); } finally { setLoadingAcc(false); }
-  }, []);
   useEffect(() => {
     if (user?.role !== "super_admin") return;
-    reloadAcc();
     api.get("/whatsapp/ai-config").then((r) => setCfg(r.data)).catch(() => setCfg({}));
-  }, [reloadAcc, user]);
-
+  }, [user]);
   if (user?.role !== "super_admin") return <Navigate to="/dashboard" replace />;
 
+  const aiPending = <Loader2 className="h-6 w-6 animate-spin text-blue-600 mx-auto my-8" />;
   return (
     <div className="space-y-5" data-testid="whatsapp-integration-page">
       <div className="flex items-center gap-3">
         <div className="h-11 w-11 rounded-xl bg-emerald-500/10 flex items-center justify-center"><MessageCircle className="h-6 w-6 text-emerald-600" /></div>
         <div>
           <h1 className="text-2xl font-bold text-slate-800">WhatsApp Integration</h1>
-          <p className="text-sm text-slate-500">Kelola koneksi WAHA, AI Agent, dan pantau seluruh aktivitas WhatsApp.</p>
+          <p className="text-sm text-slate-500">Provider <b>API.CO.ID</b> — kelola koneksi, AI Agent, dan pantau aktivitas WhatsApp.</p>
         </div>
       </div>
-
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList className="flex flex-wrap h-auto gap-1" data-testid="wa-tabs-list">
           {TABS.map(([k, label, Icon]) => (
             <TabsTrigger key={k} value={k} className="text-xs" data-testid={`wa-tab-${k}`}><Icon className="h-3.5 w-3.5 mr-1" />{label}</TabsTrigger>
           ))}
         </TabsList>
-
         <div className="mt-4">
-          <TabsContent value="accounts"><AccountsTab accounts={accounts} reload={reloadAcc} loading={loadingAcc} /></TabsContent>
-          <TabsContent value="connection"><ConnectionTab accounts={accounts} reload={reloadAcc} /></TabsContent>
-          <TabsContent value="config"><ConfigTab accounts={accounts} /></TabsContent>
+          <TabsContent value="provider"><ProviderTab /></TabsContent>
           <TabsContent value="monitor"><MonitorTab /></TabsContent>
-          <TabsContent value="ai-agent">{cfg ? <AiConfigTab cfg={cfg} setCfg={setCfg} section="agent" /> : <Loader2 className="h-6 w-6 animate-spin text-blue-600 mx-auto my-8" />}</TabsContent>
-          <TabsContent value="ai-knowledge">{cfg ? <AiConfigTab cfg={cfg} setCfg={setCfg} section="knowledge" /> : <Loader2 className="h-6 w-6 animate-spin text-blue-600 mx-auto my-8" />}</TabsContent>
-          <TabsContent value="ai-style">{cfg ? <AiConfigTab cfg={cfg} setCfg={setCfg} section="style" /> : <Loader2 className="h-6 w-6 animate-spin text-blue-600 mx-auto my-8" />}</TabsContent>
-          <TabsContent value="ai-rules">{cfg ? <AiConfigTab cfg={cfg} setCfg={setCfg} section="rules" /> : <Loader2 className="h-6 w-6 animate-spin text-blue-600 mx-auto my-8" />}</TabsContent>
+          <TabsContent value="ai-agent">{cfg ? <AiConfigTab cfg={cfg} setCfg={setCfg} section="agent" /> : aiPending}</TabsContent>
+          <TabsContent value="ai-knowledge">{cfg ? <AiConfigTab cfg={cfg} setCfg={setCfg} section="knowledge" /> : aiPending}</TabsContent>
+          <TabsContent value="ai-style">{cfg ? <AiConfigTab cfg={cfg} setCfg={setCfg} section="style" /> : aiPending}</TabsContent>
+          <TabsContent value="ai-rules">{cfg ? <AiConfigTab cfg={cfg} setCfg={setCfg} section="rules" /> : aiPending}</TabsContent>
           <TabsContent value="handover"><HandoverTab /></TabsContent>
-          <TabsContent value="wa-logs"><LogsTab kind="wa" /></TabsContent>
-          <TabsContent value="api-logs"><LogsTab kind="api" /></TabsContent>
+          <TabsContent value="wa-logs"><WaLogsTab /></TabsContent>
+          <TabsContent value="api-logs"><ApiLogsTab /></TabsContent>
         </div>
       </Tabs>
     </div>

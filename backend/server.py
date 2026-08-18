@@ -8640,7 +8640,6 @@ async def executive_dashboard(month: Optional[str] = None, user: dict = Depends(
 # PHASE 10A — Native WhatsApp (WAHA) Integration — Tahap 1 (Super Admin)
 # ============================================================================
 import re as _re
-import json
 from fastapi.responses import PlainTextResponse
 
 
@@ -8653,171 +8652,248 @@ def _wa_chat_id(num):
     return f"{_re.sub(chr(92)+'D', '', num or '')}@c.us"
 
 
-async def _wa_get_account(aid):
-    acc = await db.whatsapp_accounts.find_one({"_id": ObjectId(aid)}) if ObjectId.is_valid(aid or "") else None
-    return acc
+APICO_PROVIDER = "API_CO_ID"
+_apico_typing_last = {}
 
 
-def _wa_headers(acc):
-    key = _dec(acc.get("api_key_enc") or "")
-    return {"X-Api-Key": key} if key else {}
-
-
-def _wa_public(acc):
-    return {"id": str(acc["_id"]), "name": acc.get("name"), "base_url": acc.get("base_url"),
-            "session": acc.get("session"), "engine": acc.get("engine"), "display_name": acc.get("display_name"),
-            "wa_number": acc.get("wa_number"), "webhook_status": acc.get("webhook_status", "UNKNOWN"),
-            "connection_status": acc.get("connection_status", "DISCONNECTED"), "status": acc.get("status", "ACTIVE"),
-            "api_key_mask": _mask(_dec(acc.get("api_key_enc") or "")), "has_hmac": bool(acc.get("hmac_secret_enc")),
-            "verify_token": acc.get("verify_token"), "created_at": acc.get("created_at")}
+def _wa_public(cfg):
+    return {"provider": APICO_PROVIDER, "base_url": cfg.get("base_url"),
+            "api_key_mask": _mask(cfg.get("_api_key") or ""), "has_key": bool(cfg.get("_api_key")),
+            "phone_number_id": cfg.get("phone_number_id"), "phone_number": cfg.get("phone_number"),
+            "phone_display_name": cfg.get("phone_display_name"),
+            "connection_status": cfg.get("connection_status", "UNKNOWN"), "updated_at": cfg.get("updated_at")}
 
 
 async def _wa_log(account_id, kind, direction, ref, ok, error="", payload=None):
-    await db.whatsapp_logs.insert_one({"account_id": account_id, "kind": kind, "direction": direction,
+    await db.whatsapp_logs.insert_one({"account_id": account_id or "apico", "kind": kind, "direction": direction,
         "ref": ref, "ok": bool(ok), "error": (error or "")[:500],
         "payload": payload if isinstance(payload, dict) else None, "created_at": now_iso()})
 
 
-@api_router.get("/whatsapp/accounts")
-async def wa_list_accounts(user: dict = Depends(require_role("super_admin"))):
-    accs = await db.whatsapp_accounts.find({}).sort("created_at", -1).to_list(100)
-    return [_wa_public(a) for a in accs]
+async def _apico_config():
+    doc = await db.whatsapp_provider_config.find_one({"_id": "main"}) or {}
+    base_url = (doc.get("base_url") or os.environ.get("APICO_BASE_URL") or "https://chat.api.co.id").rstrip("/")
+    key = _dec(doc.get("api_key_enc") or "") or os.environ.get("APICO_API_KEY") or ""
+    pnid = doc.get("phone_number_id") or os.environ.get("APICO_WHATSAPP_PHONE_NUMBER_ID") or ""
+    return {"base_url": base_url, "_api_key": key, "phone_number_id": pnid,
+            "phone_number": doc.get("phone_number"), "phone_display_name": doc.get("phone_display_name"),
+            "connection_status": doc.get("connection_status", "UNKNOWN"), "updated_at": doc.get("updated_at")}
 
 
-@api_router.post("/whatsapp/accounts")
-async def wa_create_account(body: dict, request: Request, user: dict = Depends(require_role("super_admin"))):
-    import secrets as _secrets
-    doc = {"name": (body.get("name") or "WhatsApp Account").strip(),
-           "base_url": (body.get("base_url") or "").rstrip("/"), "session": body.get("session") or "default",
-           "engine": body.get("engine") or "WEBJS", "display_name": body.get("display_name") or "",
-           "wa_number": body.get("wa_number") or "", "api_key_enc": _enc(body.get("api_key") or ""),
-           "hmac_secret_enc": _enc(body.get("hmac_secret") or "") if body.get("hmac_secret") else "",
-           "verify_token": _secrets.token_urlsafe(16), "webhook_status": "PENDING",
-           "connection_status": "DISCONNECTED", "status": "ACTIVE", "created_at": now_iso(), "created_by": user["name"]}
-    r = await db.whatsapp_accounts.insert_one(doc)
-    await log_audit(user, "whatsapp", "create_account", request, record_id=str(r.inserted_id), new={"name": doc["name"]})
-    acc = await db.whatsapp_accounts.find_one({"_id": r.inserted_id})
-    return _wa_public(acc)
+def _apico_categorize(status, err_text=""):
+    if status in (401, 403):
+        return "AUTH_ERROR"
+    if status == 429:
+        return "RATE_LIMIT"
+    if status in (0, 408):
+        return "TIMEOUT"
+    if status and status >= 500:
+        return "PROVIDER_ERROR"
+    t = (err_text or "").lower()
+    if "phone" in t and "invalid" in t:
+        return "INVALID_PHONE"
+    if "template" in t:
+        return "INVALID_TEMPLATE"
+    if "window" in t:
+        return "WINDOW_CLOSED"
+    if status and status >= 400:
+        return "PROVIDER_ERROR"
+    return "UNKNOWN_ERROR"
 
 
-@api_router.put("/whatsapp/accounts/{aid}")
-async def wa_update_account(aid: str, body: dict, request: Request, user: dict = Depends(require_role("super_admin"))):
-    acc = await _wa_get_account(aid)
-    if not acc:
-        raise HTTPException(status_code=404, detail="Account not found")
-    upd = {}
-    for k in ("name", "base_url", "session", "engine", "display_name", "wa_number", "status"):
-        if k in body:
-            upd[k] = body[k].rstrip("/") if k == "base_url" and body[k] else body[k]
+async def _apico_log(endpoint, method, status, duration_ms, ok, category="", error=""):
+    await db.whatsapp_api_logs.insert_one({"provider": APICO_PROVIDER, "endpoint": endpoint, "method": method,
+        "status_code": status, "duration_ms": duration_ms, "ok": bool(ok), "error_category": category,
+        "error": (error or "")[:400], "created_at": now_iso()})
+
+
+class WhatsAppProvider:
+    """Abstract WhatsApp transport. Implementations must not leak provider structures to AI/Sales modules."""
+    async def health(self): raise NotImplementedError
+    async def get_phone_numbers(self): raise NotImplementedError
+    async def send_message(self, phone_number, message_type, content=None, template=None, media_url=None): raise NotImplementedError
+    async def mark_as_read(self, message_id): raise NotImplementedError
+    async def send_typing(self, customer_phone): raise NotImplementedError
+    async def get_customer(self, customer_phone): raise NotImplementedError
+    async def check_window(self, customer_id): raise NotImplementedError
+    async def get_templates(self): raise NotImplementedError
+
+
+class ApiCoWhatsAppProvider(WhatsAppProvider):
+    """Centralized Api.co.id client: auth, timeout, retry, logging, error normalization."""
+    def __init__(self, cfg):
+        self.base_url = cfg["base_url"]
+        self.key = cfg["_api_key"]
+        self.phone_number_id = cfg.get("phone_number_id")
+
+    def _headers(self):
+        return {"Authorization": f"Bearer {self.key}", "Content-Type": "application/json"}
+
+    async def _call(self, method, path, json=None, params=None, retries=2, log=True):
+        if not self.key:
+            return {"ok": False, "status": 0, "data": None, "category": "AUTH_ERROR", "error": "API Key belum dikonfigurasi"}
+        url = f"{self.base_url}{path}"
+        attempt, backoff = 0, 1.0
+        while True:
+            start = _time.time()
+            try:
+                r = await asyncio.to_thread(_requests.request, method, url, headers=self._headers(),
+                                            json=json, params=params, timeout=20)
+                dur = int((_time.time() - start) * 1000)
+                ok = r.status_code < 400
+                cat = "" if ok else _apico_categorize(r.status_code, r.text)
+                if log:
+                    await _apico_log(path, method, r.status_code, dur, ok, cat, "" if ok else r.text[:300])
+                if (not ok) and r.status_code >= 500 and attempt < retries:
+                    attempt += 1
+                    await asyncio.sleep(backoff); backoff *= 2
+                    continue
+                try:
+                    data = r.json()
+                except Exception:
+                    data = None
+                return {"ok": ok, "status": r.status_code, "data": data, "category": cat,
+                        "error": "" if ok else (r.text or "")[:300]}
+            except Exception as e:
+                dur = int((_time.time() - start) * 1000)
+                if log:
+                    await _apico_log(path, method, 0, dur, False, "TIMEOUT", str(e)[:300])
+                if attempt < retries:
+                    attempt += 1
+                    await asyncio.sleep(backoff); backoff *= 2
+                    continue
+                return {"ok": False, "status": 0, "data": None, "category": "TIMEOUT", "error": str(e)[:300]}
+
+    async def health(self):
+        return await self._call("GET", "/api/v1/public/health")
+
+    async def get_phone_numbers(self):
+        return await self._call("GET", "/api/v1/public/phone-numbers")
+
+    async def send_message(self, phone_number, message_type, content=None, template=None, media_url=None):
+        payload = {"phone_number": phone_number, "channel": "whatsapp", "message_type": message_type,
+                   "whatsapp_phone_number_id": self.phone_number_id}
+        if message_type == "template":
+            payload["template"] = template or {}
+        elif message_type == "text":
+            payload["content"] = content or ""
+        else:
+            if media_url:
+                payload["media_url"] = media_url
+            if content:
+                payload["caption"] = content
+        return await self._call("POST", "/api/v1/public/messages/send", json=payload)
+
+    async def mark_as_read(self, message_id):
+        return await self._call("POST", f"/api/v1/public/messages/{message_id}/read")
+
+    async def send_typing(self, customer_phone):
+        import time as _t
+        now = _t.time()
+        if now - _apico_typing_last.get(customer_phone, 0) < 3:
+            return {"ok": True, "skipped": True}
+        _apico_typing_last[customer_phone] = now
+        return await self._call("POST", f"/api/v1/public/conversations/{customer_phone}/typing",
+                                json={"channel": "whatsapp", "whatsapp_phone_number_id": self.phone_number_id}, log=False)
+
+    async def get_customer(self, customer_phone):
+        return await self._call("GET", f"/api/v1/public/customers/{customer_phone}")
+
+    async def check_window(self, customer_id):
+        return await self._call("GET", f"/api/v1/public/customers/{customer_id}/window-status")
+
+    async def get_templates(self):
+        return await self._call("GET", "/api/v1/public/templates")
+
+
+async def get_wa_provider():
+    return ApiCoWhatsAppProvider(await _apico_config())
+
+
+def _apico_norm(phone):
+    d = _re.sub(r"\D", "", phone or "")
+    if d.startswith("620"):
+        d = "62" + d[3:]
+    elif d.startswith("0"):
+        d = "62" + d[1:]
+    elif d and not d.startswith("62") and len(d) >= 9:
+        d = "62" + d
+    return d
+
+
+async def _apico_resolve_customer(phone, name="", created_by="AI AGENT"):
+    norm = _apico_norm(phone)
+    last = norm[-9:] if len(norm) >= 9 else norm
+    cust = None
+    if last:
+        rx = {"$regex": _re.escape(last) + "$"}
+        cust = await db.customers.find_one({"is_deleted": {"$ne": True}, "$or": [{"whatsapp": rx}, {"phone": rx}]})
+    if cust:
+        return cust, False
+    count = await db.customers.count_documents({})
+    doc = {"customer_code": f"CUST-{count + 1:05d}", "full_name": name or norm, "whatsapp": norm, "phone": norm,
+           "customer_type": "Prospect", "customer_source": "WHATSAPP", "sales_pic_id": None,
+           "sales_pic_name": "AUTO SALES", "attribution": "AUTO SALES",
+           "created_at": now_iso(), "created_by": created_by}
+    r = await db.customers.insert_one(doc)
+    return await db.customers.find_one({"_id": r.inserted_id}), True
+
+
+@api_router.get("/whatsapp/provider")
+async def wa_provider_get(user: dict = Depends(require_role("super_admin"))):
+    return _wa_public(await _apico_config())
+
+
+@api_router.put("/whatsapp/provider")
+async def wa_provider_save(body: dict, request: Request, user: dict = Depends(require_role("super_admin"))):
+    upd = {"provider": APICO_PROVIDER, "updated_at": now_iso(), "updated_by": user["name"]}
+    if body.get("base_url") is not None:
+        upd["base_url"] = (body["base_url"] or "").rstrip("/")
     if body.get("api_key"):
         upd["api_key_enc"] = _enc(body["api_key"])
-    if body.get("hmac_secret") is not None:
-        upd["hmac_secret_enc"] = _enc(body["hmac_secret"]) if body["hmac_secret"] else ""
-    await db.whatsapp_accounts.update_one({"_id": ObjectId(aid)}, {"$set": upd})
-    await log_audit(user, "whatsapp", "update_account", request, record_id=aid, new={k: v for k, v in upd.items() if "enc" not in k})
-    return _wa_public(await _wa_get_account(aid))
+    if body.get("phone_number_id") is not None:
+        upd["phone_number_id"] = body["phone_number_id"]
+    if body.get("phone_number") is not None:
+        upd["phone_number"] = body["phone_number"]
+    if body.get("phone_display_name") is not None:
+        upd["phone_display_name"] = body["phone_display_name"]
+    await db.whatsapp_provider_config.update_one({"_id": "main"}, {"$set": upd}, upsert=True)
+    await log_audit(user, "whatsapp", "save_provider", request, new={k: v for k, v in upd.items() if "enc" not in k and k != "api_key"})
+    return _wa_public(await _apico_config())
 
 
-@api_router.delete("/whatsapp/accounts/{aid}")
-async def wa_delete_account(aid: str, request: Request, user: dict = Depends(require_role("super_admin"))):
-    acc = await _wa_get_account(aid)
-    if not acc:
-        raise HTTPException(status_code=404, detail="Account not found")
-    await db.whatsapp_accounts.update_one({"_id": ObjectId(aid)}, {"$set": {"status": "ARCHIVED", "connection_status": "DISCONNECTED"}})
-    await log_audit(user, "whatsapp", "archive_account", request, record_id=aid)
-    return {"ok": True}
+@api_router.post("/whatsapp/provider/test-connection")
+async def wa_provider_test(user: dict = Depends(require_role("super_admin"))):
+    svc = await get_wa_provider()
+    res = await svc.health()
+    status = "CONNECTED" if res["ok"] else "ERROR"
+    await db.whatsapp_provider_config.update_one({"_id": "main"}, {"$set": {"connection_status": status, "last_checked": now_iso()}}, upsert=True)
+    if not res["ok"]:
+        return {"connection_status": "ERROR", "ok": False, "error_category": res["category"],
+                "message": "Koneksi gagal. Periksa API Key & Base URL."}
+    return {"connection_status": "CONNECTED", "ok": True, "message": "Terhubung ke Api.co.id."}
 
 
-def _wa_call(acc, method, path, **kw):
-    url = f"{acc.get('base_url','').rstrip('/')}{path}"
-    kw.setdefault("timeout", 20)
-    kw.setdefault("headers", {})
-    kw["headers"].update(_wa_headers(acc))
-    return _requests.request(method, url, **kw)
+@api_router.get("/whatsapp/provider/phone-numbers")
+async def wa_provider_phone_numbers(user: dict = Depends(require_role("super_admin"))):
+    svc = await get_wa_provider()
+    res = await svc.get_phone_numbers()
+    if not res["ok"]:
+        raise HTTPException(status_code=502, detail=f"Gagal memuat nomor WhatsApp ({res['category']}).")
+    data = res["data"]
+    items = data.get("data") if isinstance(data, dict) else data
+    return {"phone_numbers": items or []}
 
 
-@api_router.post("/whatsapp/accounts/{aid}/connect")
-async def wa_connect(aid: str, request: Request, user: dict = Depends(require_role("super_admin"))):
-    acc = await _wa_get_account(aid)
-    if not acc:
-        raise HTTPException(status_code=404, detail="Account not found")
-    if not acc.get("base_url"):
-        raise HTTPException(status_code=400, detail="WAHA Base URL belum diisi. Lengkapi konfigurasi terlebih dahulu.")
-    try:
-        r = _wa_call(acc, "POST", "/api/sessions/start", json={"name": acc.get("session", "default")})
-        ok = r.status_code < 400
-        await db.whatsapp_accounts.update_one({"_id": ObjectId(aid)}, {"$set": {"connection_status": "CONNECTING" if ok else "ERROR"}})
-        await _wa_log(aid, "CONNECT", "OUT", "start", ok, "" if ok else r.text[:200])
-        if not ok:
-            raise HTTPException(status_code=502, detail="Gagal memulai sesi WAHA. Periksa Base URL/API Key.")
-        return {"connection_status": "CONNECTING", "message": "Sesi dimulai. Scan QR untuk menyambungkan."}
-    except HTTPException:
-        raise
-    except Exception as e:
-        await db.whatsapp_accounts.update_one({"_id": ObjectId(aid)}, {"$set": {"connection_status": "ERROR"}})
-        await _wa_log(aid, "CONNECT", "OUT", "start", False, str(e))
-        raise HTTPException(status_code=502, detail="Tidak dapat menghubungi server WAHA. Periksa koneksi & konfigurasi.")
-
-
-@api_router.get("/whatsapp/accounts/{aid}/qr")
-async def wa_qr(aid: str, user: dict = Depends(require_role("super_admin"))):
-    acc = await _wa_get_account(aid)
-    if not acc or not acc.get("base_url"):
-        raise HTTPException(status_code=400, detail="Akun/Base URL belum dikonfigurasi")
-    try:
-        r = _wa_call(acc, "GET", f"/api/{acc.get('session','default')}/auth/qr", params={"format": "image"})
-        if r.status_code >= 400:
-            raise HTTPException(status_code=502, detail="QR belum tersedia. Coba Connect ulang.")
-        import base64 as _b64
-        return {"qr": "data:image/png;base64," + _b64.b64encode(r.content).decode()}
-    except HTTPException:
-        raise
-    except Exception:
-        raise HTTPException(status_code=502, detail="Tidak dapat mengambil QR dari WAHA.")
-
-
-@api_router.post("/whatsapp/accounts/{aid}/test")
-async def wa_test(aid: str, user: dict = Depends(require_role("super_admin"))):
-    acc = await _wa_get_account(aid)
-    if not acc or not acc.get("base_url"):
-        raise HTTPException(status_code=400, detail="Base URL belum diisi")
-    try:
-        r = _wa_call(acc, "GET", f"/api/sessions/{acc.get('session','default')}")
-        ok = r.status_code < 400
-        status = "CONNECTED" if ok and ("WORKING" in r.text or "CONNECTED" in r.text.upper()) else ("CONNECTED" if ok else "ERROR")
-        await db.whatsapp_accounts.update_one({"_id": ObjectId(aid)}, {"$set": {"connection_status": status}})
-        await _wa_log(aid, "TEST", "OUT", "status", ok, "" if ok else r.text[:200])
-        return {"connection_status": status, "ok": ok}
-    except Exception as e:
-        await db.whatsapp_accounts.update_one({"_id": ObjectId(aid)}, {"$set": {"connection_status": "ERROR"}})
-        await _wa_log(aid, "TEST", "OUT", "status", False, str(e))
-        raise HTTPException(status_code=502, detail="Test koneksi gagal. Periksa Base URL/API Key.")
-
-
-@api_router.post("/whatsapp/accounts/{aid}/disconnect")
-async def wa_disconnect(aid: str, request: Request, user: dict = Depends(require_role("super_admin"))):
-    acc = await _wa_get_account(aid)
-    if not acc:
-        raise HTTPException(status_code=404, detail="Account not found")
-    try:
-        if acc.get("base_url"):
-            _wa_call(acc, "POST", "/api/sessions/stop", json={"name": acc.get("session", "default")})
-    except Exception:
-        pass
-    await db.whatsapp_accounts.update_one({"_id": ObjectId(aid)}, {"$set": {"connection_status": "DISCONNECTED"}})
-    await _wa_log(aid, "DISCONNECT", "OUT", "stop", True)
-    await log_audit(user, "whatsapp", "disconnect", request, record_id=aid)
-    return {"connection_status": "DISCONNECTED"}
-
-
-async def _wa_upsert_conversation(account_id, wa_number, name=""):
-    num = _wa_norm_phone(wa_number)
-    cust = await db.customers.find_one({"phone": {"$regex": num + "$"}}) if num else None
-    conv = await db.whatsapp_conversations.find_one({"account_id": account_id, "wa_number": num})
+async def _wa_upsert_conversation(wa_number, name="", created_by="AI AGENT"):
+    norm = _apico_norm(wa_number)
+    cust, is_new = await _apico_resolve_customer(norm, name, created_by)
+    conv = await db.whatsapp_conversations.find_one({"wa_number": norm})
     if conv:
         return conv, cust
-    doc = {"account_id": account_id, "wa_number": num, "customer_id": str(cust["_id"]) if cust else None,
-           "customer_name": (cust.get("full_name") if cust else name) or num, "is_new_customer": cust is None,
+    doc = {"account_id": "apico", "provider": APICO_PROVIDER, "wa_number": norm,
+           "customer_id": str(cust["_id"]) if cust else None,
+           "customer_name": (cust.get("full_name") if cust else name) or norm, "is_new_customer": is_new,
            "status": "AI ACTIVE", "assigned_sales_id": (cust.get("sales_pic_id") if cust else None),
            "ai_status": "ACTIVE", "handover_status": "NONE", "created_at": now_iso(),
            "last_message": "", "last_activity": now_iso()}
@@ -8826,60 +8902,74 @@ async def _wa_upsert_conversation(account_id, wa_number, name=""):
     return doc, cust
 
 
-@api_router.api_route("/whatsapp/webhook/{aid}", methods=["GET", "POST"])
-async def wa_webhook(aid: str, request: Request):
-    acc = await _wa_get_account(aid)
-    if not acc:
-        raise HTTPException(status_code=404, detail="Unknown account")
-    if request.method == "GET":
-        vt = request.query_params.get("hub.verify_token") or request.query_params.get("verify_token")
-        if vt and vt == acc.get("verify_token"):
-            return PlainTextResponse(request.query_params.get("hub.challenge", "ok"))
-        raise HTTPException(status_code=403, detail="verify failed")
-    raw = await request.body()
-    # Optional HMAC verification
-    hmac_secret = _dec(acc.get("hmac_secret_enc") or "")
-    if hmac_secret:
-        import hmac as _hmac, hashlib as _hl
-        sig = request.headers.get("x-webhook-hmac") or request.headers.get("x-hub-signature-256", "").replace("sha256=", "")
-        expected = _hmac.new(hmac_secret.encode(), raw, _hl.sha256).hexdigest()
-        if not sig or not _hmac.compare_digest(sig, expected):
-            await _wa_log(aid, "WEBHOOK", "IN", "sig", False, "invalid signature")
-            raise HTTPException(status_code=401, detail="invalid signature")
+def _apico_extract_message(body):
+    payload = body.get("data") or body.get("payload") or body.get("message") or body
+    if not isinstance(payload, dict):
+        return None
+    msg = payload.get("message") if isinstance(payload.get("message"), dict) else payload
+    mid = msg.get("message_id") or msg.get("id") or payload.get("message_id") or payload.get("id")
+    direction = (msg.get("direction") or payload.get("direction") or "inbound").lower()
+    phone = (msg.get("customer_phone") or msg.get("from") or payload.get("customer_phone")
+             or payload.get("phone_number") or payload.get("from") or "")
+    content = (msg.get("content") or msg.get("text") or msg.get("body") or payload.get("content") or "")
+    mtype = (msg.get("message_type") or msg.get("type") or "text").lower()
+    name = payload.get("customer_name") or msg.get("customer_name") or ""
+    if not (mid or content):
+        return None
+    return {"message_id": str(mid) if mid else f"in-{now_iso()}", "direction": direction,
+            "phone": phone, "content": content, "type": mtype, "name": name}
+
+
+async def _apico_process_inbound(event_db_id, parsed):
     try:
-        body = json.loads(raw or b"{}")
+        dup = await db.whatsapp_messages.find_one({"message_id": parsed["message_id"]})
+        if dup:
+            await db.whatsapp_webhook_events.update_one({"_id": event_db_id}, {"$set": {"status": "DUPLICATE", "processed_at": now_iso()}})
+            return
+        conv, cust = await _wa_upsert_conversation(parsed["phone"], parsed["name"], created_by="AI AGENT")
+        msg = {"message_id": parsed["message_id"], "conversation_id": str(conv["_id"]), "account_id": "apico",
+               "external_provider": APICO_PROVIDER, "external_message_id": parsed["message_id"],
+               "sender": "CUSTOMER", "sender_type": "CUSTOMER", "receiver": "CRM", "direction": "INBOUND",
+               "type": parsed["type"], "message_type": parsed["type"], "content": parsed["content"],
+               "timestamp": now_iso(), "created_at": now_iso(), "ai_generated": False, "human_generated": False,
+               "delivery_status": "RECEIVED", "status": "RECEIVED", "read_status": False}
+        await db.whatsapp_messages.insert_one(msg)
+        await db.whatsapp_conversations.update_one({"_id": conv["_id"]}, {"$set": {"last_message": (parsed["content"] or "")[:200], "last_activity": now_iso()}})
+        await _wa_log("apico", "WEBHOOK", "IN", parsed["message_id"], True, "", {"from": parsed["phone"], "type": parsed["type"]})
+        try:
+            svc = await get_wa_provider()
+            rr = await svc.mark_as_read(parsed["message_id"])
+            if rr.get("ok"):
+                await db.whatsapp_messages.update_one({"message_id": parsed["message_id"]}, {"$set": {"read_at": now_iso(), "read_status": True}})
+        except Exception:
+            pass
+        try:
+            await _wa_ai_process(str(conv["_id"]), parsed["content"])
+        except Exception as _e:
+            await _wa_log("apico", "AI", "IN", str(conv["_id"]), False, str(_e))
+        await db.whatsapp_webhook_events.update_one({"_id": event_db_id}, {"$set": {"status": "PROCESSED", "processed_at": now_iso()}})
+    except Exception as e:
+        await db.whatsapp_webhook_events.update_one({"_id": event_db_id}, {"$set": {"status": "ERROR", "error": str(e)[:300], "processed_at": now_iso()}})
+
+
+@api_router.post("/webhooks/api-co-id/whatsapp")
+async def apico_webhook(request: Request, background: BackgroundTasks):
+    try:
+        body = await request.json()
     except Exception:
         body = {}
-    await db.whatsapp_accounts.update_one({"_id": ObjectId(aid)}, {"$set": {"webhook_status": "RECEIVING"}})
-    event = body.get("event") or ""
-    payload = body.get("payload") or body
-    if event in ("message", "message.any", "") and (payload.get("id") or payload.get("body")):
-        mid = payload.get("id") or f"gen-{now_iso()}"
-        from_me = bool(payload.get("fromMe"))
-        wa_number = (payload.get("to") if from_me else payload.get("from")) or ""
-        wa_number = wa_number.split("@")[0]
-        conv, cust = await _wa_upsert_conversation(aid, wa_number, (payload.get("_data", {}) or {}).get("notifyName", ""))
-        msg = {"message_id": mid, "conversation_id": str(conv["_id"]), "account_id": aid,
-               "sender": "CUSTOMER" if not from_me else "SYSTEM", "receiver": "CRM" if not from_me else wa_number,
-               "type": payload.get("type") or "text", "content": payload.get("body") or "",
-               "timestamp": now_iso(), "ai_generated": False, "human_generated": False,
-               "delivery_status": "RECEIVED", "read_status": False}
-        try:
-            await db.whatsapp_messages.insert_one(msg)
-            await db.whatsapp_conversations.update_one({"_id": conv["_id"]}, {"$set": {"last_message": msg["content"][:200], "last_activity": now_iso()}})
-            await _wa_log(aid, "WEBHOOK", "IN", mid, True, "", {"from": wa_number, "type": msg["type"]})
-            if not from_me:
-                try:
-                    await _wa_ai_process(str(conv["_id"]), msg["content"])
-                except Exception as _e:
-                    await _wa_log(aid, "AI", "IN", str(conv["_id"]), False, str(_e))
-        except Exception as e:
-            # Duplicate message_id -> idempotent skip
-            await _wa_log(aid, "WEBHOOK", "IN", mid, True, "duplicate skipped")
-    elif event.startswith("message.ack") or event == "message.reaction":
-        st = payload.get("ack") or payload.get("status")
-        await db.whatsapp_messages.update_one({"message_id": payload.get("id")}, {"$set": {"delivery_status": str(st)}})
-        await _wa_log(aid, "WEBHOOK", "IN", payload.get("id", "ack"), True, "", {"ack": st})
+    event_id = (body.get("event_id") or body.get("id") or (body.get("data") or {}).get("message_id") or f"evt-{now_iso()}")
+    existing = await db.whatsapp_webhook_events.find_one({"event_id": str(event_id)})
+    if existing:
+        return {"ok": True, "duplicate": True}
+    rec = {"provider": APICO_PROVIDER, "event_id": str(event_id), "event_type": body.get("event") or body.get("type") or "",
+           "raw": body if isinstance(body, dict) else {}, "status": "RECEIVED", "received_at": now_iso(), "processed_at": None}
+    r = await db.whatsapp_webhook_events.insert_one(rec)
+    parsed = _apico_extract_message(body)
+    if parsed and parsed["direction"] == "inbound":
+        background.add_task(_apico_process_inbound, r.inserted_id, parsed)
+    else:
+        await db.whatsapp_webhook_events.update_one({"_id": r.inserted_id}, {"$set": {"status": "IGNORED", "processed_at": now_iso()}})
     return {"ok": True}
 
 
@@ -8901,40 +8991,28 @@ async def wa_send(cid: str, body: dict, request: Request, user: dict = Depends(r
     conv = await db.whatsapp_conversations.find_one({"_id": ObjectId(cid)}) if ObjectId.is_valid(cid) else None
     if not conv:
         raise HTTPException(status_code=404, detail="Conversation not found")
-    acc = await _wa_get_account(conv["account_id"])
-    if not acc or not acc.get("base_url"):
-        raise HTTPException(status_code=400, detail="WAHA belum dikonfigurasi untuk akun ini")
     mtype = body.get("type") or "text"
-    chat_id = f"{conv['wa_number']}@c.us"
-    session = acc.get("session", "default")
-    endpoint = {"text": "/api/sendText", "image": "/api/sendImage", "document": "/api/sendFile", "file": "/api/sendFile"}.get(mtype, "/api/sendText")
-    wpl = {"session": session, "chatId": chat_id}
-    if mtype == "text":
-        wpl["text"] = body.get("content") or ""
-    else:
-        wpl["file"] = {"url": body.get("url"), "filename": body.get("filename") or "file"}
-        wpl["caption"] = body.get("content") or ""
+    svc = await get_wa_provider()
+    if not svc.key:
+        raise HTTPException(status_code=400, detail="Api.co.id belum dikonfigurasi. Isi API Key di menu Provider.")
+    res = await svc.send_message(conv["wa_number"], mtype, content=body.get("content") or "",
+                                 media_url=body.get("url") or body.get("media_url"))
     mid = f"out-{now_iso()}"
-    try:
-        r = _wa_call(acc, "POST", endpoint, json=wpl)
-        ok = r.status_code < 400
-        try:
-            mid = (r.json() or {}).get("id", {}).get("_serialized") or (r.json() or {}).get("id") or mid
-        except Exception:
-            pass
-        await _wa_log(conv["account_id"], "SEND", "OUT", mid, ok, "" if ok else r.text[:200])
-        if not ok:
-            raise HTTPException(status_code=502, detail="Gagal mengirim pesan via WAHA.")
-    except HTTPException:
-        raise
-    except Exception as e:
-        await _wa_log(conv["account_id"], "SEND", "OUT", mid, False, str(e))
-        raise HTTPException(status_code=502, detail="Tidak dapat menghubungi WAHA untuk mengirim pesan.")
-    msg = {"message_id": mid, "conversation_id": cid, "account_id": conv["account_id"],
-           "sender": "SALES" if not body.get("ai_generated") else "AI", "receiver": conv["wa_number"],
-           "type": mtype, "content": body.get("content") or "", "timestamp": now_iso(),
+    if not res["ok"]:
+        await _wa_log(conv.get("account_id", "apico"), "SEND", "OUT", mid, False, res.get("error", ""))
+        raise HTTPException(status_code=502, detail=f"Gagal mengirim pesan ({res.get('category')}).")
+    data = res.get("data") or {}
+    inner = data.get("data") if isinstance(data, dict) else {}
+    mid = (inner or {}).get("message_id") or data.get("message_id") or mid
+    await _wa_log(conv.get("account_id", "apico"), "SEND", "OUT", str(mid), True, "")
+    msg = {"message_id": str(mid), "conversation_id": cid, "account_id": conv.get("account_id", "apico"),
+           "external_provider": APICO_PROVIDER, "external_message_id": str(mid),
+           "sender": "SALES" if not body.get("ai_generated") else "AI",
+           "sender_type": "SALES" if not body.get("ai_generated") else "AI",
+           "receiver": conv["wa_number"], "direction": "OUTBOUND", "type": mtype, "message_type": mtype,
+           "content": body.get("content") or "", "timestamp": now_iso(), "created_at": now_iso(), "sent_at": now_iso(),
            "ai_generated": bool(body.get("ai_generated")), "human_generated": not bool(body.get("ai_generated")),
-           "delivery_status": "SENT", "read_status": False}
+           "delivery_status": "SENT", "status": "SENT", "read_status": False}
     await db.whatsapp_messages.insert_one(msg)
     await db.whatsapp_conversations.update_one({"_id": conv["_id"]}, {"$set": {"last_message": msg["content"][:200], "last_activity": now_iso(), "status": "WAITING CUSTOMER"}})
     return serialize(msg)
@@ -8944,6 +9022,12 @@ async def wa_send(cid: str, body: dict, request: Request, user: dict = Depends(r
 async def wa_logs(kind: str = "", user: dict = Depends(require_role("super_admin"))):
     q = {} if not kind else ({"kind": {"$ne": "API"}} if kind == "wa" else {"kind": kind})
     logs = await db.whatsapp_logs.find(q).sort("created_at", -1).to_list(300)
+    return [serialize(l) for l in logs]
+
+
+@api_router.get("/whatsapp/api-logs")
+async def wa_api_logs(user: dict = Depends(require_role("super_admin"))):
+    logs = await db.whatsapp_api_logs.find({}).sort("created_at", -1).to_list(300)
     return [serialize(l) for l in logs]
 
 
@@ -9010,21 +9094,26 @@ async def _wa_ai_process(conv_id, text):
     if not reply or "[HANDOVER]" in reply.upper():
         await _wa_handover(conv, "AI tidak dapat menjawab")
         return
-    acc = await _wa_get_account(conv["account_id"])
+    svc = await get_wa_provider()
     mid = f"ai-{now_iso()}"
     try:
-        if acc and acc.get("base_url"):
-            r = _wa_call(acc, "POST", "/api/sendText", json={"session": acc.get("session", "default"), "chatId": f"{conv['wa_number']}@c.us", "text": reply})
-            if r.status_code < 400:
-                try:
-                    mid = (r.json() or {}).get("id") or mid
-                except Exception:
-                    pass
+        await svc.send_typing(conv["wa_number"])
+        delay = min(6.0, max(1.0, len(reply) / 30.0))
+        await asyncio.sleep(delay)
+        res = await svc.send_message(conv["wa_number"], "text", content=reply)
+        if res.get("ok"):
+            data = res.get("data") or {}
+            inner = data.get("data") if isinstance(data, dict) else {}
+            mid = (inner or {}).get("message_id") or data.get("message_id") or mid
+        else:
+            await _wa_log(conv.get("account_id", "apico"), "AI", "OUT", mid, False, res.get("error", ""))
     except Exception:
         pass
-    await db.whatsapp_messages.insert_one({"message_id": str(mid), "conversation_id": conv_id, "account_id": conv["account_id"],
-        "sender": "AI", "receiver": conv["wa_number"], "type": "text", "content": reply, "timestamp": now_iso(),
-        "ai_generated": True, "human_generated": False, "delivery_status": "SENT", "read_status": False})
+    await db.whatsapp_messages.insert_one({"message_id": str(mid), "conversation_id": conv_id, "account_id": conv.get("account_id", "apico"),
+        "external_provider": APICO_PROVIDER, "external_message_id": str(mid),
+        "sender": "AI", "sender_type": "AI", "receiver": conv["wa_number"], "direction": "OUTBOUND",
+        "type": "text", "message_type": "text", "content": reply, "timestamp": now_iso(), "created_at": now_iso(), "sent_at": now_iso(),
+        "ai_generated": True, "human_generated": False, "delivery_status": "SENT", "status": "SENT", "read_status": False})
     await db.whatsapp_conversations.update_one({"_id": conv["_id"]}, {"$set": {"last_message": reply[:200], "last_activity": now_iso(), "status": "WAITING CUSTOMER"}})
     await _wa_log(conv["account_id"], "AI", "OUT", str(mid), True, "")
 
