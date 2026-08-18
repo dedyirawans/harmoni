@@ -10552,10 +10552,13 @@ async def ai_mon_to_faq(body: dict, user: dict = Depends(require_role("super_adm
 
 WA_SAFETY_DEFAULTS = {"messaging_enabled": True, "ai_auto_reply": True, "read_receipt": True,
     "typing_indicator": True, "min_delay": 1.0, "max_delay": 8.0, "typing_speed": 45,
+    "typing_speed_min": 35, "typing_speed_max": 60,
     "debounce_window": 3, "rate_per_minute": 8, "rate_per_hour": 60, "rate_per_day": 300,
     "max_followup": 2, "business_hours_enabled": False, "opening_time": "09:00", "closing_time": "18:00",
     "off_hours_behavior": "AUTO_RESPONSE", "away_message": "Halo Kak, pesan sudah kami terima. Tim kami akan membantu pada jam operasional.",
-    "marketing_enabled": False, "message_splitting": False, "split_max_chars": 320}
+    "marketing_enabled": False, "message_splitting": False, "split_max_chars": 320, "split_max_messages": 3}
+
+WA_WRITING_HARD_CAP = 12.0  # batas aman keras (detik) — delay tidak boleh tak wajar
 
 
 async def _wa_safety():
@@ -10563,12 +10566,27 @@ async def _wa_safety():
     return {**WA_SAFETY_DEFAULTS, **{k: v for k, v in doc.items() if k != "_id"}}
 
 
-def _wa_typing_delay(reply, s):
+def _wa_writing_time(reply, s):
+    """Natural writing time dari char/word/sentence/complexity + speed range + variasi ringan, dengan hard cap."""
     import random as _rnd
-    speed = max(10, float(s.get("typing_speed") or 45))
-    dur = len(reply or "") / speed
-    dur += _rnd.uniform(0, 0.6)
-    return min(float(s.get("max_delay") or 8), max(float(s.get("min_delay") or 1), dur))
+    t = reply or ""
+    chars = len(t)
+    words = len(t.split())
+    sentences = max(1, t.count(".") + t.count("!") + t.count("?"))
+    smin = float(s.get("typing_speed_min") or 35)
+    smax = float(s.get("typing_speed_max") or 60)
+    if smax < smin:
+        smin, smax = smax, smin
+    speed = _rnd.uniform(max(10.0, smin), max(11.0, smax))  # variasi per-message
+    base = chars / speed
+    base += words * 0.02 + (sentences - 1) * 0.12  # kompleksitas ringan
+    base *= _rnd.uniform(0.92, 1.08)  # randomization ringan (bukan ekstrem)
+    lo = float(s.get("min_delay") or 1)
+    hi = float(s.get("max_delay") or 8)
+    return round(min(WA_WRITING_HARD_CAP, min(hi, max(lo, base))), 2)
+
+
+_wa_typing_delay = _wa_writing_time  # kompat
 
 
 async def _wa_rate_check(s):
@@ -10676,8 +10694,8 @@ async def _wa_enqueue_outbound(conv, content, sender="AI"):
         "status": "QUEUED", "attempts": 0, "created_at": now_iso(), "updated_at": now_iso()})
 
 
-def _wa_split_message(text, max_chars):
-    """Pecah balasan panjang menjadi beberapa bubble natural (per paragraf/kalimat)."""
+def _wa_split_message(text, max_chars, max_messages=3):
+    """Pecah balasan panjang menjadi beberapa bubble natural (per paragraf/kalimat), dibatasi max_messages."""
     import re as _re
     text = (text or "").strip()
     if len(text) <= max_chars:
@@ -10706,7 +10724,12 @@ def _wa_split_message(text, max_chars):
             chunks.append(cur); cur = ""
     if cur:
         chunks.append(cur)
-    return [c for c in chunks if c]
+    chunks = [c for c in chunks if c]
+    if max_messages and len(chunks) > max_messages:
+        head = chunks[:max_messages - 1]
+        tail = " ".join(chunks[max_messages - 1:])
+        chunks = head + [tail]
+    return chunks
 
 
 async def _wa_process_queue_item(item):
@@ -10731,18 +10754,23 @@ async def _wa_process_queue_item(item):
         return
     svc = await get_wa_provider()
     reply = item.get("content") or ""
-    bubbles = _wa_split_message(reply, int(s.get("split_max_chars") or 320)) if s.get("message_splitting") else [reply]
+    bubbles = _wa_split_message(reply, int(s.get("split_max_chars") or 320), int(s.get("split_max_messages") or 3)) if s.get("message_splitting") else [reply]
     if not bubbles:
         bubbles = [reply]
     first_mid = None
     ok_any = False
     last_err = ""
+    typing_start = now_iso()
+    total_writing = 0.0
     for bub in bubbles:
         mid = f"ai-{now_iso()}"
         try:
             if s.get("typing_indicator", True):
-                await svc.send_typing(conv["wa_number"])
-            await asyncio.sleep(_wa_typing_delay(bub, s))
+                await svc.send_typing(conv["wa_number"])  # START TYPING
+            wt = _wa_writing_time(bub, s)  # CALCULATE writing duration (per-message)
+            total_writing += wt
+            await asyncio.sleep(wt)
+            # STOP TYPING happens implicitly on send (provider); lalu SEND MESSAGE
             res = await svc.send_message(conv["wa_number"], "text", content=bub)
             if res.get("ok"):
                 ok_any = True
@@ -10756,6 +10784,7 @@ async def _wa_process_queue_item(item):
         if first_mid is None:
             first_mid = mid
     first_mid = first_mid or f"ai-{now_iso()}"
+    typing_stop = now_iso()
     await db.whatsapp_messages.insert_one({"message_id": str(first_mid), "conversation_id": cid, "account_id": conv.get("account_id", "apico"),
         "external_provider": APICO_PROVIDER, "external_message_id": str(first_mid),
         "sender": item.get("sender", "AI"), "sender_type": item.get("sender", "AI"), "receiver": conv["wa_number"], "direction": "OUTBOUND",
@@ -10765,7 +10794,9 @@ async def _wa_process_queue_item(item):
     await db.whatsapp_conversations.update_one({"_id": conv["_id"]}, {"$set": {"last_message": reply[:200], "last_activity": now_iso(), "status": "WAITING CUSTOMER"}})
     await db.whatsapp_outbound_queue.update_one({"_id": item["_id"]}, {"$set": {
         "status": "SENT" if ok_any else "FAILED", "message_id": str(first_mid),
-        "bubbles": len(bubbles), "error": "" if ok_any else last_err, "sent_at": now_iso(), "updated_at": now_iso()}})
+        "bubbles": len(bubbles), "writing_duration": round(total_writing, 2),
+        "typing_start": typing_start, "typing_stop": typing_stop, "send_time": now_iso(),
+        "error": "" if ok_any else last_err, "sent_at": now_iso(), "updated_at": now_iso()}})
     await _wa_log(conv.get("account_id", "apico"), "AI", "OUT", str(first_mid), ok_any, "" if ok_any else last_err)
 
 

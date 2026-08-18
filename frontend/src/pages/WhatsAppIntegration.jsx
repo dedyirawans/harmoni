@@ -581,8 +581,11 @@ function SafetyTab() {
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
           <div><Label>Delay min (detik)</Label><Input type="number" step="0.5" value={s.min_delay ?? ""} onChange={(e) => num("min_delay", e.target.value)} data-testid="wa-safety-min-delay" /></div>
           <div><Label>Delay maks (detik)</Label><Input type="number" step="0.5" value={s.max_delay ?? ""} onChange={(e) => num("max_delay", e.target.value)} data-testid="wa-safety-max-delay" /></div>
-          <div><Label>Kecepatan ketik (char/dtk)</Label><Input type="number" value={s.typing_speed ?? ""} onChange={(e) => num("typing_speed", e.target.value)} data-testid="wa-safety-typing-speed" /></div>
+          <div><Label>Maks bubble (segmentasi)</Label><Input type="number" value={s.split_max_messages ?? ""} onChange={(e) => num("split_max_messages", e.target.value)} data-testid="wa-safety-split-max-msg" /></div>
+          <div><Label>Kecepatan ketik min (char/dtk)</Label><Input type="number" value={s.typing_speed_min ?? ""} onChange={(e) => num("typing_speed_min", e.target.value)} data-testid="wa-safety-speed-min" /></div>
+          <div><Label>Kecepatan ketik maks (char/dtk)</Label><Input type="number" value={s.typing_speed_max ?? ""} onChange={(e) => num("typing_speed_max", e.target.value)} data-testid="wa-safety-speed-max" /></div>
         </div>
+        <div className="text-[11px] text-slate-400">Writing time dihitung dari panjang & kompleksitas pesan + variasi ringan, dengan batas aman keras (maks 12 dtk). Murni untuk UX — bukan untuk mengelabui WhatsApp.</div>
       </CardContent></Card>
 
       {/* Debounce & splitting */}
