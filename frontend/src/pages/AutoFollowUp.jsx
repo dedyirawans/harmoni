@@ -114,6 +114,22 @@ function SettingsTab() {
           <div><Label>Jam tutup</Label><Input type="time" value={s.closing_time || ""} onChange={(e) => upd("closing_time", e.target.value)} data-testid="afu-close" /></div>
         </div>
       </CardContent></Card>
+      <Card><CardContent className="p-5 space-y-3">
+        <div className="font-semibold text-slate-700">Trigger Lanjutan & Opt-Out</div>
+        <div className="flex items-center justify-between"><div><div className="text-sm font-medium text-slate-700">Quotation Follow-Up</div><div className="text-xs text-slate-400">Follow-up berbasis quotation aktif / expiry</div></div><Switch checked={!!s.quotation_followup_enabled} onCheckedChange={(v) => upd("quotation_followup_enabled", v)} data-testid="afu-quotation-enabled" /></div>
+        <div className="flex items-center justify-between gap-3"><div><div className="text-sm font-medium text-slate-700">Departure Nudge</div><div className="text-xs text-slate-400">Ingatkan bila keberangkatan dekat (hari)</div></div><div className="flex items-center gap-2"><Input type="number" className="w-20" value={s.departure_nudge_days ?? ""} onChange={(e) => upd("departure_nudge_days", Number(e.target.value))} data-testid="afu-departure-days" /><Switch checked={!!s.departure_nudge_enabled} onCheckedChange={(v) => upd("departure_nudge_enabled", v)} data-testid="afu-departure-enabled" /></div></div>
+        <div className="flex items-center justify-between gap-3"><div><div className="text-sm font-medium text-slate-700">Payment Follow-Up</div><div className="text-xs text-slate-400">Reminder pembayaran booking belum lunas (maks kirim)</div></div><div className="flex items-center gap-2"><Input type="number" className="w-20" value={s.payment_followup_max ?? ""} onChange={(e) => upd("payment_followup_max", Number(e.target.value))} data-testid="afu-payment-max" /><Switch checked={!!s.payment_followup_enabled} onCheckedChange={(v) => upd("payment_followup_enabled", v)} data-testid="afu-payment-enabled" /></div></div>
+        <div className="text-[11px] text-slate-400">Opt-out & consent SELALU dihormati. High purchase intent → Sales Handover otomatis (lihat toggle "Handover bila high intent").</div>
+      </CardContent></Card>
+      <Card><CardContent className="p-5 space-y-3">
+        <div className="font-semibold text-slate-700">Follow-Up Templates — Panduan Gaya per Intent</div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          {["PACKAGE_INQUIRY", "PRICE_INQUIRY", "AVAILABILITY_INQUIRY", "DOCUMENT_INQUIRY", "BOOKING_INTENT", "PAYMENT_PENDING", "QUOTATION_PENDING", "GENERAL_INTEREST"].map((it) => (
+            <div key={it}><Label className="text-xs">{it}</Label>
+              <Textarea rows={2} value={(s.intent_guidance || {})[it] || ""} onChange={(e) => upd("intent_guidance", { ...(s.intent_guidance || {}), [it]: e.target.value })} placeholder="Panduan gaya (opsional) — AI tetap pakai data CRM" data-testid={`afu-guidance-${it}`} /></div>
+          ))}
+        </div>
+      </CardContent></Card>
       <div className="flex justify-end"><Button onClick={save} disabled={busy} data-testid="afu-save">{busy ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Save className="h-4 w-4 mr-1" />}Simpan Setting</Button></div>
     </div>
   );
