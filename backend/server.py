@@ -9031,7 +9031,29 @@ async def wa_api_logs(user: dict = Depends(require_role("super_admin"))):
     return [serialize(l) for l in logs]
 
 
-WA_HANDOVER_KEYWORDS = ["sales", "admin", "manusia", "customer service", " cs ", "komplain", "complain", "bicara dengan", "telepon", "hubungi saya", "orang asli"]
+@api_router.post("/whatsapp/ai/simulate")
+async def wa_ai_simulate(body: dict, user: dict = Depends(require_role("super_admin"))):
+    msg = (body.get("message") or "").strip()
+    if not msg:
+        raise HTTPException(status_code=400, detail="message wajib diisi")
+    reset = bool(body.get("reset"))
+    conv = await db.whatsapp_conversations.find_one({"wa_number": "628000000000"})
+    if conv and reset:
+        await db.whatsapp_conversations.delete_one({"_id": conv["_id"]})
+        conv = None
+    if not conv:
+        conv, _c = await _wa_upsert_conversation("628000000000", "SIM Customer", created_by="AI AGENT")
+        conv = await db.whatsapp_conversations.find_one({"_id": conv["_id"]})
+    if conv.get("ai_status") != "ACTIVE":
+        return {"conversation_id": str(conv["_id"]), "handover": True,
+                "reason": "Conversation dalam status HANDOVER. Gunakan reset untuk mulai ulang.", "reply": None, "tools_used": []}
+    result = await _wa_ai_journey(conv, msg, ctx_extra={"confirmed": bool(body.get("confirmed"))})
+    if result.get("handover"):
+        await _wa_handover(conv, result.get("reason") or "Eskalasi")
+    return {"conversation_id": str(conv["_id"]), **result}
+
+
+WA_HANDOVER_KEYWORDS = ["sales", "admin", "manusia", "customer service", " cs ", "komplain", "complain", "bicara dengan", "telepon", "hubungi saya", "orang asli", "marah", "kecewa", "keluhan", "refund", "batal", "pembatalan", "cancel", "nego", "negosiasi", "tawar", "diskon", "permintaan khusus", "special request"]
 
 
 async def _wa_ai_config():
@@ -9066,6 +9088,65 @@ async def _wa_handover(conv, reason):
     await _wa_log(conv["account_id"], "HANDOVER", "IN", str(conv["_id"]), True, reason)
 
 
+def _journey_prompt(base, tool_catalog):
+    return base + (
+        "\n\nANDA AI SALES ASSISTANT WHATSAPP dengan alur CUSTOMER JOURNEY:\n"
+        "(1) Customer baru → tanyakan nama & kebutuhannya, lalu buat Customer + Lead (Source WHATSAPP AI).\n"
+        "(2) Jika customer tertarik → buat/perbarui Lead (paket, destinasi, tanggal, pax, budget bila ada).\n"
+        "(3) Rekomendasikan paket sesuai destinasi/tanggal/pax/budget/ketersediaan. WAJIB CHECK_SEAT sebelum menyebut ketersediaan; JANGAN mengarang harga/seat.\n"
+        "(4) Jika customer ingin membeli → KONFIRMASI dulu ke customer, baru CREATE_ORDER lalu CREATE_BOOKING.\n"
+        "(5) Sampaikan invoice/nominal/jatuh tempo/instruksi pembayaran.\n"
+        "(6) Jawab status pembayaran dengan data aktual CRM (GET_PAYMENT_STATUS).\n"
+        "\nUNTUK MENGAKSES DATA/AKSI CRM, balas TEPAT satu baris diawali 'ACTION:' diikuti JSON, contoh:\n"
+        "ACTION: {\"tool\":\"SEARCH_PACKAGE\",\"params\":{\"q\":\"umrah\"}}\n"
+        "Sistem akan membalas 'OBSERVATION' lalu lanjutkan. Tool tersedia:\n" + tool_catalog +
+        "\nEskalasi ke manusia — balas TEPAT '[HANDOVER] <alasan>' bila: customer minta sales/manusia, marah, komplain, refund, pembatalan, negosiasi harga, permintaan khusus, atau Anda tidak yakin.\n"
+        "Jika sudah cukup menjawab customer, tulis pesan biasa (TANPA 'ACTION:')."
+    )
+
+
+async def _wa_ai_journey(conv, text, ctx_extra=None):
+    import json as _jj
+    cfg = await _wa_ai_config()
+    kb = await _kb_build_context()
+    base = _kb_system_prompt(kb, extra_style=cfg.get("style", ""), extra_rules=cfg.get("rules", ""), comm_block=await _comm_active_block())
+    extra_know = (cfg.get("knowledge") or "").strip()
+    if extra_know:
+        base += f"\n\n=== PENGETAHUAN TAMBAHAN (WhatsApp) ===\n{extra_know}"
+    tools = [t for t in AI_TOOL_REGISTRY if t["risk"] != "HIGH_RISK" and await _ai_tool_enabled(t["tool"])]
+    catalog = "\n".join(f"- {t['tool']}: {t['label']}" for t in tools)
+    sys = _journey_prompt(base, catalog)
+    convo_id = str(conv["_id"])
+    ctx = {"conversation_id": convo_id, "customer_id": conv.get("customer_id"), "confirmed": (ctx_extra or {}).get("confirmed")}
+    from emergentintegrations.llm.chat import LlmChat, UserMessage
+    chat = LlmChat(api_key=os.environ["EMERGENT_LLM_KEY"], session_id=f"wa-j-{convo_id}", system_message=sys).with_model("gemini", "gemini-3-flash-preview")
+    tools_used = []
+    turn = text or ""
+    reply = ""
+    for _ in range(4):
+        reply = ((await chat.send_message(UserMessage(text=turn))) or "").strip()
+        if "[HANDOVER]" in reply.upper():
+            reason = reply.split("]", 1)[-1].strip() or "Eskalasi ke sales"
+            return {"handover": True, "reason": reason, "reply": None, "tools_used": tools_used}
+        s = reply.lstrip()
+        if s.upper().startswith("ACTION:"):
+            raw = s.split(":", 1)[1].strip()
+            if raw.startswith("```"):
+                raw = raw.strip("`").split("\n", 1)[-1]
+            try:
+                act = _jj.loads(raw)
+            except Exception:
+                return {"handover": False, "reply": reply, "tools_used": tools_used}
+            tool = (act.get("tool") or "").upper()
+            params = act.get("params") or {}
+            res = await _ai_tool_dispatch(tool, params, {**ctx, "confirmed": params.get("confirmed", ctx.get("confirmed")), "approved_by": "AI AGENT"})
+            tools_used.append({"tool": tool, "ok": res.get("ok"), "summary": res.get("message") or res.get("error") or "ok"})
+            turn = f"OBSERVATION dari {tool}: {_jj.dumps(res)[:1500]}. Lanjutkan journey; balas ke customer bila sudah cukup."
+            continue
+        return {"handover": False, "reply": reply, "tools_used": tools_used}
+    return {"handover": False, "reply": reply, "tools_used": tools_used}
+
+
 async def _wa_ai_process(conv_id, text):
     conv = await db.whatsapp_conversations.find_one({"_id": ObjectId(conv_id)})
     if not conv or conv.get("ai_status") != "ACTIVE":
@@ -9078,20 +9159,15 @@ async def _wa_ai_process(conv_id, text):
         await _wa_handover(conv, "Customer meminta bantuan sales/manusia")
         return
     try:
-        from emergentintegrations.llm.chat import LlmChat, UserMessage
-        kb = await _kb_build_context()
-        base = _kb_system_prompt(kb, extra_style=cfg.get("style", ""), extra_rules=cfg.get("rules", ""), comm_block=await _comm_active_block())
-        extra_know = (cfg.get("knowledge") or "").strip()
-        sys = (base + (f"\n\n=== PENGETAHUAN TAMBAHAN (WhatsApp) ===\n{extra_know}" if extra_know else "") +
-               "\n\nKONTEKS: Anda adalah AI Sales Assistant di WhatsApp. "
-               "Jika pertanyaan di luar kemampuan Anda atau customer ingin bicara dengan sales/manusia, "
-               "jawab HANYA dengan token persis: [HANDOVER]")
-        chat = LlmChat(api_key=os.environ["EMERGENT_LLM_KEY"], session_id=f"wa-{conv_id}", system_message=sys).with_model("gemini", "gemini-3-flash-preview")
-        reply = ((await chat.send_message(UserMessage(text=text or ""))) or "").strip()
+        result = await _wa_ai_journey(conv, text)
     except Exception as e:
-        await _wa_log(conv["account_id"], "AI", "IN", conv_id, False, str(e))
+        await _wa_log(conv.get("account_id", "apico"), "AI", "IN", conv_id, False, str(e))
         return
-    if not reply or "[HANDOVER]" in reply.upper():
+    if result.get("handover"):
+        await _wa_handover(conv, result.get("reason") or "AI eskalasi")
+        return
+    reply = result.get("reply")
+    if not reply:
         await _wa_handover(conv, "AI tidak dapat menjawab")
         return
     allowed, _reason = await _wa_outbound_allowed(conv.get("customer_id"))
@@ -9102,8 +9178,7 @@ async def _wa_ai_process(conv_id, text):
     mid = f"ai-{now_iso()}"
     try:
         await svc.send_typing(conv["wa_number"])
-        delay = min(6.0, max(1.0, len(reply) / 30.0))
-        await asyncio.sleep(delay)
+        await asyncio.sleep(min(6.0, max(1.0, len(reply) / 30.0)))
         res = await svc.send_message(conv["wa_number"], "text", content=reply)
         if res.get("ok"):
             data = res.get("data") or {}
@@ -9119,7 +9194,7 @@ async def _wa_ai_process(conv_id, text):
         "type": "text", "message_type": "text", "content": reply, "timestamp": now_iso(), "created_at": now_iso(), "sent_at": now_iso(),
         "ai_generated": True, "human_generated": False, "delivery_status": "SENT", "status": "SENT", "read_status": False})
     await db.whatsapp_conversations.update_one({"_id": conv["_id"]}, {"$set": {"last_message": reply[:200], "last_activity": now_iso(), "status": "WAITING CUSTOMER"}})
-    await _wa_log(conv["account_id"], "AI", "OUT", str(mid), True, "")
+    await _wa_log(conv.get("account_id", "apico"), "AI", "OUT", str(mid), True, "")
 
 
 @api_router.get("/whatsapp/ai-config")

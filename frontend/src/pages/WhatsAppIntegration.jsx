@@ -445,6 +445,52 @@ function WebhookHealthTab() {
   );
 }
 
+// ============================================================ AI Journey Simulator
+function JourneyTab() {
+  const [msg, setMsg] = useState("");
+  const [confirmed, setConfirmed] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [log, setLog] = useState([]);
+  const run = async (reset) => {
+    if (!reset && !msg.trim()) return;
+    setLoading(true);
+    try {
+      const r = await api.post("/whatsapp/ai/simulate", { message: reset ? "Halo" : msg, confirmed, reset });
+      if (reset) { setLog([]); toast.success("Percakapan direset"); }
+      else {
+        const entry = { you: msg, res: r.data };
+        setLog((l) => [...l, entry]); setMsg("");
+      }
+    } catch (e) { err(e); } finally { setLoading(false); }
+  };
+  return (
+    <div className="grid md:grid-cols-2 gap-4" data-testid="wa-journey-tab">
+      <Card><CardContent className="p-5 space-y-3">
+        <div className="flex items-center gap-2 text-slate-800 font-medium"><Bot className="h-4 w-4 text-indigo-600" />AI Customer Journey (Simulator)</div>
+        <p className="text-sm text-slate-500">Uji alur AI (customer baru → lead → rekomendasi → order/booking → pembayaran → handover) tanpa WhatsApp live.</p>
+        <div><Label>Pesan sebagai Customer</Label><Textarea rows={3} value={msg} onChange={(e) => setMsg(e.target.value)} placeholder="Halo, saya mau tanya paket umrah bulan depan" data-testid="wa-journey-input" /></div>
+        <div className="flex items-center gap-2"><Switch checked={confirmed} onCheckedChange={setConfirmed} data-testid="wa-journey-confirmed" /><Label className="cursor-pointer text-sm">Customer sudah konfirmasi (untuk Order/Booking)</Label></div>
+        <div className="flex gap-2">
+          <Button onClick={() => run(false)} disabled={loading} data-testid="wa-journey-send">{loading ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Send className="h-4 w-4 mr-1" />}Kirim</Button>
+          <Button variant="outline" onClick={() => run(true)} disabled={loading} data-testid="wa-journey-reset"><RefreshCw className="h-4 w-4 mr-1" />Reset</Button>
+        </div>
+      </CardContent></Card>
+      <Card><CardContent className="p-5 space-y-3 min-h-[300px] max-h-[560px] overflow-y-auto" data-testid="wa-journey-result">
+        <div className="font-medium text-slate-800">Percakapan</div>
+        {log.length === 0 ? <p className="text-sm text-slate-400">Hasil akan tampil di sini.</p>
+          : log.map((e, i) => (
+            <div key={i} className="space-y-1">
+              <div className="text-right"><span className="inline-block bg-emerald-100 text-emerald-900 rounded-lg px-3 py-1.5 text-sm">{e.you}</span></div>
+              {e.res.handover ? <div><Badge variant="outline" className="bg-red-50 text-red-700 border-red-200">HANDOVER</Badge> <span className="text-sm text-slate-600">{e.res.reason}</span></div>
+                : <div><span className="inline-block bg-blue-100 text-blue-900 rounded-lg px-3 py-1.5 text-sm whitespace-pre-wrap">{e.res.reply}</span></div>}
+              {(e.res.tools_used || []).length > 0 && <div className="flex flex-wrap gap-1">{e.res.tools_used.map((t, j) => <Badge key={j} variant="outline" className={`text-[10px] ${t.ok ? "bg-slate-50 text-slate-600" : "bg-red-50 text-red-700 border-red-200"}`}>{t.tool}</Badge>)}</div>}
+            </div>
+          ))}
+      </CardContent></Card>
+    </div>
+  );
+}
+
 // ============================================================ Main
 const TABS = [
   ["provider", "Provider", PlugZap],
@@ -454,6 +500,7 @@ const TABS = [
   ["ai-style", "AI Style", Palette],
   ["ai-rules", "AI Rules", ShieldAlert],
   ["handover", "Human Handover", UserCog],
+  ["journey", "AI Journey", Bot],
   ["templates", "Templates", FileText],
   ["broadcast", "Broadcast", Megaphone],
   ["webhook-health", "Webhook Health", HeartPulse],
@@ -495,6 +542,7 @@ export default function WhatsAppIntegration() {
           <TabsContent value="ai-style">{cfg ? <AiConfigTab cfg={cfg} setCfg={setCfg} section="style" /> : aiPending}</TabsContent>
           <TabsContent value="ai-rules">{cfg ? <AiConfigTab cfg={cfg} setCfg={setCfg} section="rules" /> : aiPending}</TabsContent>
           <TabsContent value="handover"><HandoverTab /></TabsContent>
+          <TabsContent value="journey"><JourneyTab /></TabsContent>
           <TabsContent value="templates"><TemplatesTab /></TabsContent>
           <TabsContent value="broadcast"><BroadcastTab /></TabsContent>
           <TabsContent value="webhook-health"><WebhookHealthTab /></TabsContent>
