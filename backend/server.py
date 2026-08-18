@@ -8944,7 +8944,7 @@ async def _apico_process_inbound(event_db_id, parsed):
         except Exception:
             pass
         try:
-            await _wa_ai_process(str(conv["_id"]), parsed["content"])
+            _wa_debounce_schedule(str(conv["_id"]), parsed["content"])
         except Exception as _e:
             await _wa_log("apico", "AI", "IN", str(conv["_id"]), False, str(_e))
         await db.whatsapp_webhook_events.update_one({"_id": event_db_id}, {"$set": {"status": "PROCESSED", "processed_at": now_iso()}})
@@ -9184,32 +9184,16 @@ async def _wa_ai_process(conv_id, text):
             return
         if beh == "WAIT_UNTIL_BUSINESS_HOURS":
             reply = s.get("away_message") or reply
-    ok_rate, rk = await _wa_rate_check(s)
-    if not ok_rate:
-        await _wa_log(conv.get("account_id", "apico"), "RATE_LIMIT", "OUT", conv_id, False, f"rate limit {rk}")
+    # Follow-up cap: jangan kirim lebih dari max_followup pesan otomatis tanpa balasan customer
+    last_in = await db.whatsapp_messages.find_one({"conversation_id": conv_id, "direction": "INBOUND"}, sort=[("created_at", -1)])
+    since = (last_in or {}).get("created_at") or "1970-01-01"
+    ai_out = await db.whatsapp_messages.count_documents({"conversation_id": conv_id, "direction": "OUTBOUND", "sender": "AI", "created_at": {"$gt": since}})
+    q_pending = await db.whatsapp_outbound_queue.count_documents({"conversation_id": conv_id, "status": {"$in": ["QUEUED", "SENDING"]}})
+    if (ai_out + q_pending) >= int(s.get("max_followup") or 2):
+        await _wa_log(conv.get("account_id", "apico"), "FOLLOWUP_CAP", "OUT", conv_id, False, "max followup tercapai (menunggu balasan customer)")
         return
-    svc = await get_wa_provider()
-    mid = f"ai-{now_iso()}"
-    try:
-        if s.get("typing_indicator", True):
-            await svc.send_typing(conv["wa_number"])
-        await asyncio.sleep(_wa_typing_delay(reply, s))
-        res = await svc.send_message(conv["wa_number"], "text", content=reply)
-        if res.get("ok"):
-            data = res.get("data") or {}
-            inner = data.get("data") if isinstance(data, dict) else {}
-            mid = (inner or {}).get("message_id") or data.get("message_id") or mid
-        else:
-            await _wa_log(conv.get("account_id", "apico"), "AI", "OUT", mid, False, res.get("error", ""))
-    except Exception:
-        pass
-    await db.whatsapp_messages.insert_one({"message_id": str(mid), "conversation_id": conv_id, "account_id": conv.get("account_id", "apico"),
-        "external_provider": APICO_PROVIDER, "external_message_id": str(mid),
-        "sender": "AI", "sender_type": "AI", "receiver": conv["wa_number"], "direction": "OUTBOUND",
-        "type": "text", "message_type": "text", "content": reply, "timestamp": now_iso(), "created_at": now_iso(), "sent_at": now_iso(),
-        "ai_generated": True, "human_generated": False, "delivery_status": "SENT", "status": "SENT", "read_status": False})
-    await db.whatsapp_conversations.update_one({"_id": conv["_id"]}, {"$set": {"last_message": reply[:200], "last_activity": now_iso(), "status": "WAITING CUSTOMER"}})
-    await _wa_log(conv.get("account_id", "apico"), "AI", "OUT", str(mid), True, "")
+    # Masukkan balasan ke antrean outbound; background worker yang mengirim (rate-limit, typing, delay, splitting)
+    await _wa_enqueue_outbound(conv, reply, sender="AI")
 
 
 @api_router.get("/whatsapp/ai-config")
@@ -10571,7 +10555,7 @@ WA_SAFETY_DEFAULTS = {"messaging_enabled": True, "ai_auto_reply": True, "read_re
     "debounce_window": 3, "rate_per_minute": 8, "rate_per_hour": 60, "rate_per_day": 300,
     "max_followup": 2, "business_hours_enabled": False, "opening_time": "09:00", "closing_time": "18:00",
     "off_hours_behavior": "AUTO_RESPONSE", "away_message": "Halo Kak, pesan sudah kami terima. Tim kami akan membantu pada jam operasional.",
-    "marketing_enabled": False}
+    "marketing_enabled": False, "message_splitting": False, "split_max_chars": 320}
 
 
 async def _wa_safety():
@@ -10635,11 +10619,182 @@ async def wa_messaging_monitor(user: dict = Depends(require_role("super_admin"))
     human = await db.whatsapp_messages.count_documents({**q, "sender": "SALES"})
     failed = await db.whatsapp_logs.count_documents({"kind": "AI", "ok": False, "created_at": {"$gte": today}})
     rate_events = await db.whatsapp_logs.count_documents({"kind": "RATE_LIMIT", "created_at": {"$gte": today}})
+    followup_cap = await db.whatsapp_logs.count_documents({"kind": "FOLLOWUP_CAP", "created_at": {"$gte": today}})
     optout = await db.customers.count_documents({"wa_consent": "OPT_OUT"})
     handover = await db.whatsapp_conversations.count_documents({"status": "HUMAN HANDOVER"})
+    queued = await db.whatsapp_outbound_queue.count_documents({"status": {"$in": ["QUEUED", "SENDING"]}})
     return {"messages_today": inbound + outbound, "inbound": inbound, "outbound": outbound,
             "ai_responses": ai_resp, "human_responses": human, "failed_messages": failed,
-            "rate_limit_events": rate_events, "opt_out_customers": optout, "human_handover": handover}
+            "rate_limit_events": rate_events, "followup_capped": followup_cap, "opt_out_customers": optout,
+            "human_handover": handover, "queue_pending": queued}
+
+
+# ----------------------------------------------------------------------------
+# PHASE 10G — Increment 2: Debounce + Outbound Queue + Worker + Message Splitting
+# ----------------------------------------------------------------------------
+_WA_DEBOUNCE = {}  # conv_id -> {"texts": [...], "task": asyncio.Task}
+
+
+async def _wa_debounce_fire(conv_id):
+    """Tunggu jendela debounce, gabungkan pesan beruntun, lalu proses AI sekali."""
+    try:
+        s = await _wa_safety()
+        win = float(s.get("debounce_window") or 0)
+        if win > 0:
+            await asyncio.sleep(win)
+    except asyncio.CancelledError:
+        return
+    entry = _WA_DEBOUNCE.pop(conv_id, None)
+    if not entry:
+        return
+    combined = "\n".join([t for t in entry.get("texts", []) if t]).strip()
+    if not combined:
+        return
+    try:
+        await _wa_ai_process(conv_id, combined)
+    except Exception as e:
+        await _wa_log("apico", "AI", "IN", conv_id, False, str(e))
+
+
+def _wa_debounce_schedule(conv_id, text):
+    """Kumpulkan pesan masuk beruntun; reset timer tiap pesan baru."""
+    entry = _WA_DEBOUNCE.get(conv_id)
+    if entry is None:
+        entry = {"texts": []}
+        _WA_DEBOUNCE[conv_id] = entry
+    entry["texts"].append(text)
+    old = entry.get("task")
+    if old and not old.done():
+        old.cancel()
+    entry["task"] = asyncio.create_task(_wa_debounce_fire(conv_id))
+
+
+async def _wa_enqueue_outbound(conv, content, sender="AI"):
+    await db.whatsapp_outbound_queue.insert_one({
+        "conversation_id": str(conv["_id"]), "wa_number": conv["wa_number"],
+        "account_id": conv.get("account_id", "apico"), "content": content, "sender": sender,
+        "status": "QUEUED", "attempts": 0, "created_at": now_iso(), "updated_at": now_iso()})
+
+
+def _wa_split_message(text, max_chars):
+    """Pecah balasan panjang menjadi beberapa bubble natural (per paragraf/kalimat)."""
+    import re as _re
+    text = (text or "").strip()
+    if len(text) <= max_chars:
+        return [text] if text else []
+    chunks, cur = [], ""
+    blocks = [b.strip() for b in text.split("\n\n") if b.strip()]
+    for block in blocks:
+        pieces = [block]
+        if len(block) > max_chars:
+            pieces = _re.split(r"(?<=[.!?])\s+", block)
+        for p in pieces:
+            p = p.strip()
+            if not p:
+                continue
+            if len(p) > max_chars:
+                for i in range(0, len(p), max_chars):
+                    chunks.append(p[i:i + max_chars])
+                continue
+            if not cur:
+                cur = p
+            elif len(cur) + 1 + len(p) <= max_chars:
+                cur = f"{cur} {p}"
+            else:
+                chunks.append(cur); cur = p
+        if cur:
+            chunks.append(cur); cur = ""
+    if cur:
+        chunks.append(cur)
+    return [c for c in chunks if c]
+
+
+async def _wa_process_queue_item(item):
+    """Item sudah diklaim (status SENDING) oleh worker. Kirim via provider dgn typing/delay/splitting."""
+    conv = None
+    cid = item.get("conversation_id")
+    if cid and ObjectId.is_valid(cid):
+        conv = await db.whatsapp_conversations.find_one({"_id": ObjectId(cid)})
+    if not conv:
+        await db.whatsapp_outbound_queue.update_one({"_id": item["_id"]}, {"$set": {"status": "FAILED", "error": "conversation not found", "updated_at": now_iso()}})
+        return
+    s = await _wa_safety()
+    ok_rate, rk = await _wa_rate_check(s)
+    if not ok_rate:
+        if int(item.get("attempts") or 0) > 30:
+            await db.whatsapp_outbound_queue.update_one({"_id": item["_id"]}, {"$set": {"status": "FAILED", "error": f"rate limit {rk}", "updated_at": now_iso()}})
+        else:
+            from datetime import timedelta
+            nxt = (datetime.now(timezone.utc) + timedelta(seconds=30)).isoformat()
+            await db.whatsapp_outbound_queue.update_one({"_id": item["_id"]}, {"$set": {"status": "QUEUED", "next_attempt_at": nxt, "error": f"rate limit {rk}", "updated_at": now_iso()}})
+        await _wa_log(conv.get("account_id", "apico"), "RATE_LIMIT", "OUT", cid, False, f"rate limit {rk}")
+        return
+    svc = await get_wa_provider()
+    reply = item.get("content") or ""
+    bubbles = _wa_split_message(reply, int(s.get("split_max_chars") or 320)) if s.get("message_splitting") else [reply]
+    if not bubbles:
+        bubbles = [reply]
+    first_mid = None
+    ok_any = False
+    last_err = ""
+    for bub in bubbles:
+        mid = f"ai-{now_iso()}"
+        try:
+            if s.get("typing_indicator", True):
+                await svc.send_typing(conv["wa_number"])
+            await asyncio.sleep(_wa_typing_delay(bub, s))
+            res = await svc.send_message(conv["wa_number"], "text", content=bub)
+            if res.get("ok"):
+                ok_any = True
+                data = res.get("data") or {}
+                inner = data.get("data") if isinstance(data, dict) else {}
+                mid = (inner or {}).get("message_id") or data.get("message_id") or mid
+            else:
+                last_err = res.get("error", "")
+        except Exception as e:
+            last_err = str(e)
+        if first_mid is None:
+            first_mid = mid
+    first_mid = first_mid or f"ai-{now_iso()}"
+    await db.whatsapp_messages.insert_one({"message_id": str(first_mid), "conversation_id": cid, "account_id": conv.get("account_id", "apico"),
+        "external_provider": APICO_PROVIDER, "external_message_id": str(first_mid),
+        "sender": item.get("sender", "AI"), "sender_type": item.get("sender", "AI"), "receiver": conv["wa_number"], "direction": "OUTBOUND",
+        "type": "text", "message_type": "text", "content": reply, "timestamp": now_iso(), "created_at": now_iso(), "sent_at": now_iso(),
+        "ai_generated": item.get("sender", "AI") == "AI", "human_generated": False,
+        "delivery_status": "SENT" if ok_any else "FAILED", "status": "SENT" if ok_any else "FAILED", "read_status": False})
+    await db.whatsapp_conversations.update_one({"_id": conv["_id"]}, {"$set": {"last_message": reply[:200], "last_activity": now_iso(), "status": "WAITING CUSTOMER"}})
+    await db.whatsapp_outbound_queue.update_one({"_id": item["_id"]}, {"$set": {
+        "status": "SENT" if ok_any else "FAILED", "message_id": str(first_mid),
+        "bubbles": len(bubbles), "error": "" if ok_any else last_err, "sent_at": now_iso(), "updated_at": now_iso()}})
+    await _wa_log(conv.get("account_id", "apico"), "AI", "OUT", str(first_mid), ok_any, "" if ok_any else last_err)
+
+
+async def _wa_outbound_worker():
+    """Background worker: klaim item QUEUED secara atomik lalu kirim."""
+    logger.info("[WA QUEUE] outbound worker started")
+    while True:
+        try:
+            nowi = now_iso()
+            item = await db.whatsapp_outbound_queue.find_one_and_update(
+                {"status": "QUEUED", "$or": [{"next_attempt_at": {"$exists": False}}, {"next_attempt_at": {"$lte": nowi}}]},
+                {"$set": {"status": "SENDING", "updated_at": nowi}, "$inc": {"attempts": 1}},
+                sort=[("created_at", 1)])
+            if not item:
+                await asyncio.sleep(1.0)
+                continue
+            await _wa_process_queue_item(item)
+        except Exception as e:
+            logger.error(f"[WA QUEUE] worker error: {e}")
+            await asyncio.sleep(1.0)
+
+
+@api_router.get("/whatsapp/outbound-queue")
+async def wa_outbound_queue(user: dict = Depends(require_role("super_admin"))):
+    items = await db.whatsapp_outbound_queue.find({}).sort("created_at", -1).to_list(100)
+    counts = {}
+    for st in ["QUEUED", "SENDING", "SENT", "FAILED"]:
+        counts[st] = await db.whatsapp_outbound_queue.count_documents({"status": st})
+    return {"items": [serialize(i) for i in items], "counts": counts}
 
 
 app.include_router(api_router)
@@ -10898,6 +11053,7 @@ async def on_startup():
         logger.info("Object storage initialized")
     except Exception as e:
         logger.error(f"Storage init failed: {e}")
+    asyncio.create_task(_wa_outbound_worker())
     logger.info("Safar CRM startup: indexes + seed complete")
 
 

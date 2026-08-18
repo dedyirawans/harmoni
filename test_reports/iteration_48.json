@@ -1,0 +1,43 @@
+{
+  "summary": "Frontend-only verification of WhatsApp Integration 'Safety & Messaging' tab (Increment 2 of Phase 10G). Verified rendering of Messaging Monitor, all setting sections, switch toggles, number field edits, business hours + off_hours_behavior select, Save (PUT /api/whatsapp/safety) persistence across reload, and RBAC page-level guard for Sales role. All acceptance criteria PASS.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "WhatsApp Integration - global (all tabs)", "issues": ["Recurrent console warning: 'The width(-1) and height(-1) of chart should be greater than 0' from Recharts ResponsiveContainer — likely a hidden/collapsed chart parent without minWidth/minHeight. Not blocking, but noisy. Applies to WA page charts."]}
+    ]
+  },
+  "test_report_links": ["/app/test_reports/wa_safety_tab.png", "/app/test_reports/wa_sales_rbac.png"],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "SafetyTab uses .catch(() => setS({})) which silently swallows errors — consider surfacing a toast on load failure so users know settings couldn't be loaded.",
+    "Recharts ResponsiveContainer warnings on WhatsApp page indicate a chart is being rendered in a hidden/zero-size container (probably a tab not visible on mount). Add explicit min height/width or defer chart mount until tab active."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "N/A (skipped per request)", "frontend": "100%"},
+  "test_credentials": "Super Admin dedyirawan18@gmail.com/Admin@123 and Sales sales@safarcrm.com/Sales@123 — both work.",
+  "seed_data_creation": "None. Modified live safety settings via UI to verify persistence (debounce=9, max_followup=4, min_delay=3, business_hours_enabled=true, opening_time=08:00, closing_time=17:00, off_hours_behavior=first option). These persisted after reload. Main agent may reset if desired.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Safety & Messaging tab fully functional. Persistence + RBAC verified. Note: settings were modified during test (debounce=9, max_followup=4, min_delay=3, BH enabled 08:00-17:00). Reset to defaults if needed for downstream tests.",
+  "detailed_test_results": {
+    "super_admin_flow": {
+      "login": "PASS — landed on /dashboard",
+      "navigate_to_whatsapp": "PASS — /whatsapp loaded",
+      "click_safety_tab": "PASS — wa-safety-tab visible",
+      "monitor_card_visible": "PASS — Messaging Monitor (24 jam) with metric cards + queue count badges (QUEUED/SENDING/SENT/FAILED)",
+      "all_sections_render": "PASS — Messaging & AI, Human-like Delay, Debounce & Splitting, Rate Limit & Follow-up Cap, Business Hours all present",
+      "toggle_switches": "PASS — wa-safety-splitting, wa-safety-marketing toggled",
+      "edit_number_fields": "PASS — debounce, max-followup, min-delay edited",
+      "save_button": "PASS — toast 'Pengaturan keamanan disimpan' displayed",
+      "persistence_reload": "PASS — debounce=9, max_fup=4, min_delay=3 persisted after full reload",
+      "business_hours": "PASS — enabled toggle checked, opening_time=08:00, closing_time=17:00, off_hours_behavior select worked (3 options), persisted"
+    },
+    "sales_rbac_flow": {
+      "login": "PASS",
+      "whatsapp_menu_hidden": "PASS — sidebar does not contain WhatsApp entry (menu items: My Dashboard, My CRM, My Sales, My Activity, Follow Ups, My Tasks, Quotations, Bookings, Packages, Departures, My Commission, Reports, Cancellations, Notifications)",
+      "direct_url_guarded": "PASS — /whatsapp shows '403 — Forbidden' page with 'Back to dashboard' CTA; safety tab not rendered"
+    }
+  }
+}

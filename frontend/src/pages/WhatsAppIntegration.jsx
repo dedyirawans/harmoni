@@ -491,6 +491,149 @@ function JourneyTab() {
   );
 }
 
+// ============================================================ Safety & Messaging (Phase 10G)
+function SafetyRow({ label, hint, children }) {
+  return (
+    <div className="flex items-center justify-between gap-4 py-2">
+      <div><div className="text-sm font-medium text-slate-700">{label}</div>{hint && <div className="text-xs text-slate-400">{hint}</div>}</div>
+      <div className="shrink-0">{children}</div>
+    </div>
+  );
+}
+
+function SafetyTab() {
+  const [s, setS] = useState(null);
+  const [mon, setMon] = useState(null);
+  const [queue, setQueue] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const upd = (k, v) => setS((p) => ({ ...p, [k]: v }));
+  const num = (k, v) => upd(k, v === "" ? "" : Number(v));
+
+  const loadMon = useCallback(() => {
+    api.get("/whatsapp/messaging-monitor").then((r) => setMon(r.data)).catch(() => {});
+    api.get("/whatsapp/outbound-queue").then((r) => setQueue(r.data)).catch(() => {});
+  }, []);
+  useEffect(() => {
+    api.get("/whatsapp/safety").then((r) => setS(r.data)).catch(() => { setS({}); toast.error("Gagal memuat pengaturan keamanan"); });
+    loadMon();
+    const t = setInterval(loadMon, 8000);
+    return () => clearInterval(t);
+  }, [loadMon]);
+
+  const save = async () => {
+    setBusy(true);
+    try { const r = await api.put("/whatsapp/safety", s); setS(r.data); toast.success("Pengaturan keamanan disimpan"); }
+    catch (e) { err(e); } finally { setBusy(false); }
+  };
+  if (!s) return <div className="p-8 flex justify-center"><Loader2 className="h-6 w-6 animate-spin text-blue-600" /></div>;
+
+  const cards = mon ? [
+    ["Pesan 24 jam", mon.messages_today, "text-slate-700"], ["Masuk", mon.inbound, "text-blue-600"],
+    ["Keluar", mon.outbound, "text-emerald-600"], ["Balasan AI", mon.ai_responses, "text-indigo-600"],
+    ["Balasan CS", mon.human_responses, "text-slate-700"], ["Gagal", mon.failed_messages, "text-red-600"],
+    ["Kena Rate Limit", mon.rate_limit_events, "text-amber-600"], ["Follow-up dibatasi", mon.followup_capped, "text-amber-600"],
+    ["Opt-out", mon.opt_out_customers, "text-slate-700"], ["Handover", mon.human_handover, "text-red-600"],
+    ["Antrean pending", mon.queue_pending, "text-blue-600"],
+  ] : [];
+
+  return (
+    <div className="space-y-4 max-w-4xl" data-testid="wa-safety-tab">
+      <div className="p-3 rounded-lg bg-amber-50 border border-amber-100 text-sm text-amber-800">
+        Kontrol keamanan & gaya pesan manusiawi (anti-spam). Delay & typing bersifat natural untuk UX — <b>bukan</b> untuk mengelabui WhatsApp.
+      </div>
+
+      {/* Monitor */}
+      <Card><CardContent className="p-5 space-y-3">
+        <div className="flex items-center justify-between">
+          <span className="font-semibold text-slate-700 flex items-center gap-2"><Activity className="h-4 w-4 text-blue-600" />Messaging Monitor (24 jam)</span>
+          <Button size="sm" variant="outline" onClick={loadMon} data-testid="wa-safety-refresh-monitor"><RefreshCw className="h-3.5 w-3.5 mr-1" />Muat ulang</Button>
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-3">
+          {cards.map(([lbl, val, cls]) => (
+            <div key={lbl} className="rounded-lg border border-slate-100 bg-slate-50/60 p-3" data-testid={`wa-mon-${lbl}`}>
+              <div className={`text-xl font-bold ${cls}`}>{val ?? 0}</div>
+              <div className="text-[11px] text-slate-500">{lbl}</div>
+            </div>
+          ))}
+        </div>
+        {queue && (
+          <div className="flex flex-wrap gap-2 pt-1">
+            {Object.entries(queue.counts || {}).map(([k, v]) => (
+              <Badge key={k} variant="outline" className="text-[11px] bg-white" data-testid={`wa-queue-count-${k}`}>Antrean {k}: {v}</Badge>
+            ))}
+          </div>
+        )}
+      </CardContent></Card>
+
+      {/* Messaging & AI */}
+      <Card><CardContent className="p-5 space-y-1">
+        <div className="font-semibold text-slate-700 mb-2">Messaging & AI</div>
+        <SafetyRow label="Messaging aktif" hint="Master switch pengiriman WhatsApp"><Switch checked={!!s.messaging_enabled} onCheckedChange={(v) => upd("messaging_enabled", v)} data-testid="wa-safety-messaging-enabled" /></SafetyRow>
+        <SafetyRow label="AI auto-reply" hint="AI membalas otomatis pesan masuk"><Switch checked={!!s.ai_auto_reply} onCheckedChange={(v) => upd("ai_auto_reply", v)} data-testid="wa-safety-ai-reply" /></SafetyRow>
+        <SafetyRow label="Read receipt" hint="Tandai pesan customer sudah dibaca"><Switch checked={!!s.read_receipt} onCheckedChange={(v) => upd("read_receipt", v)} data-testid="wa-safety-read-receipt" /></SafetyRow>
+        <SafetyRow label="Typing indicator" hint="Tampilkan 'sedang mengetik' sebelum membalas"><Switch checked={!!s.typing_indicator} onCheckedChange={(v) => upd("typing_indicator", v)} data-testid="wa-safety-typing" /></SafetyRow>
+        <SafetyRow label="Marketing enabled" hint="Izinkan pesan marketing/broadcast promosi"><Switch checked={!!s.marketing_enabled} onCheckedChange={(v) => upd("marketing_enabled", v)} data-testid="wa-safety-marketing" /></SafetyRow>
+      </CardContent></Card>
+
+      {/* Human-like delay */}
+      <Card><CardContent className="p-5 space-y-3">
+        <div className="font-semibold text-slate-700">Human-like Delay</div>
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+          <div><Label>Delay min (detik)</Label><Input type="number" step="0.5" value={s.min_delay ?? ""} onChange={(e) => num("min_delay", e.target.value)} data-testid="wa-safety-min-delay" /></div>
+          <div><Label>Delay maks (detik)</Label><Input type="number" step="0.5" value={s.max_delay ?? ""} onChange={(e) => num("max_delay", e.target.value)} data-testid="wa-safety-max-delay" /></div>
+          <div><Label>Kecepatan ketik (char/dtk)</Label><Input type="number" value={s.typing_speed ?? ""} onChange={(e) => num("typing_speed", e.target.value)} data-testid="wa-safety-typing-speed" /></div>
+        </div>
+      </CardContent></Card>
+
+      {/* Debounce & splitting */}
+      <Card><CardContent className="p-5 space-y-3">
+        <div className="font-semibold text-slate-700">Debounce & Message Splitting</div>
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 items-end">
+          <div><Label>Debounce window (detik)</Label><Input type="number" step="1" value={s.debounce_window ?? ""} onChange={(e) => num("debounce_window", e.target.value)} data-testid="wa-safety-debounce" /><div className="text-[11px] text-slate-400 mt-1">Gabungkan pesan beruntun sebelum AI membalas</div></div>
+          <div><Label>Maks karakter per bubble</Label><Input type="number" value={s.split_max_chars ?? ""} onChange={(e) => num("split_max_chars", e.target.value)} data-testid="wa-safety-split-max" /></div>
+          <SafetyRow label="Message splitting" hint="Pecah balasan panjang jadi beberapa bubble"><Switch checked={!!s.message_splitting} onCheckedChange={(v) => upd("message_splitting", v)} data-testid="wa-safety-splitting" /></SafetyRow>
+        </div>
+      </CardContent></Card>
+
+      {/* Rate limits & follow-up */}
+      <Card><CardContent className="p-5 space-y-3">
+        <div className="font-semibold text-slate-700">Rate Limit & Follow-up Cap</div>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <div><Label>Per menit</Label><Input type="number" value={s.rate_per_minute ?? ""} onChange={(e) => num("rate_per_minute", e.target.value)} data-testid="wa-safety-rpm" /></div>
+          <div><Label>Per jam</Label><Input type="number" value={s.rate_per_hour ?? ""} onChange={(e) => num("rate_per_hour", e.target.value)} data-testid="wa-safety-rph" /></div>
+          <div><Label>Per hari</Label><Input type="number" value={s.rate_per_day ?? ""} onChange={(e) => num("rate_per_day", e.target.value)} data-testid="wa-safety-rpd" /></div>
+          <div><Label>Maks follow-up</Label><Input type="number" value={s.max_followup ?? ""} onChange={(e) => num("max_followup", e.target.value)} data-testid="wa-safety-max-followup" /><div className="text-[11px] text-slate-400 mt-1">Tanpa balasan customer</div></div>
+        </div>
+      </CardContent></Card>
+
+      {/* Business hours */}
+      <Card><CardContent className="p-5 space-y-3">
+        <div className="font-semibold text-slate-700">Business Hours / Out-of-Office</div>
+        <SafetyRow label="Aktifkan jam kerja" hint="Batasi auto-reply hanya pada jam operasional (UTC)"><Switch checked={!!s.business_hours_enabled} onCheckedChange={(v) => upd("business_hours_enabled", v)} data-testid="wa-safety-bh-enabled" /></SafetyRow>
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+          <div><Label>Jam buka</Label><Input type="time" value={s.opening_time || ""} onChange={(e) => upd("opening_time", e.target.value)} data-testid="wa-safety-open" /></div>
+          <div><Label>Jam tutup</Label><Input type="time" value={s.closing_time || ""} onChange={(e) => upd("closing_time", e.target.value)} data-testid="wa-safety-close" /></div>
+          <div><Label>Perilaku di luar jam</Label>
+            <Select value={s.off_hours_behavior || "AUTO_RESPONSE"} onValueChange={(v) => upd("off_hours_behavior", v)}>
+              <SelectTrigger data-testid="wa-safety-offhours"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="AUTO_RESPONSE">Tetap balas AI</SelectItem>
+                <SelectItem value="WAIT_UNTIL_BUSINESS_HOURS">Kirim pesan away</SelectItem>
+                <SelectItem value="HUMAN_HANDOVER">Handover ke manusia</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+        <div><Label>Pesan away (di luar jam)</Label><Textarea rows={2} value={s.away_message || ""} onChange={(e) => upd("away_message", e.target.value)} data-testid="wa-safety-away-msg" /></div>
+      </CardContent></Card>
+
+      <div className="flex justify-end">
+        <Button onClick={save} disabled={busy} data-testid="wa-safety-save">{busy ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Save className="h-4 w-4 mr-1" />}Simpan Pengaturan</Button>
+      </div>
+    </div>
+  );
+}
+
 // ============================================================ Main
 const TABS = [
   ["provider", "Provider", PlugZap],
@@ -500,6 +643,7 @@ const TABS = [
   ["ai-style", "AI Style", Palette],
   ["ai-rules", "AI Rules", ShieldAlert],
   ["handover", "Human Handover", UserCog],
+  ["safety", "Safety & Messaging", ShieldAlert],
   ["journey", "AI Journey", Bot],
   ["templates", "Templates", FileText],
   ["broadcast", "Broadcast", Megaphone],
@@ -542,6 +686,7 @@ export default function WhatsAppIntegration() {
           <TabsContent value="ai-style">{cfg ? <AiConfigTab cfg={cfg} setCfg={setCfg} section="style" /> : aiPending}</TabsContent>
           <TabsContent value="ai-rules">{cfg ? <AiConfigTab cfg={cfg} setCfg={setCfg} section="rules" /> : aiPending}</TabsContent>
           <TabsContent value="handover"><HandoverTab /></TabsContent>
+          <TabsContent value="safety"><SafetyTab /></TabsContent>
           <TabsContent value="journey"><JourneyTab /></TabsContent>
           <TabsContent value="templates"><TemplatesTab /></TabsContent>
           <TabsContent value="broadcast"><BroadcastTab /></TabsContent>
