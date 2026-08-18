@@ -42,6 +42,7 @@ import N8N from "@/pages/N8N";
 import WhatsAppIntegration from "@/pages/WhatsAppIntegration";
 import KnowledgeBase from "@/pages/KnowledgeBase";
 import CommunicationStyle from "@/pages/CommunicationStyle";
+import AITools from "@/pages/AITools";
 import Tasks from "@/pages/Tasks";
 import ApprovalCenter from "@/pages/ApprovalCenter";
 
@@ -73,6 +74,7 @@ const PAGES = {
   "/whatsapp": WhatsAppIntegration,
   "/knowledge-base": KnowledgeBase,
   "/communication-style": CommunicationStyle,
+  "/ai-tools": AITools,
   "/tasks": Tasks,
   "/approval-center": ApprovalCenter,
 };

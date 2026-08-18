@@ -9636,6 +9636,425 @@ async def comm_preview(body: dict, user: dict = Depends(require_role("super_admi
             "knowledge_used": ctx["knowledge_used"], "package_used": ctx["package_used"]}
 
 
+# ============================================================================
+# PHASE 10D — AI Agent CRM Tools & Actions (Super Admin)
+# AI interacts with CRM ONLY through this secure tool layer (no direct DB access).
+# ============================================================================
+AI_TOOL_REGISTRY = [
+    # READ
+    {"tool": "SEARCH_CUSTOMER", "type": "READ", "risk": "NORMAL", "confirm": False, "label": "Search Customer"},
+    {"tool": "GET_CUSTOMER", "type": "READ", "risk": "NORMAL", "confirm": False, "label": "Get Customer"},
+    {"tool": "SEARCH_PACKAGE", "type": "READ", "risk": "NORMAL", "confirm": False, "label": "Search Package"},
+    {"tool": "GET_PACKAGE", "type": "READ", "risk": "NORMAL", "confirm": False, "label": "Get Package"},
+    {"tool": "GET_ITINERARY", "type": "READ", "risk": "NORMAL", "confirm": False, "label": "Get Itinerary"},
+    {"tool": "CHECK_SEAT", "type": "READ", "risk": "NORMAL", "confirm": False, "label": "Check Seat Availability"},
+    {"tool": "GET_DEPARTURE", "type": "READ", "risk": "NORMAL", "confirm": False, "label": "Get Departure"},
+    {"tool": "GET_PAYMENT_STATUS", "type": "READ", "risk": "NORMAL", "confirm": False, "label": "Get Payment Status"},
+    {"tool": "GET_BOOKING", "type": "READ", "risk": "NORMAL", "confirm": False, "label": "Get Booking"},
+    {"tool": "GET_FAQ", "type": "READ", "risk": "NORMAL", "confirm": False, "label": "Get FAQ"},
+    {"tool": "GET_COMPANY_POLICY", "type": "READ", "risk": "NORMAL", "confirm": False, "label": "Get Company Policy"},
+    # WRITE
+    {"tool": "CREATE_CUSTOMER", "type": "WRITE", "risk": "NORMAL", "confirm": False, "label": "Create Customer"},
+    {"tool": "UPDATE_CUSTOMER", "type": "WRITE", "risk": "NORMAL", "confirm": False, "label": "Update Customer"},
+    {"tool": "CREATE_LEAD", "type": "WRITE", "risk": "NORMAL", "confirm": False, "label": "Create Lead"},
+    {"tool": "CREATE_ORDER", "type": "WRITE", "risk": "TRANSACTIONAL", "confirm": True, "label": "Create Order"},
+    {"tool": "CREATE_BOOKING", "type": "WRITE", "risk": "TRANSACTIONAL", "confirm": True, "label": "Create Booking"},
+    {"tool": "CREATE_FOLLOWUP", "type": "WRITE", "risk": "NORMAL", "confirm": False, "label": "Create Follow Up"},
+    {"tool": "ASSIGN_SALES", "type": "WRITE", "risk": "NORMAL", "confirm": False, "label": "Assign Sales"},
+    {"tool": "REQUEST_HUMAN_HANDOVER", "type": "WRITE", "risk": "NORMAL", "confirm": False, "label": "Request Human Handover"},
+    # HIGH RISK — AI may only create an approval REQUEST, never execute directly
+    {"tool": "CANCEL_BOOKING", "type": "WRITE", "risk": "HIGH_RISK", "confirm": True, "label": "Cancel Booking"},
+    {"tool": "REFUND", "type": "WRITE", "risk": "HIGH_RISK", "confirm": True, "label": "Refund"},
+    {"tool": "CHANGE_PRICE", "type": "WRITE", "risk": "HIGH_RISK", "confirm": True, "label": "Change Price"},
+    {"tool": "CHANGE_HPP", "type": "WRITE", "risk": "HIGH_RISK", "confirm": True, "label": "Change HPP"},
+    {"tool": "CHANGE_TAX", "type": "WRITE", "risk": "HIGH_RISK", "confirm": True, "label": "Change Tax"},
+    {"tool": "CHANGE_COMMISSION", "type": "WRITE", "risk": "HIGH_RISK", "confirm": True, "label": "Change Commission"},
+    {"tool": "CHANGE_ACCOUNTING", "type": "WRITE", "risk": "HIGH_RISK", "confirm": True, "label": "Change Accounting"},
+    {"tool": "DELETE_TRANSACTION", "type": "WRITE", "risk": "HIGH_RISK", "confirm": True, "label": "Delete Transaction"},
+]
+AI_TOOL_MAP = {t["tool"]: t for t in AI_TOOL_REGISTRY}
+
+
+async def _ai_tool_enabled(tool):
+    doc = await db.ai_tool_permissions.find_one({"tool": tool})
+    if doc is not None:
+        return bool(doc.get("enabled", True))
+    return True  # default enabled; Super Admin can disable
+
+
+async def _ai_audit(tool, params, result, ok, ctx, approval_required=False):
+    await db.ai_action_logs.insert_one({
+        "agent": "AI AGENT", "conversation_id": (ctx or {}).get("conversation_id"),
+        "customer_id": (ctx or {}).get("customer_id"), "tool": tool,
+        "parameters": params if isinstance(params, dict) else {}, "result": (result if isinstance(result, dict) else {"value": str(result)[:500]}),
+        "ok": bool(ok), "approval_required": bool(approval_required),
+        "user_approval": (ctx or {}).get("approved_by"), "timestamp": now_iso()})
+
+
+def _ai_pkg_public(p):
+    return {"id": str(p["_id"]), "package_name": p.get("package_name"), "package_code": p.get("package_code"),
+            "package_type": p.get("product_type"), "sub_category": p.get("sub_category"),
+            "destination": p.get("destination"), "country": p.get("country"), "duration": p.get("duration"),
+            "selling_price": p.get("selling_price"), "child_price": p.get("child_price"),
+            "infant_price": p.get("infant_price"), "description": p.get("description"),
+            "terms": p.get("terms"), "status": p.get("status")}  # HPP/cost/margin never exposed
+
+
+# ---- Individual tool handlers (each returns a dict; raise on genuine failure) ----
+async def _ait_search_customer(pr):
+    q = (pr.get("q") or pr.get("query") or "").strip()
+    if not q:
+        return {"results": []}
+    rx = {"$regex": _re.escape(q), "$options": "i"}
+    docs = await db.customers.find({"is_deleted": {"$ne": True}, "$or": [
+        {"full_name": rx}, {"whatsapp": rx}, {"phone": rx}, {"email": rx}, {"customer_code": rx}]}).limit(10).to_list(10)
+    return {"results": [{"id": str(c["_id"]), "full_name": c.get("full_name"), "whatsapp": c.get("whatsapp"),
+                         "email": c.get("email"), "customer_code": c.get("customer_code")} for c in docs]}
+
+
+async def _ait_get_customer(pr):
+    cid = pr.get("customer_id")
+    c = await db.customers.find_one({"_id": ObjectId(cid)}) if cid and ObjectId.is_valid(cid) else None
+    if not c:
+        raise ValueError("Customer tidak ditemukan")
+    return {"id": str(c["_id"]), "full_name": c.get("full_name"), "whatsapp": c.get("whatsapp"),
+            "email": c.get("email"), "customer_type": c.get("customer_type"), "city": c.get("city"),
+            "sales_pic_name": c.get("sales_pic_name"), "customer_code": c.get("customer_code")}
+
+
+async def _ait_search_package(pr):
+    q = (pr.get("q") or pr.get("query") or "").strip()
+    query = {"status": "ACTIVE"}
+    if q:
+        rx = {"$regex": _re.escape(q), "$options": "i"}
+        query["$or"] = [{"package_name": rx}, {"package_code": rx}, {"destination": rx}, {"product_type": rx}]
+    docs = await db.packages.find(query).limit(15).to_list(15)
+    return {"results": [_ai_pkg_public(p) for p in docs]}
+
+
+async def _ait_get_package(pr):
+    pid = pr.get("package_id")
+    p = await db.packages.find_one({"_id": ObjectId(pid)}) if pid and ObjectId.is_valid(pid) else None
+    if not p:
+        raise ValueError("Package tidak ditemukan")
+    return _ai_pkg_public(p)
+
+
+async def _ait_get_itinerary(pr):
+    pid = pr.get("package_id")
+    p = await db.packages.find_one({"_id": ObjectId(pid)}) if pid and ObjectId.is_valid(pid) else None
+    if not p:
+        raise ValueError("Package tidak ditemukan")
+    return {"package_name": p.get("package_name"), "description": p.get("description"), "terms": p.get("terms")}
+
+
+async def _ait_check_seat(pr):
+    a = await _availability(pr.get("package_id"), pr.get("departure_id"))
+    if not a:
+        raise ValueError("Package tidak ditemukan")
+    return a
+
+
+async def _ait_get_departure(pr):
+    pid = pr.get("package_id")
+    if pr.get("departure_id") and ObjectId.is_valid(pr["departure_id"]):
+        d = await db.departures.find_one({"_id": ObjectId(pr["departure_id"])})
+        return compute_departure(serialize(d)) if d else {}
+    deps = await db.departures.find({"package_id": pid}).sort("departure_date", 1).to_list(20)
+    return {"departures": [compute_departure(serialize(d)) for d in deps]}
+
+
+async def _ait_get_payment_status(pr):
+    q = {}
+    if pr.get("booking_id"):
+        q["booking_id"] = pr["booking_id"]
+    elif pr.get("customer_id"):
+        q["customer_id"] = pr["customer_id"]
+    else:
+        raise ValueError("booking_id atau customer_id wajib diisi")
+    invs = await db.invoices.find(q).to_list(50)
+    return {"invoices": [{"invoice_number": i.get("invoice_number"), "total": i.get("total"),
+                          "paid_amount": i.get("paid_amount"), "outstanding": i.get("outstanding"),
+                          "status": i.get("status")} for i in invs],
+            "total_outstanding": sum(float(i.get("outstanding") or 0) for i in invs)}
+
+
+async def _ait_get_booking(pr):
+    bid = pr.get("booking_id")
+    b = await db.bookings.find_one({"_id": ObjectId(bid)}) if bid and ObjectId.is_valid(bid) else None
+    if not b:
+        raise ValueError("Booking tidak ditemukan")
+    return {"id": str(b["_id"]), "booking_number": b.get("booking_number"), "customer_name": b.get("customer_name"),
+            "package_name": b.get("package_name"), "departure_date": b.get("departure_date"), "pax": b.get("pax"),
+            "total": b.get("total"), "status": b.get("status"), "payment_status": b.get("payment_status"),
+            "booking_source": b.get("booking_source")}
+
+
+async def _ait_get_faq(pr):
+    q = (pr.get("q") or "").strip()
+    query = {"status": "ACTIVE"}
+    if q:
+        rx = {"$regex": _re.escape(q), "$options": "i"}
+        query["$or"] = [{"question": rx}, {"answer": rx}, {"keywords": rx}]
+    docs = await db.knowledge_faqs.find(query).limit(20).to_list(20)
+    return {"faqs": [{"question": f.get("question"), "answer": f.get("answer"), "category": f.get("category")} for f in docs]}
+
+
+async def _ait_get_company_policy(pr):
+    cat = pr.get("category")
+    arts = await _kb_active_articles()
+    if cat:
+        arts = [a for a in arts if a.get("category") == cat]
+    else:
+        arts = [a for a in arts if a.get("category") in KB_POLICY_CATS]
+    return {"policies": [{"title": a.get("title"), "category": a.get("category"), "content": a.get("content")} for a in arts]}
+
+
+async def _ait_create_customer(pr):
+    name = (pr.get("full_name") or "").strip()
+    wa = (pr.get("whatsapp") or pr.get("phone") or "").strip()
+    if not name and not wa:
+        raise ValueError("full_name atau whatsapp wajib diisi")
+    if wa:
+        ex = await db.customers.find_one({"whatsapp": wa})
+        if ex:
+            return {"existing": True, "id": str(ex["_id"]), "full_name": ex.get("full_name")}
+    count = await db.customers.count_documents({})
+    doc = {"customer_code": f"CUST-{count + 1:05d}", "full_name": name or wa, "whatsapp": wa,
+           "email": pr.get("email", ""), "city": pr.get("city", ""), "customer_type": "Prospect",
+           "customer_source": "WHATSAPP AI", "sales_pic_id": None, "sales_pic_name": "AUTO SALES",
+           "attribution": "AUTO SALES", "created_at": now_iso(), "created_by": "AI AGENT"}
+    r = await db.customers.insert_one(doc)
+    return {"existing": False, "id": str(r.inserted_id), "full_name": doc["full_name"]}
+
+
+async def _ait_update_customer(pr):
+    cid = pr.get("customer_id")
+    c = await db.customers.find_one({"_id": ObjectId(cid)}) if cid and ObjectId.is_valid(cid) else None
+    if not c:
+        raise ValueError("Customer tidak ditemukan")
+    upd = {k: pr[k] for k in ("full_name", "email", "city", "whatsapp", "notes") if k in pr}
+    if not upd:
+        raise ValueError("Tidak ada field yang diubah")
+    await db.customers.update_one({"_id": c["_id"]}, {"$set": upd})
+    return {"id": cid, "updated": list(upd.keys())}
+
+
+async def _ait_create_lead(pr):
+    cid = pr.get("customer_id")
+    cust = await db.customers.find_one({"_id": ObjectId(cid)}) if cid and ObjectId.is_valid(cid) else None
+    if not cust:
+        raise ValueError("Customer tidak ditemukan")
+    count = await db.leads.count_documents({})
+    doc = {"lead_code": f"LEAD-{count + 1:05d}", "customer_id": cid, "customer_name": cust.get("full_name"),
+           "source": "WHATSAPP AI", "interested_package": pr.get("interested_package", ""),
+           "destination": pr.get("destination", ""), "pax": int(pr.get("pax") or 0),
+           "budget": float(pr.get("budget") or 0), "status": "NEW", "sales_pic_id": None,
+           "sales_pic_name": "AUTO SALES", "attribution": "AUTO SALES", "last_contact": now_iso(),
+           "created_at": now_iso(), "created_by": "AI AGENT", "notes": pr.get("notes", "")}
+    r = await db.leads.insert_one(doc)
+    return {"id": str(r.inserted_id), "lead_code": doc["lead_code"]}
+
+
+async def _ait_create_followup(pr):
+    cid = pr.get("customer_id")
+    await create_task(pr.get("title") or "Follow Up (AI)", customer_id=cid, priority=pr.get("priority", "MEDIUM"),
+                      notes=pr.get("notes", ""), created_by="AI AGENT", source="whatsapp_ai")
+    return {"created": True, "customer_id": cid}
+
+
+async def _ai_create_booking(pr):
+    """Mirror AUTO SALES booking creation, tagged as AI. Full CRM validation, seat reserve, idempotency."""
+    ext = pr.get("external_booking_id")
+    if ext:
+        dup = await db.bookings.find_one({"external_booking_id": ext})
+        if dup:
+            return {"idempotent": True, "id": str(dup["_id"]), "booking_number": dup.get("booking_number")}
+    cid = pr.get("customer_id")
+    cust = await db.customers.find_one({"_id": ObjectId(cid)}) if cid and ObjectId.is_valid(cid) else None
+    if not cust:
+        raise ValueError("Customer tidak ditemukan")
+    pid = pr.get("package_id")
+    pkg = await db.packages.find_one({"_id": ObjectId(pid)}) if pid and ObjectId.is_valid(pid) else None
+    if not pkg:
+        raise ValueError("Package tidak ditemukan")
+    if pkg.get("status") != "ACTIVE":
+        raise ValueError("Package tidak aktif")
+    pax = int(pr.get("pax") or 0)
+    if pax < 1:
+        raise ValueError("Jumlah pax tidak valid")
+    dep = None
+    did = pr.get("departure_id")
+    if did:
+        dep = await db.departures.find_one({"_id": ObjectId(did)}) if ObjectId.is_valid(did) else None
+        if not dep:
+            raise ValueError("Departure tidak ditemukan")
+        dep = compute_departure(serialize(dep))
+        if int(dep.get("available_seat") or 0) < pax:
+            raise ValueError("Kursi tidak mencukupi (departure penuh)")
+    settings = await get_settings_dict()
+    per_pax = compute_pax_price(pkg, pax)
+    subtotal = per_pax * pax
+    pct, _amt = resolve_category_tax(pkg, settings)
+    tax_amount = round(subtotal * pct / 100)
+    total = subtotal + tax_amount
+    number = await next_number((settings.get("numbering") or {}).get("booking_prefix", "BKG"), db.bookings, "booking_number")
+    booking = {"booking_number": number, "quotation_id": None, "customer_id": cid, "customer_name": cust.get("full_name"),
+               "package_id": pid, "package_name": pkg.get("package_name"), "package_version": pkg.get("version", 1),
+               "departure_id": did, "departure_date": (dep or {}).get("departure_date", ""), "pax": pax,
+               "room_type": pr.get("room_type", ""), "addons": [], "booking_source": "AUTO SALES",
+               "source_channel": "WHATSAPP AI", "attribution": "AUTO SALES", "ai_generated": True,
+               "sales_type": "AUTO", "sales_user_id": None, "sales_name": "AUTO SALES",
+               "per_pax_price": per_pax, "subtotal": subtotal, "discount_percent": 0, "discount_amount": 0,
+               "tax_percent": pct, "tax_amount": tax_amount, "total": total, "payment_schedule": [],
+               "status": "CONFIRMED", "sales_pic_id": None, "sales_pic_name": "AUTO SALES", "branch": "",
+               "external_booking_id": ext, "created_at": now_iso(), "created_by": "AI AGENT"}
+    res = await db.bookings.insert_one(booking)
+    bid = str(res.inserted_id)
+    if did:
+        await db.departures.update_one({"_id": ObjectId(did)}, {"$inc": {"confirmed_pax": pax}})
+    inv_number = await next_number((settings.get("numbering") or {}).get("invoice_prefix", "INV"), db.invoices, "invoice_number")
+    _inv_snap = await tax_snapshot(now_iso()[:10], subtotal)
+    await db.invoices.insert_one({**_inv_snap, "invoice_number": inv_number, "booking_id": bid, "booking_number": number,
+        "customer_id": cid, "customer_name": cust.get("full_name"), "package_id": pid, "package_name": pkg.get("package_name"),
+        "pax": pax, "amount": subtotal, "discount_amount": 0, "discount_percent": 0, "tax_percent": pct,
+        "tax_amount": tax_amount, "total": total, "paid_amount": 0, "outstanding": total, "due_date": pr.get("due_date", ""),
+        "status": "Unpaid", "sales_pic_id": None, "sales_pic_name": "AUTO SALES", "branch": "",
+        "terms": pkg.get("terms", ""), "created_at": now_iso(), "created_by": "AI AGENT"})
+    if ext:
+        await db.idempotency_keys.update_one({"key": ext}, {"$set": {"booking_id": bid, "created_at": now_iso()}}, upsert=True)
+    return {"id": bid, "booking_number": number, "invoice_number": inv_number, "total": total, "pax": pax,
+            "package_name": pkg.get("package_name"), "source": "WHATSAPP AI"}
+
+
+async def _ait_assign_sales(pr):
+    sid = pr.get("sales_id")
+    su = await db.users.find_one({"_id": ObjectId(sid)}) if sid and ObjectId.is_valid(sid) else None
+    if not su:
+        raise ValueError("Sales user tidak ditemukan")
+    sales_set = {"sales_pic_id": sid, "sales_pic_name": su.get("name"), "attribution": "AI → SALES",
+                 "original_source": "WHATSAPP AI"}
+    if pr.get("booking_id") and ObjectId.is_valid(pr["booking_id"]):
+        await db.bookings.update_one({"_id": ObjectId(pr["booking_id"])}, {"$set": sales_set})
+    if pr.get("customer_id") and ObjectId.is_valid(pr["customer_id"]):
+        await db.customers.update_one({"_id": ObjectId(pr["customer_id"])}, {"$set": sales_set})
+    return {"assigned_sales": su.get("name"), "attribution": "AI → SALES"}
+
+
+async def _ait_request_handover(pr, ctx):
+    conv = None
+    convid = pr.get("conversation_id") or (ctx or {}).get("conversation_id")
+    if convid and ObjectId.is_valid(convid):
+        conv = await db.whatsapp_conversations.find_one({"_id": ObjectId(convid)})
+    if conv:
+        await _wa_handover(conv, pr.get("reason") or "Handover diminta AI")
+        return {"handover": True, "conversation_id": convid}
+    cid = pr.get("customer_id") or (ctx or {}).get("customer_id")
+    await create_task("Human Handover (AI)", customer_id=cid, priority="HIGH",
+                      notes=pr.get("reason") or "AI meminta handover ke manusia", created_by="AI AGENT", source="whatsapp_ai")
+    await notify("AI Human Handover", pr.get("reason") or "AI meminta bantuan manusia", link="/whatsapp", ntype="WHATSAPP_HANDOVER", priority="high")
+    return {"handover": True, "task_created": True}
+
+
+AI_TOOL_HANDLERS = {
+    "SEARCH_CUSTOMER": _ait_search_customer, "GET_CUSTOMER": _ait_get_customer,
+    "SEARCH_PACKAGE": _ait_search_package, "GET_PACKAGE": _ait_get_package,
+    "GET_ITINERARY": _ait_get_itinerary, "CHECK_SEAT": _ait_check_seat,
+    "GET_DEPARTURE": _ait_get_departure, "GET_PAYMENT_STATUS": _ait_get_payment_status,
+    "GET_BOOKING": _ait_get_booking, "GET_FAQ": _ait_get_faq, "GET_COMPANY_POLICY": _ait_get_company_policy,
+    "CREATE_CUSTOMER": _ait_create_customer, "UPDATE_CUSTOMER": _ait_update_customer,
+    "CREATE_LEAD": _ait_create_lead, "CREATE_FOLLOWUP": _ait_create_followup,
+    "CREATE_ORDER": _ai_create_booking, "CREATE_BOOKING": _ai_create_booking,
+    "ASSIGN_SALES": _ait_assign_sales,
+}
+
+
+async def _ai_tool_dispatch(tool, params, ctx):
+    """Secure dispatcher: permission -> risk/confirmation -> execute -> audit. Never fabricates."""
+    params = params or {}
+    ctx = ctx or {}
+    meta = AI_TOOL_MAP.get(tool)
+    if not meta:
+        await _ai_audit(tool, params, {"error": "unknown tool"}, False, ctx)
+        return {"ok": False, "error": f"Tool '{tool}' tidak dikenal"}
+    if not await _ai_tool_enabled(tool):
+        await _ai_audit(tool, params, {"error": "tool disabled"}, False, ctx)
+        return {"ok": False, "error": f"Tool '{tool}' dinonaktifkan oleh Super Admin"}
+    # High-risk: never execute; create an approval REQUEST for humans
+    if meta["risk"] == "HIGH_RISK":
+        req = {"tool": tool, "parameters": params, "conversation_id": ctx.get("conversation_id"),
+               "customer_id": ctx.get("customer_id"), "status": "PENDING", "requested_by": "AI AGENT",
+               "reason": params.get("reason", ""), "created_at": now_iso()}
+        r = await db.ai_action_requests.insert_one(req)
+        await notify("AI High-Risk Request", f"AI meminta approval: {meta['label']}", link="/ai-tools",
+                     ntype="AI_ACTION_REQUEST", priority="high")
+        await _ai_audit(tool, params, {"request_id": str(r.inserted_id), "status": "PENDING"}, True, ctx, approval_required=True)
+        return {"ok": True, "request_created": True, "request_id": str(r.inserted_id),
+                "message": f"Aksi '{meta['label']}' berisiko tinggi dan memerlukan persetujuan manusia. Permintaan telah dibuat."}
+    # Transactional writes need explicit customer confirmation
+    if meta["confirm"] and not (params.get("confirmed") or ctx.get("confirmed")):
+        await _ai_audit(tool, params, {"needs_confirmation": True}, False, ctx)
+        return {"ok": False, "needs_confirmation": True,
+                "message": "Aksi ini butuh konfirmasi customer terlebih dahulu sebelum diproses."}
+    handler = AI_TOOL_HANDLERS.get(tool)
+    if tool == "REQUEST_HUMAN_HANDOVER":
+        try:
+            res = await _ait_request_handover(params, ctx)
+            await _ai_audit(tool, params, res, True, ctx)
+            return {"ok": True, "result": res}
+        except Exception as e:
+            await _ai_audit(tool, params, {"error": str(e)}, False, ctx)
+            return {"ok": False, "error": str(e)[:200]}
+    if not handler:
+        await _ai_audit(tool, params, {"error": "no handler"}, False, ctx)
+        return {"ok": False, "error": "Handler tidak tersedia"}
+    try:
+        res = await handler(params)
+        await _ai_audit(tool, params, res, True, ctx)
+        return {"ok": True, "result": res}
+    except Exception as e:
+        await _ai_audit(tool, params, {"error": str(e)}, False, ctx)
+        return {"ok": False, "error": str(e)[:200]}
+
+
+@api_router.get("/ai/tools")
+async def ai_list_tools(user: dict = Depends(require_role("super_admin"))):
+    perms = {d["tool"]: d.get("enabled", True) async for d in db.ai_tool_permissions.find({})}
+    return [{**t, "enabled": perms.get(t["tool"], True)} for t in AI_TOOL_REGISTRY]
+
+
+@api_router.put("/ai/tools/{tool}")
+async def ai_toggle_tool(tool: str, body: dict, request: Request, user: dict = Depends(require_role("super_admin"))):
+    if tool not in AI_TOOL_MAP:
+        raise HTTPException(status_code=404, detail="Tool tidak dikenal")
+    enabled = bool(body.get("enabled", True))
+    await db.ai_tool_permissions.update_one({"tool": tool}, {"$set": {"tool": tool, "enabled": enabled, "updated_at": now_iso(), "updated_by": user["name"]}}, upsert=True)
+    await log_audit(user, "ai_tools", "toggle_tool", request, record_id=tool, new={"enabled": enabled})
+    return {"tool": tool, "enabled": enabled}
+
+
+@api_router.post("/ai/tools/execute")
+async def ai_execute_tool(body: dict, user: dict = Depends(require_role("super_admin"))):
+    tool = (body.get("tool") or "").strip().upper()
+    ctx = {"conversation_id": body.get("conversation_id"), "customer_id": body.get("customer_id"),
+           "confirmed": bool(body.get("confirmed")), "approved_by": user["name"]}
+    return await _ai_tool_dispatch(tool, body.get("params") or {}, ctx)
+
+
+@api_router.get("/ai/action-logs")
+async def ai_action_logs(tool: str = "", limit: int = 200, user: dict = Depends(require_role("super_admin"))):
+    q = {} if not tool else {"tool": tool}
+    logs = await db.ai_action_logs.find(q).sort("timestamp", -1).to_list(min(limit, 500))
+    return [serialize(l) for l in logs]
+
+
+@api_router.get("/ai/requests")
+async def ai_requests(status: str = "", user: dict = Depends(require_role("super_admin"))):
+    q = {} if not status else {"status": status}
+    reqs = await db.ai_action_requests.find(q).sort("created_at", -1).to_list(200)
+    return [serialize(r) for r in reqs]
+
+
 app.include_router(api_router)
 
 app.add_middleware(
