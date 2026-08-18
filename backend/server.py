@@ -9094,6 +9094,10 @@ async def _wa_ai_process(conv_id, text):
     if not reply or "[HANDOVER]" in reply.upper():
         await _wa_handover(conv, "AI tidak dapat menjawab")
         return
+    allowed, _reason = await _wa_outbound_allowed(conv.get("customer_id"))
+    if not allowed:
+        await _wa_log(conv.get("account_id", "apico"), "AI", "OUT", conv_id, False, f"outbound blocked: {_reason}")
+        return
     svc = await get_wa_provider()
     mid = f"ai-{now_iso()}"
     try:
@@ -10142,6 +10146,236 @@ async def ai_requests(status: str = "", user: dict = Depends(require_role("super
     q = {} if not status else {"status": status}
     reqs = await db.ai_action_requests.find(q).sort("created_at", -1).to_list(200)
     return [serialize(r) for r in reqs]
+
+
+# ============================================================================
+# PHASE 10A-REWORK — TAHAP 2 (Templates, Consent, Blacklist, Window, Broadcast,
+# Webhook Health, AI Outbound Rule). All Api.co.id calls go through the service.
+# ============================================================================
+async def _wa_outbound_allowed(customer_id):
+    """AI/outbound guard: block if CRM blacklist or opt-out. Returns (allowed, reason)."""
+    if not customer_id or not ObjectId.is_valid(customer_id):
+        return True, ""
+    c = await db.customers.find_one({"_id": ObjectId(customer_id)})
+    if not c:
+        return True, ""
+    if c.get("wa_blacklisted"):
+        return False, "Customer di-blacklist"
+    if (c.get("wa_consent") or "").upper() == "OPT_OUT":
+        return False, "Customer opt-out"
+    return True, ""
+
+
+# ---- Templates ----
+@api_router.get("/whatsapp/templates")
+async def wa_templates(sync: int = 0, status: str = "", user: dict = Depends(require_role("super_admin"))):
+    if sync:
+        svc = await get_wa_provider()
+        res = await svc._call("GET", "/api/v1/public/templates", params={"limit": 200})
+        if res["ok"]:
+            data = res["data"]
+            items = (data.get("data") if isinstance(data, dict) else data) or []
+            for t in items:
+                await db.whatsapp_templates.update_one({"provider_template_id": str(t.get("id"))}, {"$set": {
+                    "provider_template_id": str(t.get("id")), "template_name": t.get("template_name") or t.get("name"),
+                    "category": t.get("category"), "language": t.get("language"), "status": (t.get("status") or "PENDING").upper(),
+                    "meta_template_id": t.get("meta_template_id"), "whatsapp_phone_number_id": t.get("whatsapp_phone_number_id"),
+                    "body": t.get("body"), "synced_at": now_iso()}}, upsert=True)
+    q = {} if not status else {"status": status.upper()}
+    docs = await db.whatsapp_templates.find(q).sort("synced_at", -1).to_list(300)
+    return [serialize(d) for d in docs]
+
+
+@api_router.post("/whatsapp/templates")
+async def wa_create_template(body: dict, user: dict = Depends(require_role("super_admin"))):
+    svc = await get_wa_provider()
+    res = await svc._call("POST", "/api/v1/public/templates", json=body)
+    if not res["ok"]:
+        raise HTTPException(status_code=502, detail=f"Gagal membuat template ({res['category']}).")
+    data = (res["data"] or {}).get("data") or res["data"] or {}
+    await db.whatsapp_templates.update_one({"provider_template_id": str(data.get("id"))}, {"$set": {
+        "provider_template_id": str(data.get("id")), "template_name": body.get("template_name"),
+        "category": body.get("category"), "language": body.get("language"), "status": "PENDING",
+        "body": body.get("body"), "created_at": now_iso(), "synced_at": now_iso()}}, upsert=True)
+    return {"ok": True, "id": data.get("id")}
+
+
+@api_router.post("/whatsapp/templates/{tid}/submit")
+async def wa_submit_template(tid: str, user: dict = Depends(require_role("super_admin"))):
+    svc = await get_wa_provider()
+    res = await svc._call("POST", f"/api/v1/public/templates/{tid}/submit")
+    if not res["ok"]:
+        raise HTTPException(status_code=502, detail=f"Gagal submit template ({res['category']}).")
+    return {"ok": True}
+
+
+@api_router.post("/whatsapp/templates/send")
+async def wa_send_template(body: dict, user: dict = Depends(require_role("super_admin"))):
+    name = body.get("template_name") or (body.get("template") or {}).get("name")
+    tpl = await db.whatsapp_templates.find_one({"template_name": name})
+    if not tpl or (tpl.get("status") or "").upper() != "APPROVED":
+        raise HTTPException(status_code=400, detail="Template belum APPROVED — tidak dapat dikirim.")
+    cust = await db.customers.find_one({"_id": ObjectId(body["customer_id"])}) if body.get("customer_id") and ObjectId.is_valid(body["customer_id"]) else None
+    if cust:
+        allowed, reason = await _wa_outbound_allowed(str(cust["_id"]))
+        if not allowed:
+            raise HTTPException(status_code=400, detail=f"Outbound diblokir: {reason}")
+    phone = body.get("phone_number") or (cust or {}).get("whatsapp")
+    svc = await get_wa_provider()
+    res = await svc.send_message(phone, "template", template=body.get("template") or {"name": name, "language": {"code": tpl.get("language", "id")}})
+    if not res["ok"]:
+        raise HTTPException(status_code=502, detail=f"Gagal kirim template ({res['category']}).")
+    return {"ok": True, "data": res.get("data")}
+
+
+# ---- Consent / Blacklist / Window ----
+@api_router.post("/whatsapp/customers/{cid}/consent")
+async def wa_consent(cid: str, body: dict, user: dict = Depends(require_role("super_admin"))):
+    action = (body.get("action") or "").upper()
+    if action not in ("OPT_IN", "OPT_OUT", "UPDATE"):
+        raise HTTPException(status_code=400, detail="action tidak valid")
+    c = await db.customers.find_one({"_id": ObjectId(cid)}) if ObjectId.is_valid(cid) else None
+    if not c:
+        raise HTTPException(status_code=404, detail="Customer tidak ditemukan")
+    await db.customers.update_one({"_id": c["_id"]}, {"$set": {"wa_consent": action, "wa_consent_at": now_iso()}})
+    await db.whatsapp_consent_logs.insert_one({"customer_id": cid, "action": action, "source": body.get("source", "crm"),
+        "purpose": body.get("purpose", ""), "created_at": now_iso(), "by": user["name"]})
+    if c.get("apico_customer_id"):
+        svc = await get_wa_provider()
+        await svc._call("POST", f"/api/v1/public/customers/{c['apico_customer_id']}/consent",
+                        json={"action": action, "source": body.get("source", "crm"), "purpose": body.get("purpose", "")})
+    return {"ok": True, "wa_consent": action}
+
+
+@api_router.patch("/whatsapp/customers/{cid}/blacklist")
+async def wa_blacklist(cid: str, body: dict, user: dict = Depends(require_role("super_admin"))):
+    c = await db.customers.find_one({"_id": ObjectId(cid)}) if ObjectId.is_valid(cid) else None
+    if not c:
+        raise HTTPException(status_code=404, detail="Customer tidak ditemukan")
+    bl = bool(body.get("blacklisted"))
+    await db.customers.update_one({"_id": c["_id"]}, {"$set": {"wa_blacklisted": bl, "wa_blacklisted_at": now_iso()}})
+    if c.get("apico_customer_id"):
+        svc = await get_wa_provider()
+        await svc._call("PATCH", f"/api/v1/public/customers/{c['apico_customer_id']}/blacklist", json={"blacklisted": bl})
+    return {"ok": True, "blacklisted": bl}
+
+
+@api_router.get("/whatsapp/customers/{cid}/window-status")
+async def wa_window(cid: str, user: dict = Depends(require_role("super_admin"))):
+    c = await db.customers.find_one({"_id": ObjectId(cid)}) if ObjectId.is_valid(cid) else None
+    if not c:
+        raise HTTPException(status_code=404, detail="Customer tidak ditemukan")
+    if not c.get("apico_customer_id"):
+        return {"window_active": None, "message": "Customer belum terhubung ke Api.co.id"}
+    svc = await get_wa_provider()
+    res = await svc.check_window(c["apico_customer_id"])
+    if not res["ok"]:
+        raise HTTPException(status_code=502, detail=f"Gagal cek window ({res['category']}).")
+    return res["data"]
+
+
+# ---- Broadcast (Super Admin only; approved template + eligible customers) ----
+@api_router.post("/whatsapp/broadcast")
+async def wa_broadcast(body: dict, user: dict = Depends(require_role("super_admin"))):
+    name = body.get("template_name")
+    tpl = await db.whatsapp_templates.find_one({"template_name": name})
+    if not tpl or (tpl.get("status") or "").upper() != "APPROVED":
+        raise HTTPException(status_code=400, detail="Broadcast wajib memakai template APPROVED.")
+    # Filter eligible: exclude blacklist/opt-out
+    raw_ids = body.get("customer_ids") or []
+    phones, skipped = [], 0
+    for cid in raw_ids:
+        allowed, _ = await _wa_outbound_allowed(cid)
+        c = await db.customers.find_one({"_id": ObjectId(cid)}) if ObjectId.is_valid(cid) else None
+        if allowed and c and c.get("whatsapp"):
+            phones.append("+" + _apico_norm(c["whatsapp"]))
+        else:
+            skipped += 1
+    phones = list(dict.fromkeys(phones)) + [p for p in (body.get("phone_numbers") or [])]
+    if not phones:
+        raise HTTPException(status_code=400, detail="Tidak ada penerima yang memenuhi syarat.")
+    svc = await get_wa_provider()
+    res = await svc._call("POST", "/api/v1/public/broadcast/send", json={
+        "template_name": name, "language": tpl.get("language", "id"), "phone_numbers": phones,
+        "whatsapp_phone_number_id": svc.phone_number_id, "components": body.get("components") or {}})
+    if not res["ok"]:
+        raise HTTPException(status_code=502, detail=f"Broadcast gagal ({res['category']}).")
+    data = (res["data"] or {}).get("data") or res["data"] or {}
+    job_id = data.get("job_id")
+    await db.whatsapp_broadcasts.insert_one({"broadcast_job_id": job_id, "template_name": name,
+        "recipients": len(phones), "skipped": skipped, "status": "SENT", "created_at": now_iso(), "by": user["name"]})
+    return {"ok": True, "broadcast_job_id": job_id, "recipients": len(phones), "skipped": skipped}
+
+
+@api_router.get("/whatsapp/broadcast/jobs")
+async def wa_broadcast_jobs(user: dict = Depends(require_role("super_admin"))):
+    svc = await get_wa_provider()
+    res = await svc._call("GET", "/api/v1/public/broadcast/jobs", params={"limit": 50})
+    remote = (res["data"] or {}).get("data") if res["ok"] and isinstance(res["data"], dict) else []
+    local = await db.whatsapp_broadcasts.find({}).sort("created_at", -1).to_list(100)
+    return {"remote": remote or [], "local": [serialize(x) for x in local]}
+
+
+@api_router.get("/whatsapp/broadcast/jobs/{jid}")
+async def wa_broadcast_job(jid: str, user: dict = Depends(require_role("super_admin"))):
+    svc = await get_wa_provider()
+    res = await svc._call("GET", f"/api/v1/public/broadcast/jobs/{jid}")
+    if not res["ok"]:
+        raise HTTPException(status_code=502, detail=f"Gagal ambil job ({res['category']}).")
+    return res["data"]
+
+
+@api_router.post("/whatsapp/broadcast/jobs/{jid}/cancel")
+async def wa_broadcast_cancel(jid: str, user: dict = Depends(require_role("super_admin"))):
+    svc = await get_wa_provider()
+    res = await svc._call("POST", f"/api/v1/public/broadcast/jobs/{jid}/cancel")
+    await db.whatsapp_broadcasts.update_one({"broadcast_job_id": jid}, {"$set": {"status": "CANCELLED"}})
+    return {"ok": res["ok"]}
+
+
+# ---- Webhook management & health ----
+@api_router.get("/whatsapp/webhooks")
+async def wa_webhooks(user: dict = Depends(require_role("super_admin"))):
+    svc = await get_wa_provider()
+    res = await svc._call("GET", "/api/v1/public/webhooks")
+    remote = (res["data"] or {}).get("data") if res["ok"] and isinstance(res["data"], dict) else []
+    return {"ok": res["ok"], "webhooks": remote or [], "error_category": res.get("category")}
+
+
+@api_router.post("/whatsapp/webhooks/{wid}/enable")
+async def wa_webhook_enable(wid: str, user: dict = Depends(require_role("super_admin"))):
+    svc = await get_wa_provider()
+    res = await svc._call("POST", f"/api/v1/public/webhooks/{wid}/enable")
+    if not res["ok"]:
+        raise HTTPException(status_code=502, detail=f"Gagal enable webhook ({res['category']}).")
+    return {"ok": True}
+
+
+@api_router.get("/whatsapp/webhook-health")
+async def wa_webhook_health(user: dict = Depends(require_role("super_admin"))):
+    total = await db.whatsapp_webhook_events.count_documents({})
+    errors = await db.whatsapp_webhook_events.count_documents({"status": "ERROR"})
+    last = await db.whatsapp_webhook_events.find_one({}, sort=[("received_at", -1)])
+    last_ok = await db.whatsapp_webhook_events.find_one({"status": "PROCESSED"}, sort=[("processed_at", -1)])
+    return {"total_events": total, "error_events": errors,
+            "last_event_at": (last or {}).get("received_at"), "last_success_at": (last_ok or {}).get("processed_at")}
+
+
+@api_router.get("/whatsapp/health")
+async def wa_health(user: dict = Depends(require_role("super_admin"))):
+    cfg = await _apico_config()
+    svc = ApiCoWhatsAppProvider(cfg)
+    api_ok = (await svc.health())["ok"] if cfg["_api_key"] else False
+    has_phone = bool(cfg.get("phone_number_id"))
+    err_events = await db.whatsapp_webhook_events.count_documents({"status": "ERROR"})
+    if api_ok and has_phone and err_events == 0:
+        overall = "CONNECTED"
+    elif api_ok:
+        overall = "DEGRADED"
+    else:
+        overall = "ERROR"
+    return {"overall": overall, "api_ok": api_ok, "has_phone_number": has_phone,
+            "webhook_error_events": err_events}
 
 
 app.include_router(api_router)

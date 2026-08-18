@@ -7,7 +7,16 @@
 - **WAHA dihapus**: semua endpoint accounts/connect/qr/test/disconnect + `_wa_call`/`_wa_headers`/`_wa_get_account` + webhook lama dihapus. Data lama tidak dihapus; migrasi tag `provider=API_CO_ID`. Send text/AI reply kini via Api.co.id `/api/v1/public/messages/send`.
 - **Frontend** `WhatsAppIntegration.jsx` di-rework: tab **Provider** (base URL, API Key masked, Test Connection, Load Phone Numbers + pilih, Save), Conversation Monitor, AI Agent/Knowledge/Style/Rules, Human Handover, WhatsApp Logs, **API Logs** (endpoint/method/status/durasi/kategori error). Tab WAHA (Accounts/Connection+QR/Configuration) dihapus.
 - Verified curl (12 acceptance): provider get/save (key masked ••••y123), test-connection ERROR graceful, phone-numbers 502 graceful, webhook inbound → customer+conversation dibuat (08123456789→628123456789), webhook duplicate idempotent, api-logs tercatat, no active WAHA routes, RBAC sales 403. Data uji dibersihkan.
-- **TAHAP 2 (belum)**: Templates (list/create/submit), Broadcast + monitoring, Consent (opt-in/out), Blacklist, 24h window check, Webhook Health monitor+enable, scheduled health check, AI outbound rule (cek blacklist/opt-out/window/template sebelum kirim), media upload.
+## PHASE 10A-REWORK — TAHAP 2 (2026-06) — DONE ✅ (backend curl E2E; FE iter_46 100% after Dialog-import fix)
+- **Templates**: GET `/whatsapp/templates?sync=1` (sync dari provider → `whatsapp_templates`), POST create, POST `/{id}/submit`, POST `/templates/send` (gate: hanya status APPROVED). UI tab Templates (list/sync/create/submit).
+- **Consent**: POST `/whatsapp/customers/{cid}/consent` (OPT_IN/OPT_OUT/UPDATE) → simpan `wa_consent` + `whatsapp_consent_logs` + sync provider bila ada apico_customer_id.
+- **Blacklist**: PATCH `/whatsapp/customers/{cid}/blacklist` → `wa_blacklisted` + sync provider.
+- **24h Window**: GET `/whatsapp/customers/{cid}/window-status` (provider).
+- **AI Outbound Rule**: `_wa_outbound_allowed()` blokir kirim bila blacklist / opt-out; dipanggil di `_wa_ai_process`, `templates/send`, dan filter broadcast.
+- **Broadcast** (super_admin, wajib template APPROVED, auto-filter blacklist/opt-out): POST `/whatsapp/broadcast`, GET `/broadcast/jobs`, GET `/broadcast/jobs/{id}`, POST `/broadcast/jobs/{id}/cancel` → simpan `broadcast_job_id` (`whatsapp_broadcasts`). UI tab Broadcast.
+- **Webhook Health**: GET `/whatsapp/webhooks`, POST `/whatsapp/webhooks/{id}/enable`, GET `/whatsapp/webhook-health`, GET `/whatsapp/health` (CONNECTED/DEGRADED/ERROR). UI tab Webhook Health.
+- Semua panggilan lewat `ApiCoWhatsAppProvider` (logging/retry/kategori error). Verified curl: templates sync 200, send-unapproved 400, consent OPT_OUT, blacklist, broadcast butuh APPROVED (400), webhook-health, health=ERROR tanpa key, webhooks graceful AUTH_ERROR, RBAC 403.
+- **Masih ditunda (backlog)**: Media Upload UI (`/media/upload`), configurable writing-time (min/max/typing_speed/word_count/complexity + UI), debounce pesan masuk, scheduled cron health check, sync `getConversations`/`getMessages` dari provider, Consent/Blacklist UI di Customer 360.
 
 
 ## PHASE 10D — AI Agent CRM Tools & Actions (Super Admin) (2026-06) — DONE ✅ (testing_agent iter_44: FE 100%; backend curl E2E)

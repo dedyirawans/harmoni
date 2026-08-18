@@ -10,6 +10,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
@@ -20,6 +21,7 @@ import { toast } from "sonner";
 import {
   MessageCircle, PlugZap, MessagesSquare, Bot, BookOpen, Palette, ShieldAlert,
   UserCog, ScrollText, Activity, Loader2, RefreshCw, Send, CheckCircle2, PlayCircle, Save,
+  FileText, Megaphone, HeartPulse, Plus, UploadCloud,
 } from "lucide-react";
 
 const fmt = (t) => (t || "—").toString().replace("T", " ").slice(0, 19);
@@ -314,6 +316,135 @@ function ApiLogsTab() {
   );
 }
 
+// ============================================================ Templates
+function TemplatesTab() {
+  const [rows, setRows] = useState(null);
+  const [busy, setBusy] = useState("");
+  const [open, setOpen] = useState(false);
+  const [f, setF] = useState({ template_name: "", category: "UTILITY", language: "id", body: "" });
+  const load = useCallback((sync) => { setBusy("load"); api.get("/whatsapp/templates", { params: sync ? { sync: 1 } : {} }).then((r) => setRows(r.data)).catch(() => setRows([])).finally(() => setBusy("")); }, []);
+  useEffect(() => { load(false); }, [load]);
+  const create = async () => {
+    setBusy("save");
+    try { await api.post("/whatsapp/templates", f); toast.success("Template dibuat (PENDING)"); setOpen(false); load(false); }
+    catch (e) { err(e); } finally { setBusy(""); }
+  };
+  const submit = async (t) => { try { await api.post(`/whatsapp/templates/${t.provider_template_id}/submit`); toast.success("Disubmit ke Meta"); load(true); } catch (e) { err(e); } };
+  const stc = (s) => s === "APPROVED" ? "bg-emerald-50 text-emerald-700 border-emerald-200" : s === "REJECTED" ? "bg-red-50 text-red-700 border-red-200" : "bg-amber-50 text-amber-700 border-amber-200";
+  return (
+    <div className="space-y-4" data-testid="wa-templates-tab">
+      <div className="flex items-center justify-between">
+        <div><h3 className="text-lg font-semibold text-slate-800">WhatsApp Templates</h3><p className="text-sm text-slate-500">Hanya template APPROVED yang boleh dikirim. Sync dengan Api.co.id.</p></div>
+        <div className="flex gap-2"><Button size="sm" variant="outline" onClick={() => load(true)} disabled={!!busy} data-testid="wa-tpl-sync"><RefreshCw className="h-4 w-4 mr-1" />Sync</Button>
+          <Button size="sm" onClick={() => setOpen(true)} data-testid="wa-tpl-add"><Plus className="h-4 w-4 mr-1" />Template</Button></div>
+      </div>
+      <Card><CardContent className="p-0"><Table>
+        <TableHeader><TableRow><TableHead>Nama</TableHead><TableHead>Kategori</TableHead><TableHead>Bahasa</TableHead><TableHead>Status</TableHead><TableHead>Meta ID</TableHead><TableHead>Aksi</TableHead></TableRow></TableHeader>
+        <TableBody>
+          {rows === null ? (<TableRow><TableCell colSpan={6} className="text-center py-8"><Loader2 className="h-5 w-5 animate-spin mx-auto text-blue-600" /></TableCell></TableRow>)
+            : rows.length === 0 ? (<TableRow><TableCell colSpan={6} className="text-center py-8 text-slate-400">Belum ada template. Klik Sync/Template.</TableCell></TableRow>)
+              : rows.map((t) => (<TableRow key={t.id} data-testid={`wa-tpl-row-${t.id}`}>
+                <TableCell className="font-medium">{t.template_name}</TableCell><TableCell><Badge variant="outline">{t.category}</Badge></TableCell>
+                <TableCell>{t.language}</TableCell><TableCell><Badge variant="outline" className={stc(t.status)}>{t.status}</Badge></TableCell>
+                <TableCell className="font-mono text-xs">{t.meta_template_id || "—"}</TableCell>
+                <TableCell>{t.status !== "APPROVED" && t.provider_template_id && <Button size="sm" variant="outline" onClick={() => submit(t)} data-testid={`wa-tpl-submit-${t.id}`}>Submit</Button>}</TableCell>
+              </TableRow>))}
+        </TableBody></Table></CardContent></Card>
+      <Dialog open={open} onOpenChange={setOpen}><DialogContent data-testid="wa-tpl-dialog">
+        <DialogHeader><DialogTitle>Template Baru</DialogTitle><DialogDescription>Buat template lalu Submit ke Meta untuk approval.</DialogDescription></DialogHeader>
+        <div className="space-y-3">
+          <div><Label>Nama (huruf kecil/underscore)</Label><Input value={f.template_name} onChange={(e) => setF({ ...f, template_name: e.target.value })} data-testid="wa-tpl-name" /></div>
+          <div className="grid grid-cols-2 gap-3">
+            <div><Label>Kategori</Label><Select value={f.category} onValueChange={(v) => setF({ ...f, category: v })}><SelectTrigger data-testid="wa-tpl-category"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="MARKETING">MARKETING</SelectItem><SelectItem value="UTILITY">UTILITY</SelectItem><SelectItem value="AUTHENTICATION">AUTHENTICATION</SelectItem></SelectContent></Select></div>
+            <div><Label>Bahasa</Label><Input value={f.language} onChange={(e) => setF({ ...f, language: e.target.value })} /></div>
+          </div>
+          <div><Label>Body (pakai {"{{1}}"} untuk variabel)</Label><Textarea rows={4} value={f.body} onChange={(e) => setF({ ...f, body: e.target.value })} data-testid="wa-tpl-body" /></div>
+        </div>
+        <DialogFooter><Button variant="outline" onClick={() => setOpen(false)}>Batal</Button><Button onClick={create} disabled={busy === "save"} data-testid="wa-tpl-save">{busy === "save" && <Loader2 className="h-4 w-4 mr-1 animate-spin" />}Simpan</Button></DialogFooter>
+      </DialogContent></Dialog>
+    </div>
+  );
+}
+
+// ============================================================ Broadcast
+function BroadcastTab() {
+  const [tpls, setTpls] = useState([]);
+  const [name, setName] = useState("");
+  const [phones, setPhones] = useState("");
+  const [jobs, setJobs] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const load = useCallback(() => {
+    api.get("/whatsapp/templates", { params: { status: "APPROVED" } }).then((r) => setTpls(r.data)).catch(() => {});
+    api.get("/whatsapp/broadcast/jobs").then((r) => setJobs(r.data.local || [])).catch(() => {});
+  }, []);
+  useEffect(() => { load(); }, [load]);
+  const send = async () => {
+    if (!name) { toast.error("Pilih template APPROVED"); return; }
+    setBusy(true);
+    try { const r = await api.post("/whatsapp/broadcast", { template_name: name, phone_numbers: phones.split(",").map((s) => s.trim()).filter(Boolean) });
+      toast.success(`Terkirim ke ${r.data.recipients} (skip ${r.data.skipped})`); setPhones(""); load(); }
+    catch (e) { err(e); } finally { setBusy(false); }
+  };
+  return (
+    <div className="space-y-4 max-w-2xl" data-testid="wa-broadcast-tab">
+      <div className="p-3 rounded-lg bg-amber-50 border border-amber-100 text-sm text-amber-800">Broadcast hanya Super Admin, wajib template <b>APPROVED</b>. Customer blacklist/opt-out otomatis difilter.</div>
+      <Card><CardContent className="p-5 space-y-3">
+        <div><Label>Template APPROVED</Label><Select value={name} onValueChange={setName}><SelectTrigger data-testid="wa-bc-template"><SelectValue placeholder={tpls.length ? "Pilih template" : "Belum ada template APPROVED"} /></SelectTrigger><SelectContent>{tpls.map((t) => <SelectItem key={t.id} value={t.template_name}>{t.template_name} ({t.language})</SelectItem>)}</SelectContent></Select></div>
+        <div><Label>Nomor Telepon (+62…, pisahkan koma)</Label><Textarea rows={3} value={phones} onChange={(e) => setPhones(e.target.value)} placeholder="+628123..., +628987..." data-testid="wa-bc-phones" /></div>
+        <Button onClick={send} disabled={busy} data-testid="wa-bc-send">{busy ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Megaphone className="h-4 w-4 mr-1" />}Kirim Broadcast</Button>
+      </CardContent></Card>
+      <Card><CardContent className="p-0"><Table>
+        <TableHeader><TableRow><TableHead>Waktu</TableHead><TableHead>Template</TableHead><TableHead>Penerima</TableHead><TableHead>Skip</TableHead><TableHead>Status</TableHead></TableRow></TableHeader>
+        <TableBody>{jobs.length === 0 ? (<TableRow><TableCell colSpan={5} className="text-center py-6 text-slate-400">Belum ada broadcast.</TableCell></TableRow>)
+          : jobs.map((j) => (<TableRow key={j.id}><TableCell className="text-xs text-slate-500">{fmt(j.created_at)}</TableCell><TableCell>{j.template_name}</TableCell><TableCell>{j.recipients}</TableCell><TableCell>{j.skipped}</TableCell><TableCell><Badge variant="outline">{j.status}</Badge></TableCell></TableRow>))}
+        </TableBody></Table></CardContent></Card>
+    </div>
+  );
+}
+
+// ============================================================ Webhook Health
+function WebhookHealthTab() {
+  const [h, setH] = useState(null);
+  const [wh, setWh] = useState(null);
+  const [hooks, setHooks] = useState([]);
+  const load = useCallback(() => {
+    api.get("/whatsapp/health").then((r) => setH(r.data)).catch(() => setH({}));
+    api.get("/whatsapp/webhook-health").then((r) => setWh(r.data)).catch(() => setWh({}));
+    api.get("/whatsapp/webhooks").then((r) => setHooks(r.data.webhooks || [])).catch(() => setHooks([]));
+  }, []);
+  useEffect(() => { load(); }, [load]);
+  const enable = async (id) => { try { await api.post(`/whatsapp/webhooks/${id}/enable`); toast.success("Webhook di-enable"); load(); } catch (e) { err(e); } };
+  const oc = (s) => s === "CONNECTED" ? "bg-emerald-50 text-emerald-700 border-emerald-200" : s === "DEGRADED" ? "bg-amber-50 text-amber-700 border-amber-200" : "bg-red-50 text-red-700 border-red-200";
+  return (
+    <div className="space-y-4" data-testid="wa-webhook-health-tab">
+      <div className="flex justify-end"><Button size="sm" variant="outline" onClick={load}><RefreshCw className="h-4 w-4 mr-1" />Muat Ulang</Button></div>
+      <div className="grid md:grid-cols-2 gap-4">
+        <Card><CardContent className="p-5 space-y-2">
+          <div className="flex items-center justify-between"><span className="font-medium text-slate-700 flex items-center gap-1.5"><HeartPulse className="h-4 w-4" />Health</span>
+            <Badge variant="outline" className={oc(h?.overall)} data-testid="wa-health-overall">{h?.overall || "—"}</Badge></div>
+          <div className="text-sm text-slate-500">API auth: {h?.api_ok ? "OK" : "gagal"}</div>
+          <div className="text-sm text-slate-500">Phone number: {h?.has_phone_number ? "terpilih" : "belum"}</div>
+          <div className="text-sm text-slate-500">Webhook error events: {h?.webhook_error_events ?? "—"}</div>
+        </CardContent></Card>
+        <Card><CardContent className="p-5 space-y-2">
+          <span className="font-medium text-slate-700">Webhook Events</span>
+          <div className="text-sm text-slate-500">Total: {wh?.total_events ?? "—"} · Error: {wh?.error_events ?? "—"}</div>
+          <div className="text-sm text-slate-500">Terakhir: {fmt(wh?.last_event_at)}</div>
+          <div className="text-sm text-slate-500">Sukses terakhir: {fmt(wh?.last_success_at)}</div>
+        </CardContent></Card>
+      </div>
+      <Card><CardContent className="p-0"><Table>
+        <TableHeader><TableRow><TableHead>Webhook</TableHead><TableHead>Status</TableHead><TableHead>Failure</TableHead><TableHead>Disabled At</TableHead><TableHead>Aksi</TableHead></TableRow></TableHeader>
+        <TableBody>{hooks.length === 0 ? (<TableRow><TableCell colSpan={5} className="text-center py-6 text-slate-400">Tidak ada data webhook (butuh API Key aktif).</TableCell></TableRow>)
+          : hooks.map((w) => (<TableRow key={w.id}><TableCell className="font-mono text-xs">{w.url || w.id}</TableCell>
+            <TableCell><Badge variant="outline">{w.is_active === false ? "DISABLED" : (w.status || "ACTIVE")}</Badge></TableCell>
+            <TableCell>{w.failure_count ?? 0}</TableCell><TableCell className="text-xs">{fmt(w.disabled_at)}</TableCell>
+            <TableCell>{(w.is_active === false || w.disabled_at) && <Button size="sm" variant="outline" onClick={() => enable(w.id)} data-testid={`wa-hook-enable-${w.id}`}>Enable</Button>}</TableCell></TableRow>))}
+        </TableBody></Table></CardContent></Card>
+    </div>
+  );
+}
+
 // ============================================================ Main
 const TABS = [
   ["provider", "Provider", PlugZap],
@@ -323,6 +454,9 @@ const TABS = [
   ["ai-style", "AI Style", Palette],
   ["ai-rules", "AI Rules", ShieldAlert],
   ["handover", "Human Handover", UserCog],
+  ["templates", "Templates", FileText],
+  ["broadcast", "Broadcast", Megaphone],
+  ["webhook-health", "Webhook Health", HeartPulse],
   ["wa-logs", "WhatsApp Logs", ScrollText],
   ["api-logs", "API Logs", Activity],
 ];
@@ -361,6 +495,9 @@ export default function WhatsAppIntegration() {
           <TabsContent value="ai-style">{cfg ? <AiConfigTab cfg={cfg} setCfg={setCfg} section="style" /> : aiPending}</TabsContent>
           <TabsContent value="ai-rules">{cfg ? <AiConfigTab cfg={cfg} setCfg={setCfg} section="rules" /> : aiPending}</TabsContent>
           <TabsContent value="handover"><HandoverTab /></TabsContent>
+          <TabsContent value="templates"><TemplatesTab /></TabsContent>
+          <TabsContent value="broadcast"><BroadcastTab /></TabsContent>
+          <TabsContent value="webhook-health"><WebhookHealthTab /></TabsContent>
           <TabsContent value="wa-logs"><WaLogsTab /></TabsContent>
           <TabsContent value="api-logs"><ApiLogsTab /></TabsContent>
         </div>
