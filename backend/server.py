@@ -8868,6 +8868,11 @@ async def wa_webhook(aid: str, request: Request):
             await db.whatsapp_messages.insert_one(msg)
             await db.whatsapp_conversations.update_one({"_id": conv["_id"]}, {"$set": {"last_message": msg["content"][:200], "last_activity": now_iso()}})
             await _wa_log(aid, "WEBHOOK", "IN", mid, True, "", {"from": wa_number, "type": msg["type"]})
+            if not from_me:
+                try:
+                    await _wa_ai_process(str(conv["_id"]), msg["content"])
+                except Exception as _e:
+                    await _wa_log(aid, "AI", "IN", str(conv["_id"]), False, str(_e))
         except Exception as e:
             # Duplicate message_id -> idempotent skip
             await _wa_log(aid, "WEBHOOK", "IN", mid, True, "duplicate skipped")
@@ -8940,6 +8945,123 @@ async def wa_logs(kind: str = "", user: dict = Depends(require_role("super_admin
     q = {} if not kind else ({"kind": {"$ne": "API"}} if kind == "wa" else {"kind": kind})
     logs = await db.whatsapp_logs.find(q).sort("created_at", -1).to_list(300)
     return [serialize(l) for l in logs]
+
+
+WA_HANDOVER_KEYWORDS = ["sales", "admin", "manusia", "customer service", " cs ", "komplain", "complain", "bicara dengan", "telepon", "hubungi saya", "orang asli"]
+
+
+async def _wa_ai_config():
+    cfg = await db.whatsapp_ai_config.find_one({"_id": "main"})
+    return cfg or {"_id": "main", "enabled": True, "knowledge": "",
+                   "style": "Ramah, sopan, profesional, jawab singkat dalam Bahasa Indonesia.",
+                   "rules": "Jangan mengarang harga di luar data. Jika tidak yakin, serahkan ke sales.",
+                   "greeting": "", "handover_keywords": WA_HANDOVER_KEYWORDS}
+
+
+async def _wa_pkg_context():
+    pkgs = await db.packages.find({"status": {"$ne": "ARCHIVED"}}).to_list(20)
+    lines = []
+    for p in pkgs:
+        seats = p.get("available_seats")
+        lines.append(f"- {p.get('package_name')}: Rp{int(p.get('selling_price') or p.get('price') or 0):,} | {p.get('destination') or p.get('package_type') or ''} | durasi {p.get('duration','-')} | sisa kursi {seats if seats is not None else '-'}")
+    return "\n".join(lines[:20]) or "(belum ada paket aktif)"
+
+
+async def _wa_handover(conv, reason):
+    await db.whatsapp_conversations.update_one({"_id": conv["_id"]}, {"$set": {
+        "status": "HUMAN HANDOVER", "ai_status": "PAUSED", "handover_status": "PENDING", "last_activity": now_iso()}})
+    sid = conv.get("assigned_sales_id")
+    try:
+        await create_task(f"WhatsApp Handover — {conv.get('customer_name')}", assigned_user_id=sid,
+                          customer_id=conv.get("customer_id"), priority="HIGH",
+                          notes=f"AI eskalasi ke sales: {reason}", created_by="AI Agent", source="whatsapp_handover")
+    except Exception:
+        pass
+    await notify("WhatsApp Human Handover", f"{conv.get('customer_name')} butuh bantuan sales",
+                 link="/whatsapp", user_id=sid, ntype="WHATSAPP_HANDOVER", priority="high")
+    await _wa_log(conv["account_id"], "HANDOVER", "IN", str(conv["_id"]), True, reason)
+
+
+async def _wa_ai_process(conv_id, text):
+    conv = await db.whatsapp_conversations.find_one({"_id": ObjectId(conv_id)})
+    if not conv or conv.get("ai_status") != "ACTIVE":
+        return
+    cfg = await _wa_ai_config()
+    if not cfg.get("enabled", True):
+        return
+    low = (text or "").lower()
+    if any(k.strip() in low for k in (cfg.get("handover_keywords") or WA_HANDOVER_KEYWORDS)):
+        await _wa_handover(conv, "Customer meminta bantuan sales/manusia")
+        return
+    try:
+        from emergentintegrations.llm.chat import LlmChat, UserMessage
+        ctx = await _wa_pkg_context()
+        sys = (f"Anda AI Sales Assistant WhatsApp untuk travel umroh & haji. Gaya bahasa: {cfg.get('style','')}. "
+               f"Aturan: {cfg.get('rules','')}. Pengetahuan tambahan: {cfg.get('knowledge','')}. "
+               f"Gunakan HANYA data paket berikut (jangan mengarang harga/ketersediaan):\n{ctx}\n"
+               f"Jika pertanyaan di luar kemampuan Anda atau customer ingin bicara dengan sales/manusia, "
+               f"jawab HANYA dengan token persis: [HANDOVER]")
+        chat = LlmChat(api_key=os.environ["EMERGENT_LLM_KEY"], session_id=f"wa-{conv_id}", system_message=sys).with_model("gemini", "gemini-3-flash-preview")
+        reply = ((await chat.send_message(UserMessage(text=text or ""))) or "").strip()
+    except Exception as e:
+        await _wa_log(conv["account_id"], "AI", "IN", conv_id, False, str(e))
+        return
+    if not reply or "[HANDOVER]" in reply.upper():
+        await _wa_handover(conv, "AI tidak dapat menjawab")
+        return
+    acc = await _wa_get_account(conv["account_id"])
+    mid = f"ai-{now_iso()}"
+    try:
+        if acc and acc.get("base_url"):
+            r = _wa_call(acc, "POST", "/api/sendText", json={"session": acc.get("session", "default"), "chatId": f"{conv['wa_number']}@c.us", "text": reply})
+            if r.status_code < 400:
+                try:
+                    mid = (r.json() or {}).get("id") or mid
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    await db.whatsapp_messages.insert_one({"message_id": str(mid), "conversation_id": conv_id, "account_id": conv["account_id"],
+        "sender": "AI", "receiver": conv["wa_number"], "type": "text", "content": reply, "timestamp": now_iso(),
+        "ai_generated": True, "human_generated": False, "delivery_status": "SENT", "read_status": False})
+    await db.whatsapp_conversations.update_one({"_id": conv["_id"]}, {"$set": {"last_message": reply[:200], "last_activity": now_iso(), "status": "WAITING CUSTOMER"}})
+    await _wa_log(conv["account_id"], "AI", "OUT", str(mid), True, "")
+
+
+@api_router.get("/whatsapp/ai-config")
+async def wa_get_ai_config(user: dict = Depends(require_role("super_admin"))):
+    cfg = await _wa_ai_config()
+    cfg.pop("_id", None)
+    return cfg
+
+
+@api_router.put("/whatsapp/ai-config")
+async def wa_put_ai_config(body: dict, request: Request, user: dict = Depends(require_role("super_admin"))):
+    upd = {k: body[k] for k in ("enabled", "knowledge", "style", "rules", "greeting", "handover_keywords") if k in body}
+    await db.whatsapp_ai_config.update_one({"_id": "main"}, {"$set": upd}, upsert=True)
+    await log_audit(user, "whatsapp", "update_ai_config", request, new={k: v for k, v in upd.items() if k != "knowledge"})
+    cfg = await _wa_ai_config()
+    cfg.pop("_id", None)
+    return cfg
+
+
+@api_router.post("/whatsapp/conversations/{cid}/resume-ai")
+async def wa_resume_ai(cid: str, request: Request, user: dict = Depends(require_permission("sales.view"))):
+    conv = await db.whatsapp_conversations.find_one({"_id": ObjectId(cid)}) if ObjectId.is_valid(cid) else None
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    await db.whatsapp_conversations.update_one({"_id": conv["_id"]}, {"$set": {"ai_status": "ACTIVE", "status": "AI ACTIVE", "handover_status": "RESOLVED", "last_activity": now_iso()}})
+    await _wa_log(conv["account_id"], "RESUME_AI", "IN", cid, True, f"by {user['name']}")
+    return {"ai_status": "ACTIVE", "status": "AI ACTIVE"}
+
+
+@api_router.post("/whatsapp/conversations/{cid}/handover")
+async def wa_manual_handover(cid: str, body: dict, user: dict = Depends(require_permission("sales.view"))):
+    conv = await db.whatsapp_conversations.find_one({"_id": ObjectId(cid)}) if ObjectId.is_valid(cid) else None
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    await _wa_handover(conv, (body or {}).get("reason") or "Handover manual")
+    return {"status": "HUMAN HANDOVER"}
 
 
 app.include_router(api_router)

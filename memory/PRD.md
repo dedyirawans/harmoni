@@ -1,3 +1,12 @@
+## PHASE 10A — WhatsApp (WAHA) — TAHAP 2 (AI Agent) (2026-06) — DONE (curl E2E, Gemini)
+- AI auto-reply via Gemini (gemini-3-flash-preview, Emergent LLM key) dipicu di webhook saat pesan customer masuk & conversation `ai_status=ACTIVE`. Konteks = paket CRM aktif (nama/harga/destinasi/durasi/sisa kursi) — TANPA HPP; pakai AI Style/Rules/Knowledge dari config.
+- Config: `GET/PUT /api/whatsapp/ai-config` (super_admin): enabled, knowledge, style, rules, greeting, handover_keywords. Disimpan di `whatsapp_ai_config` (_id=main).
+- Human Handover: keyword customer (mis. "bicara dengan sales") atau AI balas token `[HANDOVER]` → status=HUMAN HANDOVER, ai_status=PAUSED, buat Task (source=whatsapp_handover) untuk assigned sales + notifikasi + AI berhenti auto-reply.
+- `POST /api/whatsapp/conversations/{id}/resume-ai` (sales/super_admin) → AI aktif kembali; `POST .../handover` manual.
+- Verified: pertanyaan paket → balasan Gemini Bahasa Indonesia pakai data paket asli; keyword → HUMAN HANDOVER + task; resume-ai → AI ACTIVE. Data uji dibersihkan.
+- BELUM: Tahap 3 (frontend menu WhatsApp Integration 11 submenu + Customer 360 → Conversations).
+
+
 ## PHASE 10A — Native WhatsApp (WAHA) Integration — TAHAP 1 (Backend) (2026-06) — DONE (curl E2E, tanpa N8N)
 - Engine: WAHA (self-hosted) — user belum hosting; kode+endpoint siap, tinggal isi Base URL/API Key. AI = Gemini (Tahap 2). Kredensial dienkripsi Fernet (`_enc/_dec`), di-mask, tidak pernah ke frontend/localStorage.
 - Endpoints (semua `require_role("super_admin")` kecuali webhook): GET/POST/PUT/DELETE `/api/whatsapp/accounts` (verify_token auto-generated, api_key masked); `/accounts/{id}/connect|qr|test|disconnect` (best-effort ke WAHA, error aman tanpa bocor token); `GET/POST /api/whatsapp/webhook/{aid}` (GET verify hub.verify_token→challenge, POST terima message + optional HMAC verify); `/conversations`, `/conversations/{id}/messages`, `/conversations/{id}/send` (text/image/document via WAHA), `/whatsapp/logs`.
