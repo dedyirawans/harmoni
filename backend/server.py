@@ -8887,9 +8887,18 @@ def _apico_extract_message(body):
         return None
     msg = payload.get("message") if isinstance(payload.get("message"), dict) else payload
     mid = msg.get("message_id") or msg.get("id") or payload.get("message_id") or payload.get("id")
-    direction = (msg.get("direction") or payload.get("direction") or "inbound").lower()
-    phone = (msg.get("customer_phone") or msg.get("from") or payload.get("customer_phone")
-             or payload.get("phone_number") or payload.get("from") or "")
+    ev = (body.get("event") or body.get("type") or payload.get("event") or msg.get("event") or "").lower()
+    _dir = (msg.get("direction") or payload.get("direction") or "").lower()
+    if _dir:
+        direction = _dir
+    elif any(k in ev for k in ["receiv", "incoming", "inbound"]):
+        direction = "inbound"
+    elif any(k in ev for k in ["sent", "deliver", "read", "fail", "status", "outbound"]):
+        direction = "outbound"
+    else:
+        direction = "inbound"
+    phone = (msg.get("customer_phone") or msg.get("from") or msg.get("sender") or msg.get("wa_id")
+             or payload.get("customer_phone") or payload.get("phone_number") or payload.get("from") or "")
     content = (msg.get("content") or msg.get("text") or msg.get("body") or payload.get("content") or "")
     mtype = (msg.get("message_type") or msg.get("type") or "text").lower()
     name = payload.get("customer_name") or msg.get("customer_name") or ""
