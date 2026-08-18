@@ -1,3 +1,12 @@
+## BUGFIX — AI bilang "seat penuh" setelah booking & booking duplikat (seat sisa 1) (2026-06) — DONE ✅ (simulator E2E)
+- **Gejala**: saat sisa kursi 1, AI membuat booking (kursi terakhir terpakai). Ketika customer menyusul menunggu invoice, AI menjalankan CHECK_SEAT lagi → kursi 0 → keliru bilang "kuota penuh"; pada beberapa kasus AI memanggil CREATE_BOOKING lagi (tanpa departure_id pada retry) → booking DUPLIKAT.
+- **Root cause**: di `_ai_create_booking`, cek ketersediaan kursi berjalan SEBELUM cek booking-existing (idempotency) → panggilan ulang kena error "seat penuh" sebelum guard; guard lama juga hanya cocok bila departure_id sama → retry tanpa departure_id lolos menjadi booking kedua.
+- **Fix backend**: idempotency dipindah ke PALING AWAL (sebelum seat check) + fallback: bila tak ada match dgn departure_id, cocokkan customer_id+package_id+pax (AUTO SALES, ai_generated, non-CANCELLED) → kembalikan booking yang sama. Cegah duplikat sekaligus hindari error "penuh" untuk booking yang sudah ada.
+- **Fix prompt**: (a) step (4d): JANGAN buat booking ulang bila sudah dibuat/terkonfirmasi di percakapan ini — pakai GET_PAYMENT_STATUS/GET_BOOKING; (b) step (6): saat customer tanya invoice/total/status atau menyusul setelah booking, WAJIB GET_PAYMENT_STATUS (by customer_id/booking_id), JANGAN CHECK_SEAT lagi & JANGAN pernah bilang "kursi/kuota penuh" ke customer yang SUDAH punya booking (kursinya sudah direservasi).
+- **Verified (seat=1)**: register → konfirmasi (booking pakai kursi terakhir, seat→0) → customer tanya "total invoice saya?" → AI panggil GET_PAYMENT_STATUS → "INV-xxxx, Rp27.500.000, Unpaid" (BUKAN "penuh"), hanya 1 booking (tanpa duplikat). Data uji dibersihkan; quota departure direstore.
+- Catatan: `_ait_create_customer` dedup by WhatsApp (1 WA = 1 customer) — perilaku benar (bukan bug).
+
+
 ## Kirim Media WhatsApp + Diskon Otomatis AI (2026-06) — DONE ✅ (backend curl E2E; FE smoke)
 ### Diskon Otomatis (AI tak lagi handover saat "diskon")
 - `WA_HANDOVER_KEYWORDS`: dihapus "diskon","nego","negosiasi","tawar" → pertanyaan/permintaan diskon TIDAK lagi memicu handover.

@@ -9165,9 +9165,9 @@ def _journey_prompt(base, tool_catalog):
         "(1) Customer baru → tanyakan nama & kebutuhannya, lalu buat Customer + Lead (Source WHATSAPP AI).\n"
         "(2) Jika customer tertarik → buat/perbarui Lead (paket, destinasi, tanggal, pax, budget bila ada).\n"
         "(3) Rekomendasikan paket sesuai destinasi/tanggal/pax/budget/ketersediaan. WAJIB CHECK_SEAT sebelum menyebut ketersediaan; JANGAN mengarang harga/seat.\n"
-        "(4) Jika customer minta DIDAFTARKAN / BOOKING / INVOICE → kumpulkan data (nama, paket, pax, tanggal keberangkatan), lalu KONFIRMASI ringkas ke customer (mis. 'Saya daftarkan a.n. X, paket Y, 2 pax, brgkt Z, ya?'). Setelah customer menjawab YA, jalankan berurutan: (a) SEARCH_PACKAGE untuk memperoleh package_id & departure_id yang VALID (WAJIB — jangan menebak id), (b) CREATE_CUSTOMER bila customer baru (butuh full_name & whatsapp), (c) CREATE_LEAD, (d) CREATE_BOOKING dengan params.confirmed=true beserta customer_id, package_id, departure_id, pax. Semua otomatis ter-tag AUTO SALES.\n"
+        "(4) Jika customer minta DIDAFTARKAN / BOOKING / INVOICE → kumpulkan data (nama, paket, pax, tanggal keberangkatan), lalu KONFIRMASI ringkas ke customer (mis. 'Saya daftarkan a.n. X, paket Y, 2 pax, brgkt Z, ya?'). Setelah customer menjawab YA, jalankan berurutan: (a) SEARCH_PACKAGE untuk memperoleh package_id & departure_id yang VALID (WAJIB — jangan menebak id), (b) CREATE_CUSTOMER bila customer baru (butuh full_name & whatsapp), (c) CREATE_LEAD, (d) CREATE_BOOKING dengan params.confirmed=true beserta customer_id, package_id, departure_id, pax. JANGAN membuat booking ulang bila pada percakapan ini booking sudah dibuat/terkonfirmasi — cukup gunakan GET_PAYMENT_STATUS/GET_BOOKING untuk nomor invoice & total; sistem juga otomatis mencegah booking duplikat. Semua otomatis ter-tag AUTO SALES.\n"
         "(5) DISKON: hanya bila diminta/relevan, sertakan discount_type ('PERCENT' atau 'NOMINAL') & discount_value di params CREATE_BOOKING. Sistem otomatis membatasi diskon ke maksimal per paket. WAJIB: setelah CREATE_BOOKING berhasil, sampaikan angka PERSIS dari OBSERVATION (invoice_number, discount_amount/discount_percent, total, payment_status) — JANGAN menyebut angka/persentase diskon versi Anda sendiri atau versi yang diminta customer bila berbeda dari OBSERVATION. Bila diskon yang diminta melebihi batas, jelaskan dengan sopan bahwa diskon yang dapat diberikan adalah yang tercantum di OBSERVATION. AI TIDAK PERNAH menandai LUNAS/PAID — status selalu 'Unpaid'; verifikasi pembayaran dilakukan admin.\n"
-        "(6) Jawab status pembayaran dengan data aktual CRM (GET_PAYMENT_STATUS).\n"
+        "(6) STATUS/INVOICE/TAGIHAN: bila customer menanyakan invoice/total/status pembayaran, atau menyusul SETELAH booking dibuat, WAJIB panggil GET_PAYMENT_STATUS dengan customer_id (atau booking_id) untuk data aktual. JANGAN menjalankan CHECK_SEAT lagi dan JANGAN PERNAH mengatakan 'kursi/kuota penuh' kepada customer yang SUDAH memiliki booking — kursinya SUDAH direservasi untuknya. CHECK_SEAT hanya untuk pertanyaan ketersediaan pada booking BARU.\n"
         "(7) PERTANYAAN DISKON: bila customer menanyakan/meminta diskon, JANGAN eskalasi ke manusia. Cek field 'max_discount_value'/'discount_available'/'max_discount_note' dari SEARCH_PACKAGE/GET_PACKAGE paket terkait. Bila discount_available true → sampaikan batas diskon maksimal yang tersedia (sesuai max_discount_note) dengan sopan. Bila discount_available false / max_discount_value 0 → sampaikan dengan sopan bahwa 'belum ada diskon untuk paket ini saat ini' (JANGAN mengarang diskon). Saat CREATE_BOOKING, sistem otomatis membatasi diskon ke batas tsb.\n"
         "\nUNTUK MENGAKSES DATA/AKSI CRM, balas TEPAT satu baris diawali 'ACTION:' diikuti JSON, contoh:\n"
         "ACTION: {\"tool\":\"SEARCH_PACKAGE\",\"params\":{\"q\":\"umrah\"}}\n"
@@ -10157,16 +10157,16 @@ async def _ai_create_booking(pr):
         raise ValueError("Jumlah pax tidak valid")
     dep = None
     did = pr.get("departure_id")
+    # Cek DULU apakah booking untuk permintaan ini sudah ada (hindari duplikat & error "seat penuh" padahal sudah booking).
+    dup_q = {"customer_id": cid, "package_id": pid, "pax": pax,
+             "booking_source": "AUTO SALES", "ai_generated": True, "status": {"$ne": "CANCELLED"}}
     if did:
-        dep = await db.departures.find_one({"_id": ObjectId(did)}) if ObjectId.is_valid(did) else None
-        if not dep:
-            raise ValueError("Departure tidak ditemukan")
-        dep = compute_departure(serialize(dep))
-        if int(dep.get("available_seat") or 0) < pax:
-            raise ValueError("Kursi tidak mencukupi (departure penuh)")
-    existing = await db.bookings.find_one({
-        "customer_id": cid, "package_id": pid, "departure_id": did, "pax": pax,
-        "booking_source": "AUTO SALES", "ai_generated": True, "status": {"$ne": "CANCELLED"}})
+        dup_q["departure_id"] = did
+    existing = await db.bookings.find_one(dup_q)
+    if not existing and did:
+        # Fallback: retry AI kadang tak menyertakan departure_id → cocokkan customer+paket+pax saja.
+        existing = await db.bookings.find_one({"customer_id": cid, "package_id": pid, "pax": pax,
+            "booking_source": "AUTO SALES", "ai_generated": True, "status": {"$ne": "CANCELLED"}})
     if existing:
         einv = await db.invoices.find_one({"booking_id": str(existing["_id"])})
         return {"idempotent": True, "id": str(existing["_id"]), "booking_number": existing.get("booking_number"),
@@ -10174,6 +10174,13 @@ async def _ai_create_booking(pr):
                 "pax": existing.get("pax"), "discount_amount": existing.get("discount_amount"),
                 "discount_percent": existing.get("discount_percent"), "payment_status": (einv or {}).get("status", "Unpaid"),
                 "package_name": existing.get("package_name"), "source": "WHATSAPP AI"}
+    if did:
+        dep = await db.departures.find_one({"_id": ObjectId(did)}) if ObjectId.is_valid(did) else None
+        if not dep:
+            raise ValueError("Departure tidak ditemukan")
+        dep = compute_departure(serialize(dep))
+        if int(dep.get("available_seat") or 0) < pax:
+            raise ValueError("Kursi tidak mencukupi (departure penuh)")
     settings = await get_settings_dict()
     per_pax = compute_pax_price(pkg, pax)
     subtotal = per_pax * pax
