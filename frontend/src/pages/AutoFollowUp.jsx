@@ -130,6 +130,7 @@ function SettingsTab() {
           ))}
         </div>
       </CardContent></Card>
+      <ABCard s={s} upd={upd} />
       <div className="flex justify-end"><Button onClick={save} disabled={busy} data-testid="afu-save">{busy ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Save className="h-4 w-4 mr-1" />}Simpan Setting</Button></div>
     </div>
   );
@@ -232,6 +233,34 @@ function LeadsTab() {
         </TableBody></Table>
       </CardContent></Card>
     </div>
+  );
+}
+
+function ABCard({ s, upd }) {
+  const [ab, setAb] = useState(null);
+  const load = useCallback(() => api.get("/ai/followup/ab").then((r) => setAb(r.data)).catch(() => setAb(null)), []);
+  useEffect(() => { load(); }, [load]);
+  const reset = async () => { try { await api.post("/ai/followup/ab/reset"); toast.success("A/B stats di-reset"); load(); } catch (e) { err(e); } };
+  return (
+    <Card><CardContent className="p-5 space-y-3" data-testid="afu-ab-card">
+      <div className="flex items-center justify-between">
+        <div><div className="font-semibold text-slate-700">A/B Testing Pesan Follow-Up</div><div className="text-xs text-slate-400">2 varian gaya, 50/50, auto-pilih pemenang by response rate</div></div>
+        <Switch checked={!!s.ab_testing_enabled} onCheckedChange={(v) => upd("ab_testing_enabled", v)} data-testid="afu-ab-enabled" />
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div><Label className="text-xs">Varian A — gaya</Label><Textarea rows={2} value={s.ab_style_a || ""} onChange={(e) => upd("ab_style_a", e.target.value)} data-testid="afu-ab-style-a" /></div>
+        <div><Label className="text-xs">Varian B — gaya</Label><Textarea rows={2} value={s.ab_style_b || ""} onChange={(e) => upd("ab_style_b", e.target.value)} data-testid="afu-ab-style-b" /></div>
+      </div>
+      <div><Label className="text-xs">Minimum sampel per varian sebelum pilih pemenang</Label><Input type="number" className="w-32" value={s.ab_min_sample ?? ""} onChange={(e) => upd("ab_min_sample", Number(e.target.value))} data-testid="afu-ab-min-sample" /></div>
+      {ab && (
+        <div className="flex flex-wrap items-center gap-2 pt-1">
+          <Badge variant="outline" data-testid="afu-ab-stat-a">A: {ab.A.sent} kirim · {ab.A.response} balas · {ab.A.rate}%</Badge>
+          <Badge variant="outline" data-testid="afu-ab-stat-b">B: {ab.B.sent} kirim · {ab.B.response} balas · {ab.B.rate}%</Badge>
+          {ab.winner ? <Badge className="bg-emerald-50 text-emerald-700 border-emerald-200" data-testid="afu-ab-winner">Pemenang: {ab.winner}</Badge> : <Badge variant="outline">Belum ada pemenang</Badge>}
+          <Button size="sm" variant="ghost" onClick={reset} data-testid="afu-ab-reset"><RefreshCw className="h-3.5 w-3.5 mr-1" />Reset</Button>
+        </div>
+      )}
+    </CardContent></Card>
   );
 }
 

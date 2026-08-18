@@ -1,4 +1,16 @@
 ## PHASE 10I — Natural Writing Time & Message Delivery (2026-06) — DONE ✅ (backend unit+E2E; FE render OK)
+### A/B Testing Follow-Up (2026-06) — DONE ✅ (backend E2E; FE render OK)
+- Config (di settings follow-up): `ab_testing_enabled` (default OFF), `ab_min_sample` (20), `ab_style_a`, `ab_style_b`.
+- `_afu_ab_choose`: bila enabled & belum ada pemenang → pilih varian **A/B acak 50/50**; bila pemenang terkunci → selalu pakai pemenang. Style varian di-inject ke prompt `_afu_generate_message(variant_style=...)`. Item queue simpan `ab_variant`. Berlaku untuk lead & payment follow-up.
+- `_afu_ab_inc('sent')` saat item SENT (process_ready). `_afu_ab_count_responses` (idempotent, dipanggil tiap scan/run): tiap follow-up A/B terkirim → cek balasan customer setelah `sent_at` → +response (flag `ab_response_counted`). `_afu_ab_check_winner`: bila A & B ≥ `ab_min_sample` → kunci pemenang (response rate tertinggi).
+- Endpoint: GET `/ai/followup/ab` (enabled, min_sample, styles, A/B sent/response/rate, winner), POST `/ai/followup/ab/reset`. UI: kartu "A/B Testing Pesan Follow-Up" di Settings (toggle, 2 style, min sample, stats badge A/B + pemenang + Reset).
+- Verified E2E: seed A/B/B + balasan → A{sent2,resp1,50%}, B{sent2,resp2,100%}, **winner=B** otomatis. RBAC super_admin. Data uji dibersihkan; A/B di-reset & disabled.
+
+### ⏳ PENDING — Aktifkan Live (uji kirim WhatsApp sungguhan)
+- BLOCKED: menunggu user memberikan **API Key API.CO.ID** (+ base URL / phone number id + nomor tujuan uji) untuk diisi di tab Provider. Semua pipeline (writing time, queue, follow-up, A/B) siap; pengiriman kini mock (FAILED aman). Begitu key live diisi → jalankan uji kirim end-to-end + verifikasi typing indicator nyata.
+
+
+
 - **Writing time engine** `_wa_writing_time(text, s)` menggantikan delay statis: dihitung dari **char count + word count + sentence count + kompleksitas** dengan **typing speed range** configurable (`typing_speed_min` 35 / `typing_speed_max` 60 char/dtk, variasi per-message via random), randomization ringan ±8% (bukan ekstrem), clamp `min_delay`(1)/`max_delay`(8) + **hard safety cap 12s** (`WA_WRITING_HARD_CAP`). Pesan sangat pendek → mepet min (mis. "Baik Kak." = 1.0s); pesan panjang tak berlebihan (≤8s). `_wa_typing_delay` = alias kompat.
 - **Message segmentation** dibatasi **maks 3 bubble** (`split_max_messages`, default 3) — sisa digabung ke bubble terakhir (bukan spam banyak bubble). Aktif bila `message_splitting` ON.
 - **Alur worker** (`_wa_process_queue_item`): START TYPING (`send_typing`) → hitung writing duration per-bubble → sleep → SEND (typing berhenti implisit saat send). Follow-up (Phase 10H) memakai jalur & writing time yang sama (bukan delay statis).

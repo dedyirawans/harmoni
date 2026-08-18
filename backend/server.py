@@ -10842,6 +10842,9 @@ AFU_DEFAULTS = {
     "intent_guidance": {}, "handover_on_booking_intent": True,
     "quotation_followup_enabled": True, "departure_nudge_enabled": True, "departure_nudge_days": 30,
     "payment_followup_enabled": True, "payment_followup_max": 3,
+    "ab_testing_enabled": False, "ab_min_sample": 20,
+    "ab_style_a": "Ringkas & langsung ke inti (sopan, 2-3 kalimat).",
+    "ab_style_b": "Hangat & konsultatif (empatik, menawarkan bantuan lanjutan).",
 }
 AFU_SETTING_KEYS = list(AFU_DEFAULTS.keys())
 
@@ -10901,7 +10904,7 @@ async def _afu_pkg_snapshot(package_id):
             f"harga dasar Rp{int(p.get('selling_price') or 0):,}.\nJadwal terbaru: {dep_txt}")
 
 
-async def _afu_generate_message(lead, conv, settings, followup_number, intent, extra_context=""):
+async def _afu_generate_message(lead, conv, settings, followup_number, intent, extra_context="", variant_style=""):
     msgs = await db.whatsapp_messages.find({"conversation_id": str(conv["_id"])}).sort("created_at", 1).to_list(1000)
     tail = msgs[-12:]
     hist = "\n".join(
@@ -10922,6 +10925,7 @@ async def _afu_generate_message(lead, conv, settings, followup_number, intent, e
     prompt = (
         f"Ini follow-up ke-{followup_number}. Customer intent: {intent}.\n"
         + (f"Panduan gaya intent: {guidance}\n" if guidance else "")
+        + (f"Gaya varian (A/B): {variant_style}\n" if variant_style else "")
         + (f"\n{extra_context}\n" if extra_context else "")
         + (f"\n{pkg_snap}\n" if pkg_snap else "")
         + f"\nRIWAYAT PERCAKAPAN TERAKHIR:\n{hist}\n\nTulis pesan follow-up sekarang."
@@ -10982,6 +10986,7 @@ async def _afu_evaluate_and_schedule(dry_run_default=True):
     s = await _afu_settings()
     sched_map = {int(r.get("number")): int(r.get("delay_hours")) for r in (s.get("schedule") or []) if r.get("number")}
     summary = {"evaluated": 0, "scheduled": 0, "cancelled": 0, "handover": 0, "skipped": 0}
+    await _afu_ab_count_responses()
     leads = await db.leads.find({"is_deleted": {"$ne": True}, "status": {"$in": AFU_ELIGIBLE_STAGES}}).to_list(2000)
     for lead in leads:
         summary["evaluated"] += 1
@@ -11074,7 +11079,8 @@ async def _afu_evaluate_and_schedule(dry_run_default=True):
             summary["skipped"] += 1
             continue
         # generate message
-        message = await _afu_generate_message(lead, conv, s, number, intent, extra_context=afu_extra)
+        abv, abstyle = await _afu_ab_choose(s)
+        message = await _afu_generate_message(lead, conv, s, number, intent, extra_context=afu_extra, variant_style=abstyle)
         if not message:
             summary["skipped"] += 1
             continue
@@ -11082,7 +11088,7 @@ async def _afu_evaluate_and_schedule(dry_run_default=True):
         item = {"lead_id": lid, "customer_id": cid, "conversation_id": cvid, "wa_number": conv.get("wa_number"),
                 "customer_name": cust.get("full_name"), "followup_number": number, "intent": intent,
                 "reason": f"{afu_trigger} • {int(elapsed)}h ≥ {threshold}h (FU#{number})", "message": message,
-                "trigger": afu_trigger, "source": "LEAD",
+                "trigger": afu_trigger, "source": "LEAD", "ab_variant": abv,
                 "package_id": lead.get("package_id"), "status": "SCHEDULED" if dry else "READY",
                 "dry_run": dry, "scheduled_at": now_iso(), "sent_at": None, "created_at": now_iso(), "updated_at": now_iso()}
         await db.ai_followup_queue.insert_one(item)
@@ -11142,14 +11148,15 @@ async def _afu_evaluate_payment_followups(dry_run_default=True):
         extra = (f"KONTEKS PEMBAYARAN (data CRM): Booking {bnum}, sisa tagihan Rp{int(out):,}, jatuh tempo {due} ({stage}). "
                  "Ingatkan pembayaran dengan sopan, sertakan nominal & jatuh tempo, tanpa menekan.")
         number = sent_cnt + 1
-        message = await _afu_generate_message(None, conv, s, number, "PAYMENT_PENDING", extra_context=extra)
+        abv, abstyle = await _afu_ab_choose(s)
+        message = await _afu_generate_message(None, conv, s, number, "PAYMENT_PENDING", extra_context=extra, variant_style=abstyle)
         if not message:
             summary["skipped"] += 1; continue
         dry = dry_run_default or (not s.get("enabled"))
         await db.ai_followup_queue.insert_one({"lead_id": None, "customer_id": cid, "conversation_id": str(conv["_id"]),
             "wa_number": conv.get("wa_number"), "customer_name": cust.get("full_name"), "booking_number": bnum,
             "followup_number": number, "intent": "PAYMENT_PENDING", "reason": f"PAYMENT • {stage} • Rp{int(out):,} due {due}",
-            "message": message, "trigger": "PAYMENT", "source": "PAYMENT", "status": "SCHEDULED" if dry else "READY",
+            "message": message, "trigger": "PAYMENT", "source": "PAYMENT", "ab_variant": abv, "status": "SCHEDULED" if dry else "READY",
             "dry_run": dry, "scheduled_at": now_iso(), "sent_at": None, "created_at": now_iso(), "updated_at": now_iso()})
         summary["scheduled"] += 1
     return summary
@@ -11205,6 +11212,8 @@ async def _afu_process_ready():
                 lead_upd["followup_stopped_reason"] = "max_followup_reached"
             await db.leads.update_one({"_id": lead["_id"]}, {"$set": lead_upd})
         await db.ai_followup_queue.update_one({"_id": it["_id"]}, {"$set": {"status": "SENT", "sent_at": now_iso(), "updated_at": now_iso()}})
+        if it.get("ab_variant"):
+            await _afu_ab_inc("sent", it.get("ab_variant"))
         summary["sent"] += 1
     return summary
 
@@ -11320,6 +11329,69 @@ async def afu_lead_status(lid: str, body: dict, user: dict = Depends(require_rol
         await db.ai_followup_queue.update_many({"lead_id": lid, "status": {"$in": ["SCHEDULED", "READY", "PROCESSING"]}},
                                                {"$set": {"status": "CANCELLED", "cancel_reason": f"admin_{st.lower()}", "updated_at": now_iso()}})
     return {"ok": True, "auto_followup_status": st}
+
+
+async def _afu_ab_stats():
+    doc = await db.afu_ab_stats.find_one({"_id": "main"}) or {}
+    return {"A": doc.get("A", {"sent": 0, "response": 0}), "B": doc.get("B", {"sent": 0, "response": 0}), "winner": doc.get("winner")}
+
+
+async def _afu_ab_choose(s):
+    if not s.get("ab_testing_enabled"):
+        return None, ""
+    st = await _afu_ab_stats()
+    styles = {"A": s.get("ab_style_a", ""), "B": s.get("ab_style_b", "")}
+    if st.get("winner") in ("A", "B"):
+        return st["winner"], styles.get(st["winner"], "")
+    import random as _r
+    v = "A" if _r.random() < 0.5 else "B"
+    return v, styles.get(v, "")
+
+
+async def _afu_ab_inc(field, variant):
+    if variant in ("A", "B"):
+        await db.afu_ab_stats.update_one({"_id": "main"}, {"$inc": {f"{variant}.{field}": 1}}, upsert=True)
+
+
+async def _afu_ab_check_winner(s):
+    st = await _afu_ab_stats()
+    if st.get("winner"):
+        return
+    mn = int(s.get("ab_min_sample") or 20)
+    A, B = st["A"], st["B"]
+    if A.get("sent", 0) >= mn and B.get("sent", 0) >= mn:
+        ra = A.get("response", 0) / A["sent"] if A.get("sent") else 0
+        rb = B.get("response", 0) / B["sent"] if B.get("sent") else 0
+        await db.afu_ab_stats.update_one({"_id": "main"}, {"$set": {"winner": "A" if ra >= rb else "B", "winner_at": now_iso()}}, upsert=True)
+
+
+async def _afu_ab_count_responses():
+    """Idempotent: tiap follow-up A/B terkirim → cek balasan customer setelahnya → +response, lalu evaluasi pemenang."""
+    s = await _afu_settings()
+    async for it in db.ai_followup_queue.find({"ab_variant": {"$in": ["A", "B"]}, "status": "SENT", "ab_response_counted": {"$ne": True}}):
+        reply = await db.whatsapp_messages.find_one({"conversation_id": it.get("conversation_id"), "direction": "INBOUND", "created_at": {"$gt": it.get("sent_at") or ""}})
+        if reply:
+            await _afu_ab_inc("response", it.get("ab_variant"))
+            await db.ai_followup_queue.update_one({"_id": it["_id"]}, {"$set": {"ab_response_counted": True}})
+    await _afu_ab_check_winner(s)
+
+
+@api_router.get("/ai/followup/ab")
+async def afu_ab_get(user: dict = Depends(require_role("super_admin"))):
+    s = await _afu_settings()
+    st = await _afu_ab_stats()
+    rate = lambda x: round((x.get("response", 0) / x["sent"]) * 100, 1) if x.get("sent") else 0.0
+    return {"enabled": s.get("ab_testing_enabled"), "min_sample": s.get("ab_min_sample"),
+            "style_a": s.get("ab_style_a"), "style_b": s.get("ab_style_b"),
+            "A": {"sent": st["A"].get("sent", 0), "response": st["A"].get("response", 0), "rate": rate(st["A"])},
+            "B": {"sent": st["B"].get("sent", 0), "response": st["B"].get("response", 0), "rate": rate(st["B"])},
+            "winner": st.get("winner")}
+
+
+@api_router.post("/ai/followup/ab/reset")
+async def afu_ab_reset(user: dict = Depends(require_role("super_admin"))):
+    await db.afu_ab_stats.delete_one({"_id": "main"})
+    return {"ok": True}
 
 
 @api_router.get("/ai/followup/analytics")
