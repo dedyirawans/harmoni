@@ -1,4 +1,10 @@
-## BUGFIX — AI WhatsApp: Greeting/Closing berulang & Token ACTION bocor (2026-06) — DONE ✅ (simulator E2E)
+## BUGFIX — AI diam saat ditanya itinerary (2026-06) — DONE ✅ (simulator)
+- Root cause: pertanyaan itinerary butuh beberapa tool call (GET_ITINERARY gagal→SEARCH_PACKAGE→GET_ITINERARY) melampaui budget loop 4 → balasan kosong → fix sebelumnya mengembalikan handover diam (reply None) → `ai_status` PAUSED → AI berhenti merespon.
+- Fix `_wa_ai_journey`: budget loop 4→6; tambah upaya terakhir "jawab langsung" bila loop habis; bila tetap kosong → kirim fallback ramah ("Mohon tunggu sebentar ya Kak…") dengan `handover=False` → customer TIDAK pernah didiamkan & AI tetap ACTIVE. Verified: itinerary dijawab jujur (data belum tersedia), ai_status tetap ACTIVE.
+- Catatan: percakapan yang sudah terlanjur PAUSED dari bug lama perlu di-resume manual (tab Human Handover) agar AI membalas lagi.
+
+
+
 - **Root cause 1 (greeting/closing berulang)**: `_wa_ai_journey` membuat sesi LLM baru tiap pesan TANPA riwayat percakapan → AI selalu mengira pesan pertama. **Fix**: inject 12 pesan terakhir dari `whatsapp_messages` ke system prompt + deteksi `is_first` (ada OUTBOUND sebelumnya?) + aturan wajib "jangan ulang salam/penutup; lanjutkan obrolan".
 - **Root cause 2 (token `ACTION:{...}` terkirim ke customer)**: bila JSON tool gagal di-parse, kode lama mengembalikan `reply` mentah ke customer; balasan akhir juga tak disanitasi. **Fix**: ekstraksi ACTION via regex `ACTION:\s*(\{.*\})` (di mana pun), bila parse gagal → re-prompt (bukan kirim mentah), sanitasi balasan akhir membuang baris `ACTION:`/`OBSERVATION`, dan bila kosong → handover (tidak pernah membocorkan token).
 - Verified simulator: turn 1 greet wajar tanpa leak; turn 2 (dengan riwayat) tidak mengulang greeting & query "hongkong" dijawab natural tanpa leak ACTION.

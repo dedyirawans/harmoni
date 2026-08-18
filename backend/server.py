@@ -9128,7 +9128,7 @@ async def _wa_ai_journey(conv, text, ctx_extra=None):
     tools_used = []
     turn = text or ""
     reply = ""
-    for _ in range(4):
+    for _ in range(6):
         reply = ((await chat.send_message(UserMessage(text=turn))) or "").strip()
         if "[HANDOVER]" in reply.upper():
             reason = reply.upper().split("[HANDOVER]", 1)[-1].strip(" ]:") or "Eskalasi ke sales"
@@ -9155,10 +9155,12 @@ async def _wa_ai_journey(conv, text, ctx_extra=None):
         if cleaned:
             return {"handover": False, "reply": cleaned, "tools_used": tools_used}
         turn = "Jawab customer langsung dengan bahasa natural (TANPA ACTION/JSON/OBSERVATION)."
+    # Upaya terakhir: paksa jawaban langsung agar customer TIDAK pernah didiamkan
+    reply = ((await chat.send_message(UserMessage(text="Sekarang jawab customer LANGSUNG dalam bahasa natural berdasarkan informasi yang sudah ada, TANPA menulis ACTION/JSON/OBSERVATION."))) or "").strip()
     cleaned = _clean(reply)
-    if not cleaned:
-        return {"handover": True, "reason": "AI tidak dapat menyusun jawaban", "reply": None, "tools_used": tools_used}
-    return {"handover": False, "reply": cleaned, "tools_used": tools_used}
+    if cleaned:
+        return {"handover": False, "reply": cleaned, "tools_used": tools_used}
+    return {"handover": False, "reply": "Mohon tunggu sebentar ya Kak, saya cek detailnya dulu dan segera saya kabari. 🙏", "tools_used": tools_used}
 
 
 async def _wa_ai_process(conv_id, text):
