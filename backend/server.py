@@ -5420,7 +5420,8 @@ async def delete_company_file(fid: str, request: Request, reason: str = Query(""
 
 
 @api_router.get("/files/{fid}/download")
-async def download_company_file(fid: str, request: Request, authorization: str = Header(None), auth: str = Query(None)):
+async def download_company_file(fid: str, request: Request, inline: bool = False,
+                                authorization: str = Header(None), auth: str = Query(None)):
     token = authorization[7:] if (authorization or "").startswith("Bearer ") else auth
     user = await user_from_token(token) if token else None
     if not user:
@@ -5434,12 +5435,14 @@ async def download_company_file(fid: str, request: Request, authorization: str =
         raise HTTPException(status_code=403, detail="403 Forbidden: no access to this file")
     data, ct = get_object(f["storage_path"])
     await db.file_downloads.insert_one({"file_id": fid, "file_name": f.get("file_name"), "version": f.get("version"),
-        "user_id": user.get("_id"), "user_name": user.get("name"), "user_role": user.get("role"), "action": "DOWNLOAD",
+        "user_id": user.get("_id"), "user_name": user.get("name"), "user_role": user.get("role"),
+        "action": "PREVIEW" if inline else "DOWNLOAD",
         "ip": request.client.host if request and request.client else None,
         "user_agent": request.headers.get("user-agent") if request else None, "timestamp": now_iso()})
     fname = f.get("original_filename") or f.get("file_name") or "file"
+    disp = "inline" if inline else "attachment"
     return Response(content=data, media_type=f.get("content_type") or ct,
-                    headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+                    headers={"Content-Disposition": f'{disp}; filename="{fname}"'})
 
 
 @api_router.get("/documents/expiring")

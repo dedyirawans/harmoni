@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import api, { API, formatApiErrorDetail } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { Card, CardContent } from "@/components/ui/card";
@@ -14,9 +14,10 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { FolderDown, Loader2, Upload, Download, Pencil, Trash2, History, ClipboardList, FileText } from "lucide-react";
+import { FolderDown, Loader2, Upload, Download, Pencil, Trash2, History, ClipboardList, FileText, Eye, Search, X } from "lucide-react";
 import { toast } from "sonner";
 
+const CATEGORIES = ["Price List", "Sales Material", "Product Information", "SOP", "Company Document", "Accounting Document", "Tax Document", "Training", "Other"];
 const ACCESS_LABELS = {
   ALL_STAFF: "Semua Staff", SALES: "Sales", ACCOUNTING: "Accounting",
   SALES_ACCOUNTING: "Sales + Accounting", SPECIFIC: "User Tertentu",
@@ -24,6 +25,8 @@ const ACCESS_LABELS = {
 const fmtDate = (s) => (s ? String(s).slice(0, 16).replace("T", " ") : "—");
 const fmtSize = (n) => { const b = Number(n || 0); return b >= 1e6 ? (b / 1e6).toFixed(1) + " MB" : (b / 1e3).toFixed(0) + " KB"; };
 const EMPTY = { file_name: "", description: "", category: "Other", version: "v1", access_type: "ALL_STAFF", allowed_user_ids: [] };
+const isImg = (ct) => (ct || "").startsWith("image/");
+const isPdf = (ct) => (ct || "").includes("pdf");
 
 export default function FileDownload() {
   const { user } = useAuth();
@@ -37,6 +40,9 @@ export default function FileDownload() {
   const [saving, setSaving] = useState(false);
   const [toDelete, setToDelete] = useState(null);
   const [logs, setLogs] = useState(null);
+  const [preview, setPreview] = useState(null);
+  const [search, setSearch] = useState("");
+  const [catFilter, setCatFilter] = useState("all");
 
   const load = () => api.get("/files").then((r) => setFiles(r.data)).catch(() => setFiles([]));
   useEffect(() => {
@@ -46,6 +52,14 @@ export default function FileDownload() {
 
   const set = (k) => (v) => setForm((f) => ({ ...f, [k]: v }));
   const toggleUser = (id) => setForm((f) => ({ ...f, allowed_user_ids: f.allowed_user_ids.includes(id) ? f.allowed_user_ids.filter((x) => x !== id) : [...f.allowed_user_ids, id] }));
+
+  const filtered = useMemo(() => {
+    let list = files || [];
+    if (catFilter !== "all") list = list.filter((f) => f.category === catFilter);
+    const s = search.trim().toLowerCase();
+    if (s) list = list.filter((f) => (f.file_name || "").toLowerCase().includes(s) || (f.original_filename || "").toLowerCase().includes(s) || (f.description || "").toLowerCase().includes(s));
+    return list;
+  }, [files, catFilter, search]);
 
   const openCreate = () => { setEditing(null); setForm(EMPTY); setFile(null); setOpen(true); };
   const openEdit = (f) => { setEditing(f); setForm({ file_name: f.file_name, description: f.description || "", category: f.category, version: f.version, access_type: f.access_type, allowed_user_ids: f.allowed_user_ids || [] }); setFile(null); setOpen(true); };
@@ -76,7 +90,8 @@ export default function FileDownload() {
     finally { setSaving(false); }
   };
 
-  const doDownload = (f) => { window.open(`${API}/files/${f.id}/download?auth=${localStorage.getItem("token")}`, "_blank"); };
+  const fileUrl = (f, inline) => `${API}/files/${f.id}/download?auth=${localStorage.getItem("token")}${inline ? "&inline=1" : ""}`;
+  const doDownload = (f) => { window.open(fileUrl(f, false), "_blank"); };
   const doDelete = async () => {
     try { await api.delete(`/files/${toDelete.id}`, { params: { reason: "Dihapus dari UI" } }); toast.success("File dihapus"); setToDelete(null); load(); }
     catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); }
@@ -100,9 +115,25 @@ export default function FileDownload() {
         )}
       </div>
 
+      {/* Search + Category filter */}
+      <div className="flex flex-col sm:flex-row gap-3">
+        <div className="relative flex-1">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" aria-hidden="true" />
+          <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Cari nama file atau deskripsi..." className="pl-9 pr-9" data-testid="file-search-input" />
+          {search && <button onClick={() => setSearch("")} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600" data-testid="file-search-clear"><X className="h-4 w-4" /></button>}
+        </div>
+        <Select value={catFilter} onValueChange={setCatFilter}>
+          <SelectTrigger className="w-full sm:w-56" data-testid="file-category-filter"><SelectValue /></SelectTrigger>
+          <SelectContent className="bg-white">
+            <SelectItem value="all">Semua Kategori</SelectItem>
+            {CATEGORIES.map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}
+          </SelectContent>
+        </Select>
+      </div>
+
       <Card className="border-slate-200 shadow-sm overflow-hidden">
-        {files.length === 0 ? (
-          <div className="p-12 text-center text-slate-500" data-testid="files-empty"><FileText className="h-8 w-8 mx-auto text-slate-300" /><p className="mt-2">Belum ada file yang tersedia untuk Anda.</p></div>
+        {filtered.length === 0 ? (
+          <div className="p-12 text-center text-slate-500" data-testid="files-empty"><FileText className="h-8 w-8 mx-auto text-slate-300" /><p className="mt-2">{(files.length && (search || catFilter !== "all")) ? "Tidak ada file yang cocok dengan pencarian/filter." : "Belum ada file yang tersedia untuk Anda."}</p></div>
         ) : (
           <Table data-testid="files-table">
             <TableHeader><TableRow className="bg-slate-50">
@@ -110,7 +141,7 @@ export default function FileDownload() {
               <TableHead>Diunggah Oleh</TableHead><TableHead>Tanggal</TableHead><TableHead>Akses</TableHead>
               <TableHead>Status</TableHead><TableHead className="text-right">Aksi</TableHead>
             </TableRow></TableHeader>
-            <TableBody>{files.map((f) => (
+            <TableBody>{filtered.map((f) => (
               <TableRow key={f.id} data-testid={`file-row-${f.id}`}>
                 <TableCell><div className="font-medium text-slate-900">{f.file_name}</div><div className="text-xs text-slate-400">{f.original_filename} · {fmtSize(f.size)}</div></TableCell>
                 <TableCell><Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200">{f.category}</Badge></TableCell>
@@ -120,6 +151,7 @@ export default function FileDownload() {
                 <TableCell className="text-slate-600 text-sm">{ACCESS_LABELS[f.access_type] || f.access_type}{f.access_type === "SPECIFIC" && <span className="text-xs text-slate-400"> ({(f.allowed_user_ids || []).length})</span>}</TableCell>
                 <TableCell><Badge variant="outline" className={f.status === "ACTIVE" ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-slate-100 text-slate-500"}>{f.status}</Badge></TableCell>
                 <TableCell className="text-right whitespace-nowrap">
+                  {(isImg(f.content_type) || isPdf(f.content_type)) && <Button size="icon" variant="ghost" onClick={() => setPreview(f)} data-testid={`preview-file-${f.id}`} title="Pratinjau"><Eye className="h-4 w-4 text-slate-600" /></Button>}
                   <Button size="icon" variant="ghost" onClick={() => doDownload(f)} data-testid={`download-file-${f.id}`} title="Unduh"><Download className="h-4 w-4 text-blue-600" /></Button>
                   {isSA && <Button size="icon" variant="ghost" onClick={() => openEdit(f)} data-testid={`edit-file-${f.id}`} title="Edit"><Pencil className="h-4 w-4 text-slate-600" /></Button>}
                   {isSA && <Button size="icon" variant="ghost" className="text-red-600" onClick={() => setToDelete(f)} data-testid={`delete-file-${f.id}`} title="Hapus"><Trash2 className="h-4 w-4" /></Button>}
@@ -129,6 +161,25 @@ export default function FileDownload() {
           </Table>
         )}
       </Card>
+
+      {/* Preview dialog */}
+      <Dialog open={!!preview} onOpenChange={(o) => !o && setPreview(null)}>
+        <DialogContent className="bg-white max-w-4xl" data-testid="file-preview-dialog">
+          <DialogHeader><DialogTitle className="font-display truncate">{preview?.file_name}</DialogTitle><DialogDescription>Pratinjau — {preview?.category} · {preview?.version}</DialogDescription></DialogHeader>
+          {preview && (
+            <div className="w-full h-[70vh] bg-slate-50 rounded-md overflow-hidden flex items-center justify-center">
+              {isImg(preview.content_type) ? (
+                <img src={fileUrl(preview, true)} alt={preview.file_name} className="max-w-full max-h-full object-contain" data-testid="preview-image" />
+              ) : isPdf(preview.content_type) ? (
+                <iframe src={fileUrl(preview, true)} title="preview" className="w-full h-full border-0" data-testid="preview-pdf" />
+              ) : (
+                <p className="text-sm text-slate-500">Tipe file ini tidak dapat dipratinjau. Silakan unduh.</p>
+              )}
+            </div>
+          )}
+          <DialogFooter><Button variant="outline" onClick={() => doDownload(preview)} data-testid="preview-download-btn"><Download className="h-4 w-4 mr-1" />Unduh</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Upload / Edit dialog */}
       <Dialog open={open} onOpenChange={setOpen}>
@@ -179,14 +230,14 @@ export default function FileDownload() {
       {/* Download logs dialog */}
       <Dialog open={logs !== null} onOpenChange={(o) => !o && setLogs(null)}>
         <DialogContent className="bg-white max-w-3xl max-h-[85vh] overflow-y-auto" data-testid="logs-dialog">
-          <DialogHeader><DialogTitle className="font-display flex items-center gap-2"><ClipboardList className="h-5 w-5 text-blue-600" />Log Unduhan File</DialogTitle><DialogDescription>Riwayat siapa mengunduh file apa dan kapan.</DialogDescription></DialogHeader>
+          <DialogHeader><DialogTitle className="font-display flex items-center gap-2"><ClipboardList className="h-5 w-5 text-blue-600" />Log Unduhan File</DialogTitle><DialogDescription>Riwayat siapa mengunduh/pratinjau file apa dan kapan.</DialogDescription></DialogHeader>
           {logs === "loading" ? <div className="p-8 flex justify-center"><Loader2 className="h-5 w-5 animate-spin text-blue-600" /></div>
             : (logs || []).length === 0 ? <p className="text-sm text-slate-400 text-center py-6">Belum ada log unduhan.</p>
             : (
             <Table data-testid="logs-table">
-              <TableHeader><TableRow className="bg-slate-50"><TableHead>File</TableHead><TableHead>User</TableHead><TableHead>Role</TableHead><TableHead>Waktu</TableHead><TableHead>IP</TableHead></TableRow></TableHeader>
+              <TableHeader><TableRow className="bg-slate-50"><TableHead>File</TableHead><TableHead>User</TableHead><TableHead>Role</TableHead><TableHead>Aksi</TableHead><TableHead>Waktu</TableHead><TableHead>IP</TableHead></TableRow></TableHeader>
               <TableBody>{(logs || []).map((l, i) => (
-                <TableRow key={i}><TableCell className="font-medium">{l.file_name} <span className="text-xs text-slate-400">{l.version}</span></TableCell><TableCell>{l.user_name}</TableCell><TableCell><Badge variant="outline">{l.user_role}</Badge></TableCell><TableCell className="text-slate-500 text-sm">{fmtDate(l.timestamp)}</TableCell><TableCell className="text-xs text-slate-400">{l.ip || "—"}</TableCell></TableRow>
+                <TableRow key={i}><TableCell className="font-medium">{l.file_name} <span className="text-xs text-slate-400">{l.version}</span></TableCell><TableCell>{l.user_name}</TableCell><TableCell><Badge variant="outline">{l.user_role}</Badge></TableCell><TableCell className="text-xs text-slate-500">{l.action}</TableCell><TableCell className="text-slate-500 text-sm">{fmtDate(l.timestamp)}</TableCell><TableCell className="text-xs text-slate-400">{l.ip || "—"}</TableCell></TableRow>
               ))}</TableBody>
             </Table>
           )}

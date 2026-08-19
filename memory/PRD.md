@@ -1,3 +1,9 @@
+## Documents — Preview Inline + Filter Kategori & Pencarian (2026-06) — DONE ✅ (backend curl + FE smoke)
+- **Preview inline**: `GET /files/{fid}/download?inline=1` kini set `Content-Disposition: inline` (bukan attachment) + dicatat sebagai aksi `PREVIEW` di log. Frontend: tombol mata (data-testid=preview-file-*) → dialog pratinjau (PDF via iframe, gambar via img); tombol Unduh di dalam preview. Hanya muncul untuk content_type image/* atau pdf.
+- **Filter & pencarian**: input pencarian nama/deskripsi file (data-testid=file-search-input) + dropdown filter kategori (data-testid=file-category-filter, "Semua Kategori" + 9 kategori). Filtering di sisi klien atas daftar file yang sudah ter-scope RBAC.
+- Verified: header inline vs attachment benar, log aksi [DOWNLOAD, PREVIEW], search+filter render. RBAC & scope tidak berubah.
+
+
 ## PHASE 10E-5 — File Download Center (Documents) + Regression (2026-06) — DONE ✅ (backend curl E2E; FE testing_agent)
 - Menu baru **Documents** (`/documents`, terlihat semua role) — file internal perusahaan, BUKAN publik. Koleksi `company_files` + `file_downloads` (log).
 - **Backend** (server.py): POST/GET/PUT/DELETE `/files[/{fid}]`, POST `/files/{fid}/replace` (versioning + version_history), GET `/files/{fid}/download` (authenticated header/?auth, cek akses+status, catat log IP/UA), GET `/files/download-logs`, GET `/files/meta`. Admin ops = super_admin only. Download = get_current_user via token; akses via `_file_access_ok` (super_admin all; else role ∈ allowed_roles atau user ∈ allowed_user_ids; status ACTIVE).
