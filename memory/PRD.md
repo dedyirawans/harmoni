@@ -1,3 +1,8 @@
+## Brosur — Fix teks "LOGO AGENCY" & Tombol Hapus jelas (2026-06) — DONE ✅
+- **Fix placeholder "LOGO AGENCY"**: prompt `_brochure_prompt` kini eksplisit MELARANG AI menggambar logo/placeholder/tulisan 'LOGO'/'LOGO AGENCY'/'YOUR LOGO' — cukup sisakan area kosong; logo asli ditempel sistem. Verified: brosur baru tampil dengan logo HWI asli (kanan atas), tanpa teks placeholder.
+- **Tombol Hapus**: tiap kartu brosur kini punya tombol "Hapus" berlabel merah (super admin/canManage) + container flex-wrap agar rapi. (Sebelumnya hanya ikon.)
+
+
 ## Brosur — Fix Logo, Regenerate, Jadikan Utama, Kirim PDF WA, Watermark Kustom (2026-06) — DONE ✅
 - **FIX LOGO tidak muncul**: brosur memakai `info = await get_settings_dict()` (baca system_settings, TANPA logo). Diubah ke `_get_doc_template()` yang merge `company_settings.company.logo` (data-URL) ke `logo_url`. Logo kini ter-stamp di atas gambar. (replace_all 2 lokasi generate).
 - **Regenerate per kartu**: `POST /brochures/{bid}/regenerate` (kind AI) — pakai gen_meta tersimpan, buat ulang 1 gambar, replace storage record. UI tombol refresh per kartu.

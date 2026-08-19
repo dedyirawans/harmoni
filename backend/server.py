@@ -9361,7 +9361,7 @@ def _brochure_prompt(pkg, itin_txt, price, theme, highlights, promo, cta, extra,
         + (f"Ajakan (CTA) di bagian bawah: {cta}. " if cta else "")
         + (f"Catatan tambahan: {extra}. " if extra else "")
         + ("Gunakan FOTO REFERENSI terlampir sebagai elemen visual utama (mis. foto hotel/destinasi), integrasikan secara natural. " if has_ref else "")
-        + "Sertakan nuansa Islami/perjalanan yang relevan bila ini paket Umrah. JANGAN memuat jadwal/itinerary harian. Sisakan ruang kosong di bagian ATAS untuk logo agency. Tata letak bersih dan profesional."
+        + "Sertakan nuansa Islami/perjalanan yang relevan bila ini paket Umrah. JANGAN memuat jadwal/itinerary harian. PENTING: JANGAN menggambar logo apa pun, kotak/placeholder logo, atau tulisan 'LOGO'/'LOGO AGENCY'/'LOGO HERE'/'YOUR LOGO' — cukup sisakan area kosong polos di bagian ATAS (logo asli akan ditempel otomatis oleh sistem). Tata letak bersih dan profesional."
     )
     return p
 

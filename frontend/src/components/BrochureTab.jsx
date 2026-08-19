@@ -192,7 +192,7 @@ export function BrochureTab({ pkgId, canManage }) {
                     <span className="text-xs font-medium text-slate-700 truncate">{b.filename}</span>
                     <span className={`text-[10px] px-1.5 py-0.5 rounded shrink-0 ${b.kind === "AI" ? "bg-indigo-100 text-indigo-700" : b.kind === "AI_PDF" ? "bg-rose-100 text-rose-700" : "bg-slate-100 text-slate-600"}`}>{b.kind === "AI" ? "AI" : b.kind === "AI_PDF" ? "AI PDF" : "Upload"}</span>
                   </div>
-                  <div className="flex gap-1.5">
+                  <div className="flex flex-wrap gap-1.5">
                     <Button size="sm" variant="outline" className="h-8 flex-1 text-xs" onClick={() => setPreview(b)} data-testid={`preview-btn-${b.id}`}><Eye className="h-3.5 w-3.5 mr-1" /> Preview</Button>
                     {b.is_image
                       ? <>
@@ -202,7 +202,7 @@ export function BrochureTab({ pkgId, canManage }) {
                       : <Button size="sm" variant="outline" className="h-8 text-xs" onClick={() => download(b)} data-testid={`download-brochure-${b.id}`}><Download className="h-3.5 w-3.5 mr-1" /> Unduh</Button>}
                     {canManage && b.kind === "AI" && <Button size="sm" variant="outline" className="h-8" title="Regenerate" disabled={busyId === b.id} onClick={() => regenerate(b)} data-testid={`regen-${b.id}`}>{busyId === b.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}</Button>}
                     {canManage && <Button size="sm" variant="outline" className={`h-8 ${b.is_primary ? "text-amber-600" : ""}`} title="Jadikan Utama (cover & WA)" disabled={busyId === b.id} onClick={() => setPrimary(b)} data-testid={`primary-${b.id}`}><Star className={`h-3.5 w-3.5 ${b.is_primary ? "fill-amber-400" : ""}`} /></Button>}
-                    {canManage && <Button size="sm" variant="outline" className="h-8 text-red-600 hover:text-red-700" onClick={() => remove(b)} data-testid={`delete-brochure-${b.id}`}><Trash2 className="h-3.5 w-3.5" /></Button>}
+                    {canManage && <Button size="sm" variant="outline" className="h-8 text-xs text-red-600 hover:text-red-700 hover:bg-red-50" onClick={() => remove(b)} data-testid={`delete-brochure-${b.id}`}><Trash2 className="h-3.5 w-3.5 mr-1" /> Hapus</Button>}
                   </div>
                 </CardContent>
               </Card>
