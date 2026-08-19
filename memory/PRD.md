@@ -1,3 +1,7 @@
+## Enhancement — TTD & Stempel: hapus latar putih otomatis (2026-06) — DONE ✅ (PDF-render verified)
+- Helper `_remove_white_bg(img)` di backend mengubah piksel putih/near-putih menjadi transparan (soft ramp lo=208..hi=246 untuk tepi anti-alias, tetap menghormati transparansi asli). Diterapkan pada tanda tangan DAN stempel di `_compose_sign_stamp` (saat render), jadi berlaku juga untuk PNG yang sudah diunggah.
+- Hasil: stempel di belakang tanda tangan tampak menyatu natural — tidak ada kotak putih. Verified dengan uji PNG berlatar putih (tanda tangan garis biru + stempel lingkaran merah) → keduanya transparan & stempel tembus di belakang tanda tangan.
+
 ## Update — Jabatan hanya Super Admin + Bekukan tanda tangan di dokumen terbit (2026-06) — DONE ✅ (curl-verified)
 - **Jabatan (title) hanya Super Admin**: `PUT /api/auth/me/profile` kini hanya menerima `signature` (field `title` dihapus dari `MyProfileUpdate`). Dialog "Profil & Tanda Tangan" (kanan-atas) menampilkan Jabatan **read-only** + catatan bahwa jabatan hanya diubah Super Admin via User Management. Jadi sales hanya bisa ganti tanda tangannya sendiri.
 - **Bekukan tanda tangan**: helper `_freeze_signer(kind,doc,tpl,collection)` — saat dokumen pertama kali di-render/terbit, snapshot signer (name/title/signature_url/stamp_url) disimpan di field `signature_snapshot` pada dokumen (invoices/quotations/schedule_payments) dan selalu dipakai untuk render berikutnya. Perubahan tanda tangan user/default TIDAK mengubah dokumen yang sudah terbit. `_signature_block` memakai stempel dari snapshot.

@@ -4308,6 +4308,24 @@ def _load_pil_image(src):
         return None
 
 
+def _remove_white_bg(img, lo=208, hi=246):
+    """Make white/near-white pixels transparent so a stamp behind a signature blends naturally.
+    Soft ramp between lo..hi for anti-aliased edges. Preserves existing transparency."""
+    try:
+        from PIL import ImageChops
+        if img.mode != "RGBA":
+            img = img.convert("RGBA")
+        gray = img.convert("L")
+        span = max(hi - lo, 1)
+        lut = [255 if p <= lo else (0 if p >= hi else int((hi - p) * 255 / span)) for p in range(256)]
+        mask = gray.point(lut)
+        new_a = ImageChops.multiply(img.split()[3], mask)
+        img.putalpha(new_a)
+        return img
+    except Exception:
+        return img
+
+
 def _compose_sign_stamp(signature_src, stamp_src, w_px=460, h_px=230):
     """Composite signature (front) + company stamp (behind, semi-transparent) into one PNG."""
     try:
@@ -4316,6 +4334,10 @@ def _compose_sign_stamp(signature_src, stamp_src, w_px=460, h_px=230):
         stamp = _load_pil_image(stamp_src)
         if not sign and not stamp:
             return None
+        if sign:
+            sign = _remove_white_bg(sign)
+        if stamp:
+            stamp = _remove_white_bg(stamp)
         canvas = Image.new("RGBA", (w_px, h_px), (255, 255, 255, 0))
         if stamp:
             s = stamp.copy()
