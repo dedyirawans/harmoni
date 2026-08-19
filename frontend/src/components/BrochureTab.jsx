@@ -7,7 +7,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Loader2, Upload, Download, Trash2, Sparkles, FileText, FileType2, ImagePlus, Eye, FileImage } from "lucide-react";
+import { Loader2, Upload, Download, Trash2, Sparkles, FileText, FileType2, ImagePlus, Eye, FileImage, RefreshCw, Star } from "lucide-react";
 import { toast } from "sonner";
 
 export function BrochureTab({ pkgId, canManage }) {
@@ -16,6 +16,8 @@ export function BrochureTab({ pkgId, canManage }) {
   const [gen, setGen] = useState({ theme: "", highlights: "", promo: "", cta: "", extra: "" });
   const [variants, setVariants] = useState("1");
   const [logoPos, setLogoPos] = useState("top-right");
+  const [wm, setWm] = useState({ logo_scale: 0.12, logo_opacity: 180 });
+  const [busyId, setBusyId] = useState(null);
   const [refIds, setRefIds] = useState([]);
   const [generating, setGenerating] = useState(false);
   const [pdfGen, setPdfGen] = useState(false);
@@ -63,7 +65,7 @@ export function BrochureTab({ pkgId, canManage }) {
   const generate = async () => {
     setGenerating(true);
     try {
-      const res = await api.post(`/packages/${pkgId}/brochures/generate-infographic`, { ...gen, variants: Number(variants), logo_position: logoPos, reference_ids: refIds });
+      const res = await api.post(`/packages/${pkgId}/brochures/generate-infographic`, { ...gen, ...wm, variants: Number(variants), logo_position: logoPos, reference_ids: refIds });
       toast.success(`${res.data.length} varian brosur dibuat AI`);
       await load();
     } catch (err) { toast.error(err?.response?.data?.detail || "Gagal generate brosur AI"); }
@@ -73,11 +75,31 @@ export function BrochureTab({ pkgId, canManage }) {
   const generatePdf = async () => {
     setPdfGen(true);
     try {
-      await api.post(`/packages/${pkgId}/brochures/generate-pdf`, { ...gen, logo_position: logoPos, reference_ids: refIds });
+      await api.post(`/packages/${pkgId}/brochures/generate-pdf`, { ...gen, ...wm, logo_position: logoPos, reference_ids: refIds });
       toast.success("Brosur PDF dibuat");
       await load();
     } catch (err) { toast.error(err?.response?.data?.detail || "Gagal membuat PDF"); }
     finally { setPdfGen(false); }
+  };
+
+  const regenerate = async (b) => {
+    setBusyId(b.id);
+    try {
+      await api.post(`/brochures/${b.id}/regenerate`, { ...wm, logo_position: logoPos });
+      toast.success("Brosur diregenerate");
+      await load();
+    } catch (err) { toast.error(err?.response?.data?.detail || "Gagal regenerate"); }
+    finally { setBusyId(null); }
+  };
+
+  const setPrimary = async (b) => {
+    setBusyId(b.id);
+    try {
+      await api.post(`/brochures/${b.id}/set-primary`);
+      toast.success("Dijadikan brosur utama (cover & default WhatsApp)");
+      await load();
+    } catch (err) { toast.error(err?.response?.data?.detail || "Gagal set utama"); }
+    finally { setBusyId(null); }
   };
 
   if (items === null) return <div className="p-8 flex justify-center"><Loader2 className="h-6 w-6 animate-spin text-blue-600" /></div>;
@@ -117,6 +139,8 @@ export function BrochureTab({ pkgId, canManage }) {
                 </SelectContent>
               </Select>
             </div>
+            <div><Label className="text-xs">Ukuran Logo (%)</Label><Input type="number" min="5" max="40" value={Math.round(wm.logo_scale * 100)} onChange={(e) => setWm({ ...wm, logo_scale: Math.min(0.4, Math.max(0.05, (Number(e.target.value) || 12) / 100)) })} data-testid="gen-logo-scale" /></div>
+            <div><Label className="text-xs">Opasitas Logo (0–255)</Label><Input type="number" min="0" max="255" value={wm.logo_opacity} onChange={(e) => setWm({ ...wm, logo_opacity: Math.min(255, Math.max(0, Number(e.target.value) || 0)) })} data-testid="gen-logo-opacity" /></div>
           </div>
 
           {imageItems.length > 0 && (
@@ -176,6 +200,8 @@ export function BrochureTab({ pkgId, canManage }) {
                           <Button size="sm" variant="outline" className="h-8 text-xs" onClick={() => download(b, "pdf")} data-testid={`download-pdf-${b.id}`}><FileType2 className="h-3.5 w-3.5 mr-1" /> PDF</Button>
                         </>
                       : <Button size="sm" variant="outline" className="h-8 text-xs" onClick={() => download(b)} data-testid={`download-brochure-${b.id}`}><Download className="h-3.5 w-3.5 mr-1" /> Unduh</Button>}
+                    {canManage && b.kind === "AI" && <Button size="sm" variant="outline" className="h-8" title="Regenerate" disabled={busyId === b.id} onClick={() => regenerate(b)} data-testid={`regen-${b.id}`}>{busyId === b.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}</Button>}
+                    {canManage && <Button size="sm" variant="outline" className={`h-8 ${b.is_primary ? "text-amber-600" : ""}`} title="Jadikan Utama (cover & WA)" disabled={busyId === b.id} onClick={() => setPrimary(b)} data-testid={`primary-${b.id}`}><Star className={`h-3.5 w-3.5 ${b.is_primary ? "fill-amber-400" : ""}`} /></Button>}
                     {canManage && <Button size="sm" variant="outline" className="h-8 text-red-600 hover:text-red-700" onClick={() => remove(b)} data-testid={`delete-brochure-${b.id}`}><Trash2 className="h-3.5 w-3.5" /></Button>}
                   </div>
                 </CardContent>

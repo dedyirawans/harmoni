@@ -9107,14 +9107,20 @@ async def wa_send_brochure(cid: str, body: dict, user: dict = Depends(require_ro
     if not conv:
         raise HTTPException(status_code=404, detail="Conversation not found")
     pid = body.get("package_id")
+    brochure_id = body.get("brochure_id")
     pkg = await db.packages.find_one({"_id": ObjectId(pid)}) if pid and ObjectId.is_valid(pid) else None
     if not pkg:
         raise HTTPException(status_code=404, detail="Package tidak ditemukan")
-    latest_bro = await db.package_brochures.find_one({"package_id": pid, "is_deleted": {"$ne": True}, "content_type": {"$regex": "^image/"}}, sort=[("created_at", -1)])
-    cov = ""
-    if latest_bro:
-        cov = f"{_public_base({})}/api/public/brochure/{latest_bro['id']}?sig={_brochure_sig(latest_bro['id'])}"
-    if not cov:
+    bro = None
+    if brochure_id:
+        bro = await db.package_brochures.find_one({"id": brochure_id, "is_deleted": {"$ne": True}})
+    if not bro:
+        bro = await db.package_brochures.find_one({"package_id": pid, "is_deleted": {"$ne": True}, "is_primary": True}) \
+            or await db.package_brochures.find_one({"package_id": pid, "is_deleted": {"$ne": True}, "content_type": {"$regex": "^image/"}}, sort=[("created_at", -1)])
+    is_pdf = bool(bro and (bro.get("content_type") or "").startswith("application/pdf"))
+    if bro:
+        cov = f"{_public_base({})}/api/public/brochure/{bro['id']}?sig={_brochure_sig(bro['id'])}"
+    else:
         cov = (pkg.get("cover_image") or "").strip()
     if not cov:
         raise HTTPException(status_code=400, detail="Paket belum memiliki brosur/gambar. Upload atau generate brosur dulu.")
@@ -9128,9 +9134,10 @@ async def wa_send_brochure(cid: str, body: dict, user: dict = Depends(require_ro
         + (f"Mulai Rp{price:,}/pax\n" if price else "")
         + (pkg.get("promo_text") or "")
     ).strip()
+    send_type = "document" if is_pdf else "image"
+    media_filename = (bro.get("original_filename") if bro else None) or ("brosur.pdf" if is_pdf else "brochure.png")
     if cov.startswith("http://") or cov.startswith("https://"):
         media_url = cov
-        media_filename = (cov.split("/")[-1] or "brochure")[:80]
     else:
         raw = cov.split(",", 1)[1] if cov.startswith("data:") else cov
         try:
@@ -9145,11 +9152,10 @@ async def wa_send_brochure(cid: str, body: dict, user: dict = Depends(require_ro
             "content_type": "image/png", "original_filename": "brochure.png", "size": result.get("size", len(data)),
             "media_type": "image", "created_at": now_iso()})
         media_url = f"{_public_base({})}/api/public/wa-media/{media_id}?sig={_wa_media_sig(media_id)}"
-        media_filename = "brochure.png"
     svc = await get_wa_provider()
     if not svc.key:
         raise HTTPException(status_code=400, detail="Api.co.id belum dikonfigurasi. Isi API Key di menu Provider.")
-    res = await svc.send_message(conv["wa_number"], "image", content=caption, media_url=media_url)
+    res = await svc.send_message(conv["wa_number"], send_type, content=caption, media_url=media_url)
     mid = f"out-{now_iso()}"
     if not res["ok"]:
         await _wa_log(conv.get("account_id", "apico"), "SEND", "OUT", mid, False, res.get("error", ""))
@@ -9161,8 +9167,8 @@ async def wa_send_brochure(cid: str, body: dict, user: dict = Depends(require_ro
     msg = {"message_id": str(mid), "conversation_id": cid, "account_id": conv.get("account_id", "apico"),
            "external_provider": APICO_PROVIDER, "external_message_id": str(mid),
            "sender": "SALES", "sender_type": "SALES", "receiver": conv["wa_number"],
-           "direction": "OUTBOUND", "type": "image", "message_type": "image", "content": caption,
-           "media_url": media_url, "media_type": "image", "media_filename": media_filename,
+           "direction": "OUTBOUND", "type": send_type, "message_type": send_type, "content": caption,
+           "media_url": media_url, "media_type": send_type, "media_filename": media_filename,
            "timestamp": now_iso(), "created_at": now_iso(), "sent_at": now_iso(),
            "ai_generated": False, "human_generated": True, "delivery_status": "SENT", "status": "SENT", "read_status": False}
     await db.whatsapp_messages.insert_one(msg)
@@ -9181,7 +9187,7 @@ def _brochure_out(b):
     return {"id": b["id"], "package_id": b.get("package_id"), "kind": b.get("kind"),
             "content_type": b.get("content_type"), "filename": b.get("original_filename"),
             "size": b.get("size"), "created_at": b.get("created_at"), "created_by": b.get("created_by"),
-            "is_image": is_img,
+            "is_image": is_img, "is_primary": bool(b.get("is_primary")),
             "public_url": (f"{_public_base({})}/api/public/brochure/{b['id']}?sig={_brochure_sig(b['id'])}" if is_img else None)}
 
 
@@ -9284,21 +9290,31 @@ def _fetch_img_bytes(src):
     return None
 
 
-def _stamp_brochure_image(img_bytes, info, position="top-right"):
-    """Tempelkan LOGO agency (dari Settings) di bagian atas gambar brosur."""
+def _stamp_brochure_image(img_bytes, info, opts=None):
+    """Tempelkan LOGO agency (dari Settings) di bagian atas gambar brosur. opts: logo_position/scale/opacity/margin."""
     try:
         logo_b = _fetch_img_bytes(info.get("logo_url"))
         if not logo_b:
             return img_bytes
+        opts = opts or {}
+        position = opts.get("logo_position") or "top-right"
+        scale = float(opts.get("logo_scale") or 0.12)
+        scale = min(0.4, max(0.05, scale))
+        opacity = int(opts.get("logo_opacity") if opts.get("logo_opacity") is not None else 180)
+        opacity = min(255, max(0, opacity))
+        margin_pct = float(opts.get("logo_margin") or 0.03)
         from PIL import Image
         import io as _io
         im = Image.open(_io.BytesIO(img_bytes)).convert("RGBA")
         W, H = im.size
         lg = Image.open(_io.BytesIO(logo_b)).convert("RGBA")
-        lh = max(48, int(H * 0.11))
+        if opacity < 255:
+            a = lg.split()[3].point(lambda p: int(p * (opacity / 255.0)))
+            lg.putalpha(a)
+        lh = max(40, int(H * scale))
         lw = max(1, int(lg.width * (lh / max(1, lg.height))))
         lg = lg.resize((lw, lh))
-        margin = max(18, int(W * 0.03))
+        margin = max(12, int(W * margin_pct))
         pos = (position or "top-right").lower()
         if "left" in pos or "kiri" in pos:
             x = margin
@@ -9308,7 +9324,7 @@ def _stamp_brochure_image(img_bytes, info, position="top-right"):
             x = W - lw - margin
         y = margin
         pad = int(lh * 0.16)
-        bg = Image.new("RGBA", (lw + 2 * pad, lh + 2 * pad), (255, 255, 255, 175))
+        bg = Image.new("RGBA", (lw + 2 * pad, lh + 2 * pad), (255, 255, 255, 170))
         im.alpha_composite(bg, (max(0, x - pad), max(0, y - pad)))
         im.alpha_composite(lg, (x, y))
         out = _io.BytesIO()
@@ -9378,7 +9394,7 @@ async def generate_brochure_infographic(pid: str, body: dict, user: dict = Depen
     cta = (body.get("cta") or "").strip()
     extra = (body.get("extra") or "").strip()
     ref_imgs = await _brochure_reference_images(body.get("reference_ids"))
-    info = await get_settings_dict()
+    info = await _get_doc_template()
     base_prompt = _brochure_prompt(pkg, itin_txt, price, theme, highlights, promo, cta, extra, bool(ref_imgs))
     styles = ["gaya modern minimalis dengan banyak white space", "gaya mewah elegan premium dengan aksen emas",
               "gaya cerah dinamis ramah keluarga dengan ilustrasi"]
@@ -9393,7 +9409,7 @@ async def generate_brochure_infographic(pid: str, body: dict, user: dict = Depen
             continue
         if not raw:
             continue
-        img_bytes = _stamp_brochure_image(raw, info, (body.get("logo_position") or "top-right"))
+        img_bytes = _stamp_brochure_image(raw, info, body)
         bid = str(_uuid.uuid4())
         path = f"{_APP_NAME}/brochures/{pid}/{bid}.png"
         result = put_object(path, img_bytes, "image/png")
@@ -9422,13 +9438,13 @@ async def generate_brochure_pdf(pid: str, body: dict, user: dict = Depends(requi
     promo = (body.get("promo") or "").strip()
     cta = (body.get("cta") or "").strip()
     ref_imgs = await _brochure_reference_images(body.get("reference_ids"))
-    info = await get_settings_dict()
+    info = await _get_doc_template()
     cover_prompt = _brochure_prompt(pkg, itin_txt, price, theme, highlights, promo, cta, "", bool(ref_imgs)) + " Fokus sebagai HALAMAN SAMPUL (cover) brosur."
     try:
         cover_raw = await _nano_banana_image(cover_prompt, ref_imgs, f"brochure-pdf-{pid}")
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Gagal generate cover AI: {str(e)[:160]}")
-    cover_bytes = _stamp_brochure_image(cover_raw, info, (body.get("logo_position") or "top-right")) if cover_raw else None
+    cover_bytes = _stamp_brochure_image(cover_raw, info, body) if cover_raw else None
     try:
         import io as _io
         from reportlab.lib.pagesizes import A4
@@ -9503,6 +9519,48 @@ async def generate_brochure_pdf(pid: str, body: dict, user: dict = Depends(requi
            "gen_meta": {"theme": theme, "pages": ["cover", "harga"]}}
     await db.package_brochures.insert_one(rec)
     return _brochure_out(rec)
+
+
+@api_router.post("/brochures/{bid}/regenerate")
+async def regenerate_brochure(bid: str, body: dict, user: dict = Depends(require_permission("product.manage"))):
+    b = await db.package_brochures.find_one({"id": bid, "is_deleted": {"$ne": True}})
+    if not b:
+        raise HTTPException(status_code=404, detail="Brosur tidak ditemukan")
+    if b.get("kind") != "AI":
+        raise HTTPException(status_code=400, detail="Hanya brosur gambar AI yang bisa diregenerate. Untuk PDF, gunakan Generate PDF.")
+    pkg = await db.packages.find_one({"_id": ObjectId(b["package_id"])}) if ObjectId.is_valid(b["package_id"]) else None
+    if not pkg:
+        raise HTTPException(status_code=404, detail="Package tidak ditemukan")
+    gm = b.get("gen_meta") or {}
+    info = await _get_doc_template()
+    prompt = _brochure_prompt(pkg, "", int(pkg.get("selling_price") or 0), gm.get("theme") or "elegan",
+                              gm.get("highlights") or "", gm.get("promo") or "", gm.get("cta") or "", "", False)
+    if gm.get("style"):
+        prompt += f" Gunakan {gm.get('style')}."
+    try:
+        raw = await _nano_banana_image(prompt, [], f"regen-{bid}")
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Gagal regenerate: {str(e)[:150]}")
+    if not raw:
+        raise HTTPException(status_code=502, detail="AI tidak menghasilkan gambar. Coba lagi.")
+    img_bytes = _stamp_brochure_image(raw, info, {**gm, **(body or {})})
+    path = f"{_APP_NAME}/brochures/{b['package_id']}/{bid}.png"
+    result = put_object(path, img_bytes, "image/png")
+    await db.package_brochures.update_one({"id": bid}, {"$set": {"storage_path": result["path"], "size": result.get("size", len(img_bytes)), "created_at": now_iso()}})
+    return _brochure_out(await db.package_brochures.find_one({"id": bid}))
+
+
+@api_router.post("/brochures/{bid}/set-primary")
+async def set_primary_brochure(bid: str, user: dict = Depends(require_permission("product.manage"))):
+    b = await db.package_brochures.find_one({"id": bid, "is_deleted": {"$ne": True}})
+    if not b:
+        raise HTTPException(status_code=404, detail="Brosur tidak ditemukan")
+    await db.package_brochures.update_many({"package_id": b["package_id"]}, {"$set": {"is_primary": False}})
+    await db.package_brochures.update_one({"id": bid}, {"$set": {"is_primary": True}})
+    if (b.get("content_type") or "").startswith("image/"):
+        url = f"{_public_base({})}/api/public/brochure/{bid}?sig={_brochure_sig(bid)}"
+        await db.packages.update_one({"_id": ObjectId(b["package_id"])}, {"$set": {"cover_image": url}})
+    return {"ok": True, "is_primary": True}
 
 
 @api_router.get("/whatsapp/logs")

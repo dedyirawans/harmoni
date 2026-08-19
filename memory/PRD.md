@@ -1,3 +1,12 @@
+## Brosur — Fix Logo, Regenerate, Jadikan Utama, Kirim PDF WA, Watermark Kustom (2026-06) — DONE ✅
+- **FIX LOGO tidak muncul**: brosur memakai `info = await get_settings_dict()` (baca system_settings, TANPA logo). Diubah ke `_get_doc_template()` yang merge `company_settings.company.logo` (data-URL) ke `logo_url`. Logo kini ter-stamp di atas gambar. (replace_all 2 lokasi generate).
+- **Regenerate per kartu**: `POST /brochures/{bid}/regenerate` (kind AI) — pakai gen_meta tersimpan, buat ulang 1 gambar, replace storage record. UI tombol refresh per kartu.
+- **Jadikan Utama**: `POST /brochures/{bid}/set-primary` — set is_primary (unset lainnya) + update `cover_image` paket ke URL brosur. UI tombol bintang (badge amber). `_brochure_out` menyertakan `is_primary`.
+- **Kirim Brosur PDF via WA**: `send-brochure` kini pilih brosur is_primary (atau brochure_id), kirim sebagai `document` bila PDF, `image` bila gambar; fallback cover_image. Pesan tersimpan dgn type dinamis.
+- **Watermark kustom**: `_stamp_brochure_image(img, info, opts)` menerima logo_position/logo_scale(0.05–0.4)/logo_opacity(0–255)/logo_margin. UI form: Ukuran Logo (%) + Opasitas Logo. Diteruskan ke generate/pdf/regenerate.
+- Verified: set-primary ok (cover paket ter-update, is_primary benar), generate sukses, UI (scale/opacity/star/regen) tampil.
+
+
 ## Brosur AI — Preview, Logo Atas, Tanpa Itinerary, Unduh Gambar/PDF (2026-06) — DONE ✅
 - **Preview**: dialog di BrochureTab menampilkan gambar penuh (object-contain) atau PDF via iframe (`?auth=token`), plus tombol unduh. Klik thumbnail/tombol "Preview".
 - **Tanpa itinerary**: dihapus dari prompt AI (`_brochure_prompt`) & dari PDF (halaman itinerary dihapus → PDF kini 2 halaman: cover + Harga & Fasilitas). Verified /Page ≈2.
