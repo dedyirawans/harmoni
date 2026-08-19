@@ -1,3 +1,9 @@
+## Fix — "ResizeObserver loop" error overlay saat pilih filter tipe customer (2026-06) — DONE ✅ (screenshot-verified)
+- **Gejala**: Pilih tipe customer di CRM > Customers memunculkan overlay ERROR merah berulang: "ResizeObserver loop completed with undelivered notifications" (dari `bundle.js` handleError).
+- **Sifat**: Warning browser jinak (dipicu Radix Select/Recharts saat re-measure layout), BUKAN bug fungsional. Hanya muncul karena CRA dev overlay menangkapnya.
+- **Fix**: `frontend/src/index.js` menambahkan global `error` listener (capture) yang men-`stopImmediatePropagation` + `preventDefault` untuk pesan ResizeObserver dan menyembunyikan overlay dev jika sempat tampil.
+- **Verified**: buka/ganti filter tipe berulang (VIP/Prospect/All types/Umrah) → `OVERLAY_PRESENT: False`, UI bersih.
+
 ## Fix P0 — Customer 360 "Customer not available (403 / not found)" (2026-06) — DONE ✅ (curl + testing_agent 100%)
 - **Root cause**: `GET /api/customers/{cid}/360` return HTTP 500 (bukan 403). Koleksi `quotations` hasil seeding 10F menyimpan field `lead_id` sebagai `ObjectId` mentah, sedangkan `serialize()` hanya meng-convert `_id` → FastAPI gagal encode JSON. Frontend `Customer360.jsx` menampilkan pesan generik "Customer not available (403 / not found)" untuk semua non-200.
 - **Fix**: (1) `serialize()` (server.py ~L204) kini meng-convert SEMUA field ObjectId top-level → string. (2) Migrasi data: 50 quotations dengan `lead_id` ObjectId di-convert ke string. (3) `scripts/seed_10f3.py` L81 diperbaiki agar simpan `str(ld["_id"])`.
