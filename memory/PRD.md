@@ -1,3 +1,12 @@
+## PHASE 10F-3 — Demo Data: Quotation & Booking (2026-06) — DONE ✅ (curl-validated)
+- Seed idempoten `/app/scripts/seed_10f3.py` (guard `demo_seed_flags` batch=10F3). Reuse 85 lead 10F-2 + 16 paket/departure 10F-1. TIDAK membuat payment/commission (menyusul 10F-4). TIDAK menyentuh SA/Accounting/Tax/AI/WA/paket.
+- **CATATAN ARSITEKTUR**: CRM ini TIDAK punya modul Order terpisah — alur = Quotation → convert → Booking. Jadi "Orders" = record Booking (unified). Order count = Booking count = 24.
+- **50 Quotations** (QT-xxxxx), status bervariasi: CONVERTED 24, SENT 12, NEGOTIATION 4, FOLLOW UP 3, DRAFT 3, EXPIRED 2, CANCELLED 2. Semua mereferensi customer + package (+departure bila ada). Amounts konsisten (per_pax=selling_price, diskon 0/5/10%, tax 0 Non-PPN, total=subtotal−diskon).
+- **24 Bookings** (BKG-xxxxx, reuse penomoran existing) dari quotation CONVERTED — converted_booking_id ter-set & 2 arah konsisten (pax & total quotation == booking, 0 mismatch). Status: CONFIRMED 18 / PENDING 5 / COMPLETED 1. Seat departure di-`$inc` (kecuali CANCELLED).
+- **Atribusi**: 6/24 (25%) **AUTO SALES** (booking_source=AUTO SALES, created_by="AI AGENT", sales_type="AI"); 18/24 **SALES** (source=SALES, sales_type=MANUAL, ke sales user asli).
+- Bugfix saat seeding: `lead_id` sempat tersimpan sebagai ObjectId (bukan str) → 500 di `GET /quotations`; diperbaiki jadi str (serialize hanya stringify `_id` top-level). Endpoint kembali 200.
+
+
 ## PHASE 10F-2 — Demo Data: Customers, Leads, Follow-ups, Sales Activities (2026-06) — DONE ✅ (curl-validated)
 - Seed idempoten `/app/scripts/seed_10f2.py` (guard `demo_seed_flags` batch=10F2). Aditif; TIDAK membuat booking/payment/invoice/commission; TIDAK menyentuh SA/Accounting/Packages/Tax/AI/WhatsApp.
 - **130 Customers** realistis Indonesia (13 kota + provinsi), status bervariasi (NEW/PROSPECT/ACTIVE/CUSTOMER/REPEAT CUSTOMER/INACTIVE), lead source bervariasi (10 sumber), semua ter-assign ke 5 sales dengan bobot performa berbeda (Andi 46 > Fajar 37 > Rina 24 > Rizky 15 > Siti 8). Kontak sintetis (@mail.demo), tanpa data pribadi nyata.
