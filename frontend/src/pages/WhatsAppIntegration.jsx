@@ -150,8 +150,12 @@ function MonitorTab() {
   const [mediaType, setMediaType] = useState("image");
   const [mediaFile, setMediaFile] = useState(null);
   const [uploading, setUploading] = useState(false);
+  const [brochures, setBrochures] = useState([]);
+  const [broPkg, setBroPkg] = useState("");
+  const [sendingBro, setSendingBro] = useState(false);
   const load = useCallback(() => api.get("/whatsapp/conversations").then((r) => setConvs(r.data)).catch(() => setConvs([])), []);
   useEffect(() => { load(); }, [load]);
+  useEffect(() => { api.get("/whatsapp/brochure-packages").then((r) => setBrochures(r.data)).catch(() => setBrochures([])); }, []);
   const openConv = async (c) => {
     setSel(c);
     try { const r = await api.get(`/whatsapp/conversations/${c.id}/messages`); setMsgs(r.data); } catch (e) { err(e); }
@@ -174,6 +178,15 @@ function MonitorTab() {
       toast.success("Media terkirim");
       setMediaFile(null); setText(""); await openConv(sel);
     } catch (e) { err(e); } finally { setUploading(false); }
+  };
+  const sendBrochure = async (pid) => {
+    if (!pid || !sel) return;
+    setSendingBro(true);
+    try {
+      await api.post(`/whatsapp/conversations/${sel.id}/send-brochure`, { package_id: pid });
+      toast.success("Brosur terkirim");
+      setBroPkg(""); await openConv(sel);
+    } catch (e) { err(e); } finally { setSendingBro(false); }
   };
   const accept = { image: "image/*", document: ".pdf,.doc,.docx,.xls,.xlsx,.txt,.csv", audio: "audio/*", video: "video/*" }[mediaType];
   if (convs === null) return <div className="p-8 flex justify-center"><Loader2 className="h-6 w-6 animate-spin text-blue-600" /></div>;
@@ -212,6 +225,21 @@ function MonitorTab() {
               ))}
               {msgs.length === 0 && <div className="text-center text-slate-400 text-sm py-6">Belum ada pesan.</div>}
             </div>
+            {brochures.length > 0 && (
+              <div className="px-3 pt-2 bg-white" data-testid="wa-brochure-bar">
+                <div className="flex items-center gap-2 overflow-x-auto pb-1">
+                  <span className="text-[11px] font-medium text-slate-500 shrink-0">Brosur cepat:</span>
+                  {brochures.map((b) => (
+                    <Button key={b.id} size="sm" variant="outline" disabled={sendingBro}
+                      className="h-7 shrink-0 text-xs" onClick={() => sendBrochure(b.id)}
+                      data-testid={`wa-brochure-${b.id}`}>
+                      {sendingBro ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <FileText className="h-3 w-3 mr-1" />}
+                      {b.package_name}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+            )}
             {mediaFile && (
               <div className="px-3 pt-2 bg-white">
                 <div className="flex items-center gap-2 text-xs bg-slate-50 border rounded p-2" data-testid="wa-media-preview">

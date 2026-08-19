@@ -1,3 +1,9 @@
+## Kirim Brosur Cepat (one-tap package brochure) (2026-06) — DONE ✅ (live send terkonfirmasi)
+- Backend: `GET /whatsapp/brochure-packages` (paket ACTIVE yang punya cover_image) + `POST /whatsapp/conversations/{cid}/send-brochure` {package_id, caption?}. Caption otomatis: nama paket + destinasi·durasi + "Mulai Rp…/pax" + promo_text. Cover http(s) → dipakai langsung sebagai media_url; base64/data → decode → Object Storage → URL publik ber-sig. Cek `_wa_outbound_allowed`, simpan pesan (media_type=image), update conversation.
+- Frontend `WhatsAppIntegration.jsx` MonitorTab: baris "Brosur cepat:" berisi tombol per paket (data-testid `wa-brochure-{id}`) — sekali klik kirim brosur ke conversation terpilih.
+- Verified LIVE: set cover (gambar Kaaba) pada "Umrah Reguler 9 Hari" → brochure-packages=1 → send-brochure ke 6282323338838 → status SENT (message_id `cmszi5ov5...`), caption ter-generate benar. Uji media sebelumnya juga terbukti sampai (customer membalas "Ok makasih kak").
+
+
 ## Media WA Masuk + Uji Media Live + Grafik Follow-Up + Kartu AUTO SALES (2026-06) — DONE ✅
 - **Uji Media Live**: gambar uji dikirim ke 6282323338838 via `POST /whatsapp/conversations/{cid}/send-media` → HTTP 200, provider API.CO.ID menerima (message_id `cmszhwk5...`, status SENT, media_url publik ter-serve). Pengiriman ke perangkat tetap tunduk aturan window 24 jam WhatsApp.
 - **Media MASUK (inbound)**: `_apico_extract_message` kini mengekstrak `media_url`/`media_filename` (dari media_url/url/link/file_url/media.url), `_apico_process_inbound` menyimpan `media_url`/`media_type`/`media_filename` di pesan INBOUND. Panel chat merender media via `MediaBubble` (img/video/audio/link). CATATAN: belum di-E2E dgn webhook media nyata (butuh provider mengirim payload media inbound).

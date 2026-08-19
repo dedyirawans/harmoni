@@ -9085,6 +9085,85 @@ async def public_wa_media(media_id: str, sig: str = Query("")):
     return Response(content=content, media_type=rec.get("content_type") or ct)
 
 
+@api_router.get("/whatsapp/brochure-packages")
+async def wa_brochure_packages(user: dict = Depends(require_role("super_admin"))):
+    docs = await db.packages.find({"status": "ACTIVE"}).sort("created_at", -1).to_list(60)
+    out = []
+    for p in docs:
+        cov = (p.get("cover_image") or "").strip()
+        if not cov:
+            continue
+        out.append({"id": str(p["_id"]), "package_name": p.get("package_name"),
+                    "selling_price": p.get("selling_price"), "destination": p.get("destination"),
+                    "duration": p.get("duration")})
+    return out
+
+
+@api_router.post("/whatsapp/conversations/{cid}/send-brochure")
+async def wa_send_brochure(cid: str, body: dict, user: dict = Depends(require_role("super_admin"))):
+    conv = await db.whatsapp_conversations.find_one({"_id": ObjectId(cid)}) if ObjectId.is_valid(cid) else None
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    pid = body.get("package_id")
+    pkg = await db.packages.find_one({"_id": ObjectId(pid)}) if pid and ObjectId.is_valid(pid) else None
+    if not pkg:
+        raise HTTPException(status_code=404, detail="Package tidak ditemukan")
+    cov = (pkg.get("cover_image") or "").strip()
+    if not cov:
+        raise HTTPException(status_code=400, detail="Paket belum memiliki gambar brosur (cover image)")
+    allowed, _r = await _wa_outbound_allowed(conv.get("customer_id"))
+    if not allowed:
+        raise HTTPException(status_code=400, detail=f"Pengiriman diblokir: {_r}")
+    price = int(pkg.get("selling_price") or 0)
+    caption = (body.get("caption") or "").strip() or (
+        f"*{pkg.get('package_name', '')}*\n"
+        + (f"{pkg.get('destination') or ''} · {pkg.get('duration') or ''}\n" if (pkg.get('destination') or pkg.get('duration')) else "")
+        + (f"Mulai Rp{price:,}/pax\n" if price else "")
+        + (pkg.get("promo_text") or "")
+    ).strip()
+    if cov.startswith("http://") or cov.startswith("https://"):
+        media_url = cov
+        media_filename = (cov.split("/")[-1] or "brochure")[:80]
+    else:
+        raw = cov.split(",", 1)[1] if cov.startswith("data:") else cov
+        try:
+            import base64 as _b64
+            data = _b64.b64decode(raw)
+        except Exception:
+            raise HTTPException(status_code=400, detail="Gambar brosur tidak valid")
+        media_id = str(_uuid.uuid4())
+        path = f"{_APP_NAME}/whatsapp/brochure/{media_id}.png"
+        result = put_object(path, data, "image/png")
+        await db.wa_media.insert_one({"id": media_id, "conversation_id": cid, "storage_path": result["path"],
+            "content_type": "image/png", "original_filename": "brochure.png", "size": result.get("size", len(data)),
+            "media_type": "image", "created_at": now_iso()})
+        media_url = f"{_public_base({})}/api/public/wa-media/{media_id}?sig={_wa_media_sig(media_id)}"
+        media_filename = "brochure.png"
+    svc = await get_wa_provider()
+    if not svc.key:
+        raise HTTPException(status_code=400, detail="Api.co.id belum dikonfigurasi. Isi API Key di menu Provider.")
+    res = await svc.send_message(conv["wa_number"], "image", content=caption, media_url=media_url)
+    mid = f"out-{now_iso()}"
+    if not res["ok"]:
+        await _wa_log(conv.get("account_id", "apico"), "SEND", "OUT", mid, False, res.get("error", ""))
+        raise HTTPException(status_code=502, detail=f"Gagal mengirim brosur ({res.get('category')}).")
+    data_r = res.get("data") or {}
+    inner = data_r.get("data") if isinstance(data_r, dict) else {}
+    mid = (inner or {}).get("message_id") or data_r.get("message_id") or mid
+    await _wa_log(conv.get("account_id", "apico"), "SEND", "OUT", str(mid), True, "")
+    msg = {"message_id": str(mid), "conversation_id": cid, "account_id": conv.get("account_id", "apico"),
+           "external_provider": APICO_PROVIDER, "external_message_id": str(mid),
+           "sender": "SALES", "sender_type": "SALES", "receiver": conv["wa_number"],
+           "direction": "OUTBOUND", "type": "image", "message_type": "image", "content": caption,
+           "media_url": media_url, "media_type": "image", "media_filename": media_filename,
+           "timestamp": now_iso(), "created_at": now_iso(), "sent_at": now_iso(),
+           "ai_generated": False, "human_generated": True, "delivery_status": "SENT", "status": "SENT", "read_status": False}
+    await db.whatsapp_messages.insert_one(msg)
+    await db.whatsapp_conversations.update_one({"_id": conv["_id"]}, {"$set": {
+        "last_message": ("[brosur] " + (pkg.get("package_name") or ""))[:200], "last_activity": now_iso(), "status": "WAITING CUSTOMER"}})
+    return serialize(msg)
+
+
 @api_router.get("/whatsapp/logs")
 async def wa_logs(kind: str = "", user: dict = Depends(require_role("super_admin"))):
     q = {} if not kind else ({"kind": {"$ne": "API"}} if kind == "wa" else {"kind": kind})
