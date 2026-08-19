@@ -48,6 +48,10 @@ DEST_IMG = {
     "Bali": U + "1711609110590-5ad5c4599e56" + Q,
 }
 UMRAH_IMG = [U + "1592326871020-04f58c1a52f3" + Q, U + "1711261817080-8f064416206c" + Q]
+GALLERY_POOL = [U + "1566073771259-6a8506099945" + Q, U + "1520250497591-112f2f40a3f4" + Q,
+                U + "1436491865332-7a61a109cc05" + Q, U + "1571896349842-33c89424de2d" + Q]
+def gallery_for(cover):
+    return [cover, GALLERY_POOL[0], GALLERY_POOL[1]]
 
 # (name, dest, country, duration, sell, hpp, seats[(quota,confirmed)], itinerary[(loc,act)])
 TOURS = [
@@ -120,7 +124,7 @@ async def main():
         gp = sell - hpp
         doc = {"package_code": f"TOUR-1{i+1:03d}", "package_name": name, "product_type": "TOUR",
                "category": dest, "destination": dest, "country": country, "duration": dur,
-               "description": f"Paket tour {name} bersama Harmoni Wisata Internusa.", "cover_image": DEST_IMG.get(dest, ""), "gallery": [],
+               "description": f"Paket tour {name} bersama Harmoni Wisata Internusa.", "cover_image": DEST_IMG.get(dest, ""), "gallery": gallery_for(DEST_IMG.get(dest, "")),
                "min_pax": 2, "max_pax": max(s[0] for s in seats), "selling_price": sell, "child_price": round(sell*0.9),
                "infant_price": round(sell*0.2), "single_supplement": round(sell*0.2), "currency": "IDR",
                "tax_treatment": "Non-PPN", "commission_eligibility": True, "status": "ACTIVE",
@@ -140,7 +144,7 @@ async def main():
         gp = sell - hpp
         doc = {"package_code": f"UMR-1{i+1:03d}", "package_name": name, "product_type": "UMRAH",
                "category": "Umrah", "destination": "Makkah & Madinah", "country": "Saudi Arabia", "duration": dur,
-               "description": f"Paket {name} — bimbingan ibadah lengkap.", "cover_image": UMRAH_IMG[i % len(UMRAH_IMG)], "gallery": [],
+               "description": f"Paket {name} — bimbingan ibadah lengkap.", "cover_image": UMRAH_IMG[i % len(UMRAH_IMG)], "gallery": gallery_for(UMRAH_IMG[i % len(UMRAH_IMG)]),
                "min_pax": 4, "max_pax": max(s[0] for s in seats), "selling_price": sell, "child_price": round(sell*0.9),
                "infant_price": round(sell*0.2), "single_supplement": round(sell*0.22), "currency": "IDR",
                "tax_treatment": "Non-PPN", "commission_eligibility": True, "status": "ACTIVE",

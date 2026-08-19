@@ -13,7 +13,7 @@ import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogTrigger } from "@/components/ui/dialog";
-import { Plus, Search, Loader2, Package as PackageIcon, MapPin, Clock, Tag } from "lucide-react";
+import { Plus, Search, Loader2, Package as PackageIcon, MapPin, Clock, Tag, Upload, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 const EMPTY = {
@@ -140,6 +140,7 @@ export default function Products() {
                 {p.cover_image ? <img src={p.cover_image} alt="" className="h-full w-full object-cover" /> : <div className="h-full w-full flex items-center justify-center"><PackageIcon className="h-8 w-8 text-slate-300" aria-hidden="true" /></div>}
                 <Badge variant="outline" className={`absolute top-2 right-2 ${PKG_STATUS_COLORS[p.status]}`}>{p.status}</Badge>
                 <Badge variant="outline" className="absolute top-2 left-2 bg-white/90 text-slate-700">{subLabel(p.product_type, p.sub_category) || p.product_type}</Badge>
+                {canManage && <CoverControls pkg={p} onDone={load} />}
               </div>
               <CardContent className="p-4">
                 <p className="text-[10px] font-mono text-slate-400">{p.package_code}</p>
@@ -157,6 +158,45 @@ export default function Products() {
             </Card>
           ))}
         </div>
+      )}
+    </div>
+  );
+}
+
+function CoverControls({ pkg, onDone }) {
+  const [busy, setBusy] = useState(false);
+  const stop = (e) => { e.stopPropagation(); };
+  const onFile = async (e) => {
+    e.stopPropagation();
+    const f = e.target.files?.[0];
+    if (!f) return;
+    setBusy(true);
+    try {
+      const fd = new FormData(); fd.append("file", f);
+      await api.post(`/packages/${pkg._id}/cover`, fd);
+      toast.success("Cover paket diperbarui");
+      onDone();
+    } catch (err) { toast.error(err.response?.data?.detail || "Gagal upload cover"); }
+    finally { setBusy(false); e.target.value = ""; }
+  };
+  const remove = async (e) => {
+    e.stopPropagation();
+    setBusy(true);
+    try { await api.delete(`/packages/${pkg._id}/cover`); toast.success("Cover dihapus"); onDone(); }
+    catch (err) { toast.error(err.response?.data?.detail || "Gagal hapus cover"); }
+    finally { setBusy(false); }
+  };
+  return (
+    <div className="absolute bottom-2 right-2 flex items-center gap-1" onClick={stop}>
+      <label className="cursor-pointer bg-white/90 hover:bg-white text-slate-700 rounded-md px-2 py-1 text-[11px] flex items-center gap-1 shadow-sm" data-testid={`cover-upload-${pkg._id}`}>
+        {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Upload className="h-3 w-3" aria-hidden="true" />}
+        {pkg.cover_image ? "Ganti" : "Upload"}
+        <input type="file" accept=".jpg,.jpeg,.png,.webp" className="hidden" onChange={onFile} disabled={busy} />
+      </label>
+      {pkg.cover_image && (
+        <button onClick={remove} disabled={busy} className="bg-white/90 hover:bg-white text-red-600 rounded-md p-1 shadow-sm" data-testid={`cover-remove-${pkg._id}`} title="Hapus cover">
+          <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+        </button>
       )}
     </div>
   );

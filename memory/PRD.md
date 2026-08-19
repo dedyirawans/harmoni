@@ -1,3 +1,10 @@
+## Galeri Paket + Kelola Cover di Product Management (2026-06) — DONE ✅ (curl + screenshot verified)
+- **Galeri paket**: setiap paket kini punya `gallery` (3 foto: cover + 2 foto travel) — di-set di seed_10f1.py (fungsi `gallery_for`) & diisi ke 16 paket existing. Tampil di halaman detail paket.
+- **Kelola Cover (Product Management)**: backend `POST /packages/{pid}/cover` (upload/replace, validasi JPG/PNG/WEBP maks 8MB → simpan object storage, cover_image = URL publik `/api/public/package-cover/{pid}?v=ts`), `DELETE /packages/{pid}/cover` (hapus), `GET /public/package-cover/{pid}` (serve publik tanpa auth untuk <img>). Semua admin ops = permission `product.manage`.
+- **Frontend** `Products.jsx`: komponen `CoverControls` overlay pada tiap kartu paket — tombol Upload/Ganti (file picker) + hapus (merah), hanya untuk user `product.manage`. stopPropagation agar tidak memicu navigasi kartu.
+- Verified curl: upload→URL publik, public serve 200 image/png, Sales upload 403, delete 200, 16/16 paket punya gallery≥3. Screenshot Product Management: cover per destinasi tampil + kontrol Ganti/Hapus/Upload.
+
+
 ## Enhancements after 10F: Reset script + Umrah scheme + Cover images + Commission approval (2026-06) — DONE ✅
 - **Master reset+reseed**: `/app/scripts/reset_reseed_10f.py` — hapus SEMUA data demo/transaksional lama + semua user selain super_admin/accounting, lalu reseed 10F-1..10F-5 berurutan, recompute seat departure, ensure Umrah scheme, jalankan engine komisi + SA approval. Preserved: SA/Accounting/roles/permissions/Tax/AI/WhatsApp/API.co.id/company_files.
 - **DIJALANKAN**: seluruh data demo lama (customers 142, leads 93, bookings 40, quotations 68, packages 40, conversations 67, dll) DIHAPUS; kini HANYA data 10F fresh: 130 customers, 85 leads, 16 packages, 18 departures, 50 quotations, 24 bookings, 12 suppliers, 53 conversations, 5 sales.

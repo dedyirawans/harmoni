@@ -10211,6 +10211,45 @@ async def set_primary_brochure(bid: str, user: dict = Depends(require_permission
     return {"ok": True, "is_primary": True}
 
 
+@api_router.post("/packages/{pid}/cover")
+async def upload_package_cover(pid: str, file: UploadFile = File(...), user: dict = Depends(require_permission("product.manage"))):
+    if not ObjectId.is_valid(pid) or not await db.packages.find_one({"_id": ObjectId(pid)}):
+        raise HTTPException(status_code=404, detail="Package not found")
+    ext = (file.filename or "").rsplit(".", 1)[-1].lower() if "." in (file.filename or "") else "png"
+    if ext not in ("jpg", "jpeg", "png", "webp"):
+        raise HTTPException(status_code=400, detail="Format gambar harus JPG/PNG/WEBP")
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="File kosong")
+    if len(data) > 8 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Ukuran gambar maksimal 8MB")
+    result = put_object(f"{_APP_NAME}/package_covers/{pid}.{ext}", data, file.content_type or "image/png")
+    import time as _t
+    url = f"{_public_base({})}/api/public/package-cover/{pid}?v={int(_t.time())}"
+    await db.packages.update_one({"_id": ObjectId(pid)}, {"$set": {
+        "cover_storage_path": result["path"], "cover_content_type": file.content_type or f"image/{ext}", "cover_image": url}})
+    return {"cover_image": url}
+
+
+@api_router.delete("/packages/{pid}/cover")
+async def delete_package_cover(pid: str, user: dict = Depends(require_permission("product.manage"))):
+    if not ObjectId.is_valid(pid):
+        raise HTTPException(status_code=404, detail="Package not found")
+    await db.packages.update_one({"_id": ObjectId(pid)}, {"$set": {"cover_image": "", "cover_storage_path": ""}})
+    return {"ok": True}
+
+
+@api_router.get("/public/package-cover/{pid}")
+async def public_package_cover(pid: str):
+    if not ObjectId.is_valid(pid):
+        raise HTTPException(status_code=404, detail="Not found")
+    p = await db.packages.find_one({"_id": ObjectId(pid)})
+    if not p or not p.get("cover_storage_path"):
+        raise HTTPException(status_code=404, detail="No cover")
+    data, ct = get_object(p["cover_storage_path"])
+    return Response(content=data, media_type=p.get("cover_content_type") or ct)
+
+
 @api_router.get("/whatsapp/logs")
 async def wa_logs(kind: str = "", user: dict = Depends(require_role("super_admin"))):
     q = {} if not kind else ({"kind": {"$ne": "API"}} if kind == "wa" else {"kind": kind})
