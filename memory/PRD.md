@@ -1,3 +1,10 @@
+## Media WA Masuk + Uji Media Live + Grafik Follow-Up + Kartu AUTO SALES (2026-06) — DONE ✅
+- **Uji Media Live**: gambar uji dikirim ke 6282323338838 via `POST /whatsapp/conversations/{cid}/send-media` → HTTP 200, provider API.CO.ID menerima (message_id `cmszhwk5...`, status SENT, media_url publik ter-serve). Pengiriman ke perangkat tetap tunduk aturan window 24 jam WhatsApp.
+- **Media MASUK (inbound)**: `_apico_extract_message` kini mengekstrak `media_url`/`media_filename` (dari media_url/url/link/file_url/media.url), `_apico_process_inbound` menyimpan `media_url`/`media_type`/`media_filename` di pesan INBOUND. Panel chat merender media via `MediaBubble` (img/video/audio/link). CATATAN: belum di-E2E dgn webhook media nyata (butuh provider mengirim payload media inbound).
+- **Grafik Follow-Up mingguan**: `/ai/followup/analytics` kini menyertakan `weekly[]` (per pekan Senin: sent, response, booking, response_rate, conversion_rate, 8 pekan terakhir). UI AnalyticsTab (AutoFollowUp.jsx) menambah ComposedChart recharts (bar Terkirim/Booking + garis Response%/Konversi%) + empty state. Verified render.
+- **Kartu AUTO SALES (AI)** di Executive Dashboard: `executive-dashboard` sales block menambah `auto_sales_bookings`+`auto_sales_revenue` (booking_source=AUTO SALES per periode); SuperAdminDashboard menampilkan Kpi "AUTO SALES (AI)". Verified: Rp55jt / 1 booking.
+
+
 ## BUGFIX — AI bilang "seat penuh" setelah booking & booking duplikat (seat sisa 1) (2026-06) — DONE ✅ (simulator E2E)
 - **Gejala**: saat sisa kursi 1, AI membuat booking (kursi terakhir terpakai). Ketika customer menyusul menunggu invoice, AI menjalankan CHECK_SEAT lagi → kursi 0 → keliru bilang "kuota penuh"; pada beberapa kasus AI memanggil CREATE_BOOKING lagi (tanpa departure_id pada retry) → booking DUPLIKAT.
 - **Root cause**: di `_ai_create_booking`, cek ketersediaan kursi berjalan SEBELUM cek booking-existing (idempotency) → panggilan ulang kena error "seat penuh" sebelum guard; guard lama juga hanya cocok bila departure_id sama → retry tanpa departure_id lolos menjadi booking kedua.

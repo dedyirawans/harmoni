@@ -14,6 +14,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
 import { MessageSquareHeart, Save, Loader2, RefreshCw, Play, Sparkles, Gauge, ListChecks, Users2, Settings2, Ban, Pause, PlayCircle } from "lucide-react";
+import { ResponsiveContainer, ComposedChart, Bar, Line, XAxis, YAxis, Tooltip, CartesianGrid, Legend } from "recharts";
 
 const fmt = (t) => (t || "—").toString().replace("T", " ").slice(0, 16);
 const err = (e) => toast.error(formatApiErrorDetail(e?.response?.data?.detail) || "Terjadi kesalahan");
@@ -57,6 +58,29 @@ function AnalyticsTab() {
           <Card key={l}><CardContent className="p-4"><div className="text-2xl font-bold text-blue-600">{v ?? 0}%</div><div className="text-xs text-slate-500">{l}</div></CardContent></Card>
         ))}
       </div>
+      <Card data-testid="afu-weekly-chart">
+        <CardContent className="p-4">
+          <div className="text-sm font-semibold text-slate-700 mb-3">Tren Mingguan — Follow-Up, Response & Konversi</div>
+          {(!a.weekly || a.weekly.length === 0) ? (
+            <div className="h-[260px] flex items-center justify-center text-sm text-slate-400">Belum ada data follow-up terkirim untuk ditampilkan.</div>
+          ) : (
+            <ResponsiveContainer width="100%" height={260}>
+              <ComposedChart data={a.weekly} margin={{ top: 8, right: 8, left: -8, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#eef2f7" />
+                <XAxis dataKey="week" tick={{ fontSize: 11 }} />
+                <YAxis yAxisId="left" tick={{ fontSize: 11 }} allowDecimals={false} />
+                <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 11 }} unit="%" domain={[0, 100]} />
+                <Tooltip />
+                <Legend wrapperStyle={{ fontSize: 12 }} />
+                <Bar yAxisId="left" dataKey="sent" name="Terkirim" fill="#93c5fd" radius={[4, 4, 0, 0]} />
+                <Bar yAxisId="left" dataKey="booking" name="Booking" fill="#6ee7b7" radius={[4, 4, 0, 0]} />
+                <Line yAxisId="right" type="monotone" dataKey="response_rate" name="Response %" stroke="#6366f1" strokeWidth={2} dot={{ r: 3 }} />
+                <Line yAxisId="right" type="monotone" dataKey="conversion_rate" name="Konversi %" stroke="#f59e0b" strokeWidth={2} dot={{ r: 3 }} />
+              </ComposedChart>
+            </ResponsiveContainer>
+          )}
+        </CardContent>
+      </Card>
     </div>
   );
 }

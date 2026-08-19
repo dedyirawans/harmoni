@@ -8578,6 +8578,8 @@ async def executive_dashboard(month: Optional[str] = None, user: dict = Depends(
             "booking_total": len(period_bookings),
             "total_pax": period_pax,
             "booking_revenue": booking_revenue,
+            "auto_sales_bookings": len([b for b in period_bookings if b.get("booking_source") == "AUTO SALES"]),
+            "auto_sales_revenue": sum(float(b.get("total") or 0) for b in period_bookings if b.get("booking_source") == "AUTO SALES"),
         },
         "financial": {
             "revenue": inv_revenue,
@@ -8903,11 +8905,18 @@ def _apico_extract_message(body):
              or payload.get("customer_phone") or payload.get("phone_number") or payload.get("from") or "")
     content = (msg.get("content") or msg.get("text") or msg.get("body") or payload.get("content") or "")
     mtype = (msg.get("message_type") or msg.get("type") or "text").lower()
+    media_obj = msg.get("media") if isinstance(msg.get("media"), dict) else {}
+    media_url = (msg.get("media_url") or msg.get("url") or msg.get("link") or msg.get("file_url")
+                 or media_obj.get("url") or media_obj.get("link") or payload.get("media_url") or "")
+    if isinstance(media_url, dict):
+        media_url = media_url.get("url") or media_url.get("link") or ""
+    media_filename = (msg.get("filename") or msg.get("file_name") or media_obj.get("filename") or "")
     name = payload.get("customer_name") or msg.get("customer_name") or ""
-    if not (mid or content):
+    if not (mid or content or media_url):
         return None
     return {"message_id": str(mid) if mid else f"in-{now_iso()}", "direction": direction,
-            "phone": phone, "content": content, "type": mtype, "name": name}
+            "phone": phone, "content": content, "type": mtype, "name": name,
+            "media_url": media_url or "", "media_filename": media_filename or ""}
 
 
 async def _apico_process_inbound(event_db_id, parsed):
@@ -8921,6 +8930,8 @@ async def _apico_process_inbound(event_db_id, parsed):
                "external_provider": APICO_PROVIDER, "external_message_id": parsed["message_id"],
                "sender": "CUSTOMER", "sender_type": "CUSTOMER", "receiver": "CRM", "direction": "INBOUND",
                "type": parsed["type"], "message_type": parsed["type"], "content": parsed["content"],
+               "media_url": parsed.get("media_url") or "", "media_filename": parsed.get("media_filename") or "",
+               "media_type": parsed["type"] if (parsed.get("media_url") and parsed["type"] != "text") else "",
                "timestamp": now_iso(), "created_at": now_iso(), "ai_generated": False, "human_generated": False,
                "delivery_status": "RECEIVED", "status": "RECEIVED", "read_status": False}
         await db.whatsapp_messages.insert_one(msg)
@@ -11539,15 +11550,36 @@ async def afu_analytics(user: dict = Depends(require_role("super_admin"))):
     optout = await db.leads.count_documents({"auto_followup_status": "OPTED OUT"})
     handover = await db.leads.count_documents({"auto_followup_status": "HANDOVER"})
     converted = await db.leads.count_documents({"auto_followup_status": "CONVERTED"})
-    # response: customers who replied AFTER a follow-up was sent
+    # response: customers who replied AFTER a follow-up was sent + weekly buckets
+    from datetime import date as _date, timedelta as _td
     response = 0
     revenue = 0
     booking_cnt = 0
+    wk_map = {}
+
+    def _wk(dstr):
+        d10 = (dstr or "")[:10]
+        if len(d10) != 10:
+            return None
+        try:
+            dt = _date.fromisoformat(d10)
+            return (dt - _td(days=dt.weekday())).isoformat()
+        except Exception:
+            return None
+
     async for it in db.ai_followup_queue.find({"status": "SENT"}):
         cvid = it.get("conversation_id")
-        reply = await db.whatsapp_messages.find_one({"conversation_id": cvid, "direction": "INBOUND", "created_at": {"$gt": it.get("sent_at") or ""}})
-        if reply:
+        sent_at = it.get("sent_at") or ""
+        reply = await db.whatsapp_messages.find_one({"conversation_id": cvid, "direction": "INBOUND", "created_at": {"$gt": sent_at}})
+        replied = bool(reply)
+        if replied:
             response += 1
+        wk = _wk(sent_at)
+        if wk:
+            w = wk_map.setdefault(wk, {"week": wk, "sent": 0, "response": 0, "booking": 0})
+            w["sent"] += 1
+            if replied:
+                w["response"] += 1
     # bookings & revenue from leads that got at least one follow-up
     fu_customers = await db.ai_followup_queue.distinct("customer_id", {"status": "SENT"})
     for cid in fu_customers:
@@ -11555,13 +11587,21 @@ async def afu_analytics(user: dict = Depends(require_role("super_admin"))):
         if b:
             booking_cnt += 1
             revenue += float(b.get("total_amount") or b.get("total") or 0)
+            bwk = _wk(b.get("created_at"))
+            if bwk and bwk in wk_map:
+                wk_map[bwk]["booking"] += 1
     rate = lambda n, d: round((n / d) * 100, 1) if d else 0.0
+    weekly = []
+    for wk in sorted(wk_map.keys())[-8:]:
+        w = wk_map[wk]
+        weekly.append({**w, "response_rate": rate(w["response"], w["sent"]),
+                       "conversion_rate": rate(w["booking"], w["sent"])})
     payment_sent = await db.ai_followup_queue.count_documents({"source": "PAYMENT", "status": "SENT"})
     return {
         "total_leads": total_leads, "active_followup": active, "followup_sent": sent, "followup_scheduled": scheduled,
         "followup_response": response, "followup_converted": converted, "followup_booking": booking_cnt,
         "followup_revenue": revenue, "stopped_followup": stopped, "opt_out": optout, "human_handover": handover,
-        "payment_followup_sent": payment_sent,
+        "payment_followup_sent": payment_sent, "weekly": weekly,
         "response_rate": rate(response, sent), "conversion_rate": rate(converted, total_leads),
         "booking_rate": rate(booking_cnt, len(fu_customers)),
     }

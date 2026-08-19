@@ -91,6 +91,7 @@ export default function SuperAdminDashboard() {
               <Kpi label="Conversion" value={`${d.sales.conversion_rate}%`} testid="ex-conversion" />
               <Kpi label="Bookings" value={d.sales.booking_total} sub={`${d.sales.total_pax} pax`} testid="ex-bookings" to="/booking" />
               <Kpi label="Booking Value" value={short(d.sales.booking_revenue)} testid="ex-bookvalue" accent="text-blue-700" />
+              <Kpi label="AUTO SALES (AI)" value={short(d.sales.auto_sales_revenue || 0)} sub={`${d.sales.auto_sales_bookings || 0} booking`} testid="ex-autosales" accent="text-indigo-700" to="/booking" />
             </Group>
 
             <Group icon={DollarSign} title="Financial KPI" color="text-emerald-600" testid="exec-financial">
