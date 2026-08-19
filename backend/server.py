@@ -4199,7 +4199,35 @@ def _clean_terms(html):
     s = re.sub(r"<(/?)(b|i|u)(\s[^>]*)?>", r"<\1\2>", s, flags=re.I)
     s = re.sub(r"<(?!/?(?:b|i|u)>|br/>)[^>]*>", "", s)
     s = re.sub(r"(<br/>\s*)+$", "", s)
-    return s
+    # Escape stray ampersands not part of a valid entity (ReportLab is strict).
+    s = re.sub(r"&(?!(?:amp|lt|gt|quot|apos|#\d+|#x[0-9a-fA-F]+);)", "&amp;", s)
+    # Balance inline tags (b/i/u) so ReportLab's mini-parser never fails on
+    # malformed rich-text (e.g. a stray </b> without a matching <b>).
+    stack, out = [], []
+    for m in re.finditer(r"(<br/>)|<(/?)(b|i|u)>|([^<]+)", s):
+        br, closing, tag, text = m.group(1), m.group(2), m.group(3), m.group(4)
+        if br:
+            out.append("<br/>")
+        elif tag and not closing:
+            stack.append(tag)
+            out.append(f"<{tag}>")
+        elif tag and closing:
+            if tag in stack:
+                reopen = []
+                while stack:
+                    t = stack.pop()
+                    out.append(f"</{t}>")
+                    if t == tag:
+                        break
+                    reopen.append(t)
+                for t in reversed(reopen):
+                    stack.append(t)
+                    out.append(f"<{t}>")
+        elif text:
+            out.append(text)
+    while stack:
+        out.append(f"</{stack.pop()}>")
+    return "".join(out)
 
 
 def _pdf_fonts(tpl):

@@ -1,3 +1,9 @@
+## Fix — Preview PDF Quotation gagal di halaman Settings (2026-06) — DONE ✅ (curl + screenshot-verified)
+- **Gejala**: Di Settings > Template Dokumen, klik "Preview PDF" untuk Quotation → toast "Gagal membuat preview". `POST /api/doc-template/preview` return HTTP 500.
+- **Akar masalah**: `quotation_terms` (rich-text) tersimpan dengan tag HTML tidak seimbang (ada `</b>` tanpa `<b>` pembuka). Parser mini-HTML ReportLab `Paragraph` menolaknya: `Parse error: saw </b> instead of expected </para>`. `_clean_terms` mempertahankan `<b>/<i>/<u>` tapi tidak menyeimbangkannya.
+- **Fix**: `_clean_terms` (server.py ~L4180) sekarang: (1) menyeimbangkan tag inline b/i/u via stack (buang closer nyasar, tutup opener yang belum ditutup), (2) escape ampersand nyasar (`&` bukan entity) → `&amp;`. Ini membuat rich-text malformed apa pun aman dirender.
+- **Verified**: quotation/invoice/receipt preview (template lengkap) → HTTP 200 PDF valid; 8 stress test rich-text malformed lolos tanpa error; screenshot Settings preview tampil.
+
 ## Fix — "ResizeObserver loop" error overlay saat pilih filter tipe customer (2026-06) — DONE ✅ (screenshot-verified)
 - **Gejala**: Pilih tipe customer di CRM > Customers memunculkan overlay ERROR merah berulang: "ResizeObserver loop completed with undelivered notifications" (dari `bundle.js` handleError).
 - **Sifat**: Warning browser jinak (dipicu Radix Select/Recharts saat re-measure layout), BUKAN bug fungsional. Hanya muncul karena CRA dev overlay menangkapnya.
