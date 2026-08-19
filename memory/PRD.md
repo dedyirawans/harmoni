@@ -1,3 +1,12 @@
+## PHASE 10F-2 — Demo Data: Customers, Leads, Follow-ups, Sales Activities (2026-06) — DONE ✅ (curl-validated)
+- Seed idempoten `/app/scripts/seed_10f2.py` (guard `demo_seed_flags` batch=10F2). Aditif; TIDAK membuat booking/payment/invoice/commission; TIDAK menyentuh SA/Accounting/Packages/Tax/AI/WhatsApp.
+- **130 Customers** realistis Indonesia (13 kota + provinsi), status bervariasi (NEW/PROSPECT/ACTIVE/CUSTOMER/REPEAT CUSTOMER/INACTIVE), lead source bervariasi (10 sumber), semua ter-assign ke 5 sales dengan bobot performa berbeda (Andi 46 > Fajar 37 > Rina 24 > Rizky 15 > Siti 8). Kontak sintetis (@mail.demo), tanpa data pribadi nyata.
+- **85 Leads** — SEMUA mereferensi paket ASLI 10F-1 (package_id + interested_package = package_name, 0 mismatch; destination konsisten dari paket) + terhubung ke customer. Stage sesuai CRM (NEW/CONTACTED/QUALIFIED/QUOTATION/NEGOTIATION/BOOKING/LOST).
+- **113 Follow-ups** (db.follow_ups) — campuran: 41 completed, 41 overdue (pending+lewat due), 31 scheduled/upcoming. Tipe Call/WhatsApp/Email/Meeting. Terhubung ke lead & customer.
+- **200 Sales Activities** (db.sales_activities, tipe Call/WhatsApp/Email/Meeting) + **162 timeline** (db.lead_activities: customer_contacted, whatsapp_chat, phone_call, package_presentation, quotation_requested, meeting).
+- Validasi RBAC: Sales (Andi) hanya melihat 46 customer miliknya (data_scope own). Kredensial sales tetap Sales@123.
+
+
 ## PHASE 10F-1 — Demo Master Data Seed (Sales, Destinations, Packages, Departures) (2026-06) — DONE ✅ (curl-validated)
 - Seed idempoten via `/app/scripts/seed_10f1.py` (guard koleksi `demo_seed_flags` batch=10F1). ADITIF — TIDAK menghapus paket lama (dipakai oleh booking existing) agar tidak merusak booking/report.
 - Dibuat: **5 Sales user** realistis (Andi Pratama, Rina Maharani, Fajar Ramadhan, Siti Aulia, Rizky Saputra @harmoniwisata.co.id, role=sales, status active, data_scope own, password Sales@123), **14 Destinations** (koleksi `destinations`: 9 internasional + 5 domestik), **10 Tour packages** (TOUR-1001..1010), **6 Umrah packages** (UMR-1001..1006), **18 Departures** (Agu 2026–Jan 2027, utilisasi kursi bervariasi OPEN/ALMOST FULL/FULL).
