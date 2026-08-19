@@ -114,18 +114,18 @@ function ChangePasswordDialog({ open, onOpenChange }) {
 }
 
 function ProfileDialog({ open, onOpenChange }) {
-  const [title, setTitle] = useState("");
+  const [jabatan, setJabatan] = useState("");
   const [signature, setSignature] = useState("");
   const [loading, setLoading] = useState(false);
   useEffect(() => {
     if (!open) return;
-    api.get("/auth/me").then((r) => { setTitle(r.data?.title || ""); setSignature(r.data?.signature || ""); }).catch(() => {});
+    api.get("/auth/me").then((r) => { setJabatan(r.data?.title || ""); setSignature(r.data?.signature || ""); }).catch(() => {});
   }, [open]);
   const submit = async () => {
     setLoading(true);
     try {
-      await api.put("/auth/me/profile", { title, signature });
-      toast.success("Profil & tanda tangan tersimpan");
+      await api.put("/auth/me/profile", { signature });
+      toast.success("Tanda tangan tersimpan");
       onOpenChange(false);
     } catch (err) {
       toast.error(formatApiErrorDetail(err.response?.data?.detail));
@@ -136,12 +136,13 @@ function ProfileDialog({ open, onOpenChange }) {
       <DialogContent className="bg-white" data-testid="profile-dialog">
         <DialogHeader>
           <DialogTitle className="font-display">Profil & Tanda Tangan</DialogTitle>
-          <DialogDescription>Atur jabatan dan unggah tanda tangan digital (PNG) Anda. Dipakai pada quotation yang Anda buat.</DialogDescription>
+          <DialogDescription>Unggah tanda tangan digital (PNG) Anda. Dipakai pada quotation yang Anda buat.</DialogDescription>
         </DialogHeader>
         <div className="space-y-4 py-2">
           <div className="space-y-2">
             <Label>Jabatan</Label>
-            <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="mis. Sales Consultant" data-testid="profile-title-input" />
+            <Input value={jabatan || "—"} disabled readOnly data-testid="profile-title-readonly" />
+            <p className="text-xs text-slate-400">Jabatan hanya dapat diubah oleh Super Admin melalui menu User Management.</p>
           </div>
           <div className="space-y-2">
             <Label>Tanda Tangan Digital (PNG, maks 2MB)</Label>
@@ -156,11 +157,12 @@ function ProfileDialog({ open, onOpenChange }) {
                 {signature && <Button variant="ghost" size="sm" className="text-red-600 h-7" onClick={() => setSignature("")} data-testid="profile-signature-clear">Hapus tanda tangan</Button>}
               </div>
             </div>
+            <p className="text-xs text-slate-400">Mengganti tanda tangan tidak mengubah dokumen (invoice/quotation/kwitansi) yang sudah terbit.</p>
           </div>
         </div>
         <DialogFooter>
           <Button onClick={submit} disabled={loading} className="bg-blue-600 hover:bg-blue-700" data-testid="profile-submit-button">
-            {loading ? "Menyimpan..." : "Simpan profil"}
+            {loading ? "Menyimpan..." : "Simpan tanda tangan"}
           </Button>
         </DialogFooter>
       </DialogContent>

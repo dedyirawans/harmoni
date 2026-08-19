@@ -1,3 +1,8 @@
+## Update — Jabatan hanya Super Admin + Bekukan tanda tangan di dokumen terbit (2026-06) — DONE ✅ (curl-verified)
+- **Jabatan (title) hanya Super Admin**: `PUT /api/auth/me/profile` kini hanya menerima `signature` (field `title` dihapus dari `MyProfileUpdate`). Dialog "Profil & Tanda Tangan" (kanan-atas) menampilkan Jabatan **read-only** + catatan bahwa jabatan hanya diubah Super Admin via User Management. Jadi sales hanya bisa ganti tanda tangannya sendiri.
+- **Bekukan tanda tangan**: helper `_freeze_signer(kind,doc,tpl,collection)` — saat dokumen pertama kali di-render/terbit, snapshot signer (name/title/signature_url/stamp_url) disimpan di field `signature_snapshot` pada dokumen (invoices/quotations/schedule_payments) dan selalu dipakai untuk render berikutnya. Perubahan tanda tangan user/default TIDAK mengubah dokumen yang sudah terbit. `_signature_block` memakai stempel dari snapshot.
+- **Verified (curl+DB)**: INV1 diterbitkan → snapshot "Dedy Irawan"; default signer diganti "NAMA BARU"+ttd baru → INV1 render ulang tetap "Dedy Irawan" (beku), INV2 baru = "NAMA BARU". `PUT /auth/me/profile {title:'HACK'}` diabaikan (title user tetap null).
+
 ## Fitur — Tanda Tangan, Nama, Jabatan & Stempel di Invoice/Kwitansi/Quotation (2026-06) — DONE ✅ (curl + PDF-render + UI verified)
 - **Aturan penanda tangan**: Quotation → Nama/Jabatan/TTD milik SALES pembuatnya (via `sales_pic_id`). Quotation dari AI/Auto Sales → pakai default Settings. Invoice & Kwitansi → selalu default Settings. Stempel → selalu dari Settings, dipakai semua dokumen.
 - **Backend** (`server.py`):

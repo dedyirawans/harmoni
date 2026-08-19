@@ -264,7 +264,6 @@ class UserUpdate(BaseModel):
 
 
 class MyProfileUpdate(BaseModel):
-    title: Optional[str] = None
     signature: Optional[str] = None
 
 
@@ -4344,7 +4343,8 @@ def _signature_block(signer, tpl, base_font, bold_font):
         return None
     name = (signer.get("name") or "").strip()
     title = (signer.get("title") or "").strip()
-    if not name and not title and not signer.get("signature_url") and not tpl.get("stamp_url"):
+    stamp_src = signer.get("stamp_url") or tpl.get("stamp_url")
+    if not name and not title and not signer.get("signature_url") and not stamp_src:
         return None
     styles = getSampleStyleSheet()
     cen = ParagraphStyle("sigc", parent=styles["Normal"], fontName=base_font, fontSize=9,
@@ -4352,7 +4352,7 @@ def _signature_block(signer, tpl, base_font, bold_font):
     cenb = ParagraphStyle("sigcb", parent=cen, fontName=bold_font, fontSize=9.5,
                           textColor=colors.HexColor("#0f172a"))
     parts = [Paragraph("Hormat kami,", cen)]
-    img_buf = _compose_sign_stamp(signer.get("signature_url"), tpl.get("stamp_url"))
+    img_buf = _compose_sign_stamp(signer.get("signature_url"), stamp_src)
     if img_buf:
         im = RLImage(img_buf)
         ratio = min(46 * mm / im.imageWidth, 23 * mm / im.imageHeight)
@@ -4503,6 +4503,26 @@ async def _resolve_signer(kind, doc, tpl):
             "signature_url": u.get("signature") or ""}
 
 
+async def _freeze_signer(kind, doc, tpl, collection):
+    """Return the signer snapshot frozen at issue time. If the document has no snapshot yet,
+    resolve the current signer + stamp, persist it on the document, then return it. Later changes
+    to a user's signature or the default signer never affect already-issued documents."""
+    snap = doc.get("signature_snapshot")
+    if isinstance(snap, dict) and (snap.get("name") or snap.get("title") or snap.get("signature_url") or snap.get("stamp_url")):
+        return snap
+    base = await _resolve_signer(kind, doc, tpl)
+    snap = {"name": base.get("name", ""), "title": base.get("title", ""),
+            "signature_url": base.get("signature_url", ""), "stamp_url": tpl.get("stamp_url", "")}
+    _id = doc.get("_id")
+    try:
+        oid = _id if isinstance(_id, ObjectId) else (ObjectId(str(_id)) if ObjectId.is_valid(str(_id)) else None)
+        if oid is not None:
+            await db[collection].update_one({"_id": oid}, {"$set": {"signature_snapshot": snap}})
+    except Exception:
+        pass
+    return snap
+
+
 async def _render_invoice_pdf(inv):
     tpl = await _get_doc_template()
     company = await db.company_settings.find_one({"key": "company"}) or {}
@@ -4516,7 +4536,7 @@ async def _render_invoice_pdf(inv):
     data["paid_amount"] = max(_tot - _out, 0)
     data["terms"] = tpl.get("invoice_terms") or inv.get("terms") or ""
     qr = _public_pdf_url(tpl, "invoice", iid)
-    signer = await _resolve_signer("invoice", inv, tpl)
+    signer = await _freeze_signer("invoice", inv, tpl, "invoices")
     return build_document_pdf("INVOICE", data, company, tpl=tpl, qr_url=qr, paid=paid, signer=signer), inv.get("invoice_number")
 
 
@@ -4528,7 +4548,7 @@ async def _render_quotation_pdf(q):
     data["terms"] = tpl.get("quotation_terms") or q.get("terms") or ""
     qr = _public_pdf_url(tpl, "quotation", str(q.get("_id")))
     wm = tpl.get("quotation_watermark_text", "DRAFT") if str(q.get("status", "")).upper() != "ACCEPTED" else None
-    signer = await _resolve_signer("quotation", q, tpl)
+    signer = await _freeze_signer("quotation", q, tpl, "quotations")
     return build_document_pdf("QUOTATION", data, company, itins, tpl=tpl, qr_url=qr, watermark=wm, signer=signer), q.get("quotation_number")
 
 
@@ -4565,7 +4585,8 @@ async def _render_receipt_pdf(r, tpl=None):
         if qr:
             el += [Spacer(1, 10), qr, Paragraph("Scan untuk verifikasi kwitansi", ParagraphStyle("qs", parent=styles["Normal"], fontSize=8))]
     el += [Spacer(1, 16), Paragraph(_clean_terms(tpl.get("footer_text")) or "Terima kasih atas pembayaran Anda.", styles["Normal"])]
-    _rc_sig = _signature_block(_default_signer(tpl), tpl, base_font, bold_font)
+    _rc_signer = await _freeze_signer("receipt", r, tpl, "schedule_payments")
+    _rc_sig = _signature_block(_rc_signer, tpl, base_font, bold_font)
     if _rc_sig:
         el += [Spacer(1, 10 * mm), _rc_sig]
     paid_full = float(r.get("outstanding_total") or 0) <= 0
