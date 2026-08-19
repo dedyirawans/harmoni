@@ -1,3 +1,13 @@
+## PHASE 10E-5 — File Download Center (Documents) + Regression (2026-06) — DONE ✅ (backend curl E2E; FE testing_agent)
+- Menu baru **Documents** (`/documents`, terlihat semua role) — file internal perusahaan, BUKAN publik. Koleksi `company_files` + `file_downloads` (log).
+- **Backend** (server.py): POST/GET/PUT/DELETE `/files[/{fid}]`, POST `/files/{fid}/replace` (versioning + version_history), GET `/files/{fid}/download` (authenticated header/?auth, cek akses+status, catat log IP/UA), GET `/files/download-logs`, GET `/files/meta`. Admin ops = super_admin only. Download = get_current_user via token; akses via `_file_access_ok` (super_admin all; else role ∈ allowed_roles atau user ∈ allowed_user_ids; status ACTIVE).
+- **Access types**: ALL_STAFF/SALES/ACCOUNTING/SALES_ACCOUNTING/SPECIFIC (pilih user individual). Notifikasi otomatis ke role/user yang di-assign saat upload.
+- **Validasi**: ekstensi pdf/doc/docx/xls/xlsx/csv/ppt/pptx/jpg/jpeg/png/zip; maks 25MB; file kosong ditolak.
+- **Index baru**: company_files.category, company_files.created_at, file_downloads.file_id, file_downloads.timestamp.
+- **Frontend** `FileDownload.jsx`: daftar file (nama/kategori/versi/uploader/tanggal/akses/status/aksi) + Upload/Edit/Replace/Delete + Download + dialog Log Unduhan (super_admin). Sales/Accounting: hanya lihat + download file yang diizinkan (tombol admin disembunyikan).
+- Verified backend curl: upload SALES-access, bad-ext 400, SALES lihat/ACCOUNTING tidak, download 200/403/401, replace→v2 (history=1), SPECIFIC access, log tercatat, RBAC sales upload/logs/delete 403. Regression 10E-1/10E-2/10E-4 diuji via testing_agent.
+
+
 ## PHASE 10E-4 — Supplier Bank Accounts (multi) + Booking Number Display & Global Search (2026-06) — DONE ✅ (testing_agent iter_52: FE 100%; backend curl E2E)
 ### PART A — Supplier Bank Accounts
 - Supplier kini punya array `bank_accounts` (id, bank_name, account_holder, account_number, is_primary, status). Field lama `bank_account` (string) tetap dipertahankan (kompatibilitas).

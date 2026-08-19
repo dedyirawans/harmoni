@@ -37,6 +37,7 @@ import Approvals from "@/pages/Approvals";
 import Tax from "@/pages/Tax";
 import Reports from "@/pages/Reports";
 import Forecast from "@/pages/Forecast";
+import FileDownload from "@/pages/FileDownload";
 import WhatsAppIntegration from "@/pages/WhatsAppIntegration";
 import KnowledgeBase from "@/pages/KnowledgeBase";
 import CommunicationStyle from "@/pages/CommunicationStyle";
@@ -70,6 +71,7 @@ const PAGES = {
   "/tax": Tax,
   "/reports": Reports,
   "/forecast": Forecast,
+  "/documents": FileDownload,
   "/ai-hub": AIWorkspace,
   "/whatsapp": WhatsAppIntegration,
   "/knowledge-base": KnowledgeBase,

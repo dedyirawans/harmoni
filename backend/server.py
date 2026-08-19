@@ -5224,6 +5224,224 @@ async def download_document(doc_id: str, authorization: str = Header(None), auth
     return Response(content=data, media_type=d.get("content_type") or ct)
 
 
+# ============================================================================
+# Phase 10E-5 — File Download Center (internal, secure, RBAC-scoped)
+# ============================================================================
+FILE_CATEGORIES = ["Price List", "Sales Material", "Product Information", "SOP",
+                   "Company Document", "Accounting Document", "Tax Document", "Training", "Other"]
+FILE_ACCESS_TYPES = ["ALL_STAFF", "SALES", "ACCOUNTING", "SALES_ACCOUNTING", "SPECIFIC"]
+FILE_ALLOWED_EXT = {"pdf", "doc", "docx", "xls", "xlsx", "csv", "ppt", "pptx", "jpg", "jpeg", "png", "zip"}
+FILE_MAX_BYTES = 25 * 1024 * 1024
+
+
+def _file_roles_for(access_type):
+    return {"ALL_STAFF": ["sales", "accounting"], "SALES": ["sales"], "ACCOUNTING": ["accounting"],
+            "SALES_ACCOUNTING": ["sales", "accounting"], "SPECIFIC": []}.get(access_type, [])
+
+
+def _parse_id_list(raw):
+    import json as _json
+    if not raw:
+        return []
+    if isinstance(raw, list):
+        return [str(x) for x in raw if str(x).strip()]
+    raw = str(raw).strip()
+    try:
+        v = _json.loads(raw)
+        if isinstance(v, list):
+            return [str(x) for x in v if str(x).strip()]
+    except Exception:
+        pass
+    return [x.strip() for x in raw.split(",") if x.strip()]
+
+
+def _bump_version(v):
+    m = re.match(r"^v?(\d+)$", (v or "").strip(), re.I)
+    return f"v{int(m.group(1)) + 1}" if m else (v or "v1")
+
+
+def _file_access_ok(user, f):
+    if user["role"] == "super_admin":
+        return True
+    if (f.get("status") or "ACTIVE") != "ACTIVE" or f.get("is_deleted"):
+        return False
+    if user["role"] in (f.get("allowed_roles") or []):
+        return True
+    return user["_id"] in (f.get("allowed_user_ids") or [])
+
+
+def _file_out(f):
+    d = serialize(dict(f))
+    d.pop("storage_path", None)
+    d.pop("version_history", None)
+    return d
+
+
+@api_router.get("/files/meta")
+async def files_meta(user: dict = Depends(require_role("super_admin"))):
+    users = await db.users.find({"is_deleted": {"$ne": True}}).to_list(500)
+    return {"categories": FILE_CATEGORIES, "access_types": FILE_ACCESS_TYPES,
+            "users": [{"id": str(u["_id"]), "name": u.get("name"), "role": u.get("role")} for u in users]}
+
+
+@api_router.get("/files/download-logs")
+async def file_download_logs(file_id: Optional[str] = None, user: dict = Depends(require_role("super_admin"))):
+    q = {"file_id": file_id} if file_id else {}
+    logs = await db.file_downloads.find(q).sort("timestamp", -1).to_list(1000)
+    return [serialize(x) for x in logs]
+
+
+@api_router.get("/files")
+async def list_files(category: Optional[str] = None, user: dict = Depends(get_current_user)):
+    q = {"is_deleted": {"$ne": True}}
+    if category and category != "all":
+        q["category"] = category
+    docs = await db.company_files.find(q).sort("created_at", -1).to_list(1000)
+    return [_file_out(d) for d in docs if _file_access_ok(user, d)]
+
+
+@api_router.post("/files")
+async def upload_company_file(request: Request, file: UploadFile = File(...), file_name: str = Form(""),
+                              description: str = Form(""), category: str = Form("Other"),
+                              version: str = Form("v1"), access_type: str = Form("ALL_STAFF"),
+                              allowed_user_ids: str = Form(""), user: dict = Depends(require_role("super_admin"))):
+    ext = (file.filename or "").rsplit(".", 1)[-1].lower() if "." in (file.filename or "") else ""
+    if ext not in FILE_ALLOWED_EXT:
+        raise HTTPException(status_code=400, detail=f"Tipe file tidak didukung: .{ext or '?'}")
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="File kosong")
+    if len(data) > FILE_MAX_BYTES:
+        raise HTTPException(status_code=400, detail="Ukuran file melebihi 25MB")
+    if access_type not in FILE_ACCESS_TYPES:
+        access_type = "ALL_STAFF"
+    uid = str(ObjectId())
+    path = f"{_APP_NAME}/company_files/{uid}.{ext}"
+    result = put_object(path, data, file.content_type or "application/octet-stream")
+    uids = _parse_id_list(allowed_user_ids)
+    doc = {"file_name": (file_name or file.filename or "Untitled").strip(),
+           "description": (description or "").strip(),
+           "category": category if category in FILE_CATEGORIES else "Other",
+           "version": (version or "v1").strip(), "storage_path": result["path"],
+           "content_type": file.content_type or "application/octet-stream",
+           "original_filename": file.filename, "size": len(data),
+           "access_type": access_type, "allowed_roles": _file_roles_for(access_type),
+           "allowed_user_ids": uids, "status": "ACTIVE", "version_history": [], "is_deleted": False,
+           "uploaded_by": user["name"], "uploaded_by_id": user["_id"],
+           "created_at": now_iso(), "updated_at": now_iso()}
+    res = await db.company_files.insert_one(doc)
+    doc["_id"] = res.inserted_id
+    for r in doc["allowed_roles"]:
+        await notify("File baru tersedia untuk diunduh", f"{doc['file_name']} ({doc['category']})", link="/documents", role=r)
+    for u in uids:
+        await notify("File baru tersedia untuk diunduh", f"{doc['file_name']} ({doc['category']})", link="/documents", user_id=u)
+    await log_audit(user, "file", "upload_file", request, record_id=str(res.inserted_id),
+                    new={"file_name": doc["file_name"], "access_type": access_type})
+    return _file_out(doc)
+
+
+@api_router.get("/files/{fid}")
+async def get_company_file(fid: str, user: dict = Depends(require_role("super_admin"))):
+    if not ObjectId.is_valid(fid):
+        raise HTTPException(status_code=404, detail="File tidak ditemukan")
+    f = await db.company_files.find_one({"_id": ObjectId(fid)})
+    if not f:
+        raise HTTPException(status_code=404, detail="File tidak ditemukan")
+    d = serialize(dict(f))
+    d.pop("storage_path", None)
+    return d
+
+
+@api_router.put("/files/{fid}")
+async def update_company_file(fid: str, body: dict, request: Request, user: dict = Depends(require_role("super_admin"))):
+    if not ObjectId.is_valid(fid):
+        raise HTTPException(status_code=404, detail="File tidak ditemukan")
+    f = await db.company_files.find_one({"_id": ObjectId(fid)})
+    if not f:
+        raise HTTPException(status_code=404, detail="File tidak ditemukan")
+    upd = {}
+    for k in ("file_name", "description", "category", "version", "status"):
+        if body.get(k) is not None:
+            upd[k] = body[k]
+    if body.get("access_type") in FILE_ACCESS_TYPES:
+        upd["access_type"] = body["access_type"]
+        upd["allowed_roles"] = _file_roles_for(body["access_type"])
+    if "allowed_user_ids" in body:
+        upd["allowed_user_ids"] = _parse_id_list(body["allowed_user_ids"])
+    upd["updated_at"] = now_iso()
+    await db.company_files.update_one({"_id": ObjectId(fid)}, {"$set": upd})
+    await log_audit(user, "file", "update_file", request, record_id=fid, new=upd)
+    return _file_out(await db.company_files.find_one({"_id": ObjectId(fid)}))
+
+
+@api_router.post("/files/{fid}/replace")
+async def replace_company_file(fid: str, request: Request, file: UploadFile = File(...),
+                               version: str = Form(""), user: dict = Depends(require_role("super_admin"))):
+    if not ObjectId.is_valid(fid):
+        raise HTTPException(status_code=404, detail="File tidak ditemukan")
+    f = await db.company_files.find_one({"_id": ObjectId(fid)})
+    if not f:
+        raise HTTPException(status_code=404, detail="File tidak ditemukan")
+    ext = (file.filename or "").rsplit(".", 1)[-1].lower() if "." in (file.filename or "") else ""
+    if ext not in FILE_ALLOWED_EXT:
+        raise HTTPException(status_code=400, detail=f"Tipe file tidak didukung: .{ext or '?'}")
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="File kosong")
+    if len(data) > FILE_MAX_BYTES:
+        raise HTTPException(status_code=400, detail="Ukuran file melebihi 25MB")
+    hist = f.get("version_history") or []
+    hist.append({"version": f.get("version"), "storage_path": f.get("storage_path"),
+                 "original_filename": f.get("original_filename"), "size": f.get("size"),
+                 "replaced_at": now_iso(), "replaced_by": user["name"]})
+    uid = str(ObjectId())
+    path = f"{_APP_NAME}/company_files/{uid}.{ext}"
+    result = put_object(path, data, file.content_type or "application/octet-stream")
+    new_ver = (version or "").strip() or _bump_version(f.get("version"))
+    await db.company_files.update_one({"_id": ObjectId(fid)}, {"$set": {
+        "storage_path": result["path"], "content_type": file.content_type or "application/octet-stream",
+        "original_filename": file.filename, "size": len(data), "version": new_ver,
+        "version_history": hist, "updated_at": now_iso()}})
+    await log_audit(user, "file", "replace_file", request, record_id=fid, new={"version": new_ver})
+    return _file_out(await db.company_files.find_one({"_id": ObjectId(fid)}))
+
+
+@api_router.delete("/files/{fid}")
+async def delete_company_file(fid: str, request: Request, reason: str = Query(""), user: dict = Depends(require_role("super_admin"))):
+    if not ObjectId.is_valid(fid):
+        raise HTTPException(status_code=404, detail="File tidak ditemukan")
+    f = await db.company_files.find_one({"_id": ObjectId(fid)})
+    if not f:
+        raise HTTPException(status_code=404, detail="File tidak ditemukan")
+    await db.company_files.update_one({"_id": ObjectId(fid)}, {"$set": {
+        "is_deleted": True, "status": "ARCHIVED", "deleted_by": user["name"], "deleted_at": now_iso()}})
+    await log_audit(user, "file", "delete_file", request, record_id=fid, reason=(reason or "").strip() or None)
+    return {"message": "File dihapus"}
+
+
+@api_router.get("/files/{fid}/download")
+async def download_company_file(fid: str, request: Request, authorization: str = Header(None), auth: str = Query(None)):
+    token = authorization[7:] if (authorization or "").startswith("Bearer ") else auth
+    user = await user_from_token(token) if token else None
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    if not ObjectId.is_valid(fid):
+        raise HTTPException(status_code=404, detail="File tidak ditemukan")
+    f = await db.company_files.find_one({"_id": ObjectId(fid)})
+    if not f or f.get("is_deleted"):
+        raise HTTPException(status_code=404, detail="File tidak ditemukan")
+    if not _file_access_ok(user, f):
+        raise HTTPException(status_code=403, detail="403 Forbidden: no access to this file")
+    data, ct = get_object(f["storage_path"])
+    await db.file_downloads.insert_one({"file_id": fid, "file_name": f.get("file_name"), "version": f.get("version"),
+        "user_id": user.get("_id"), "user_name": user.get("name"), "user_role": user.get("role"), "action": "DOWNLOAD",
+        "ip": request.client.host if request and request.client else None,
+        "user_agent": request.headers.get("user-agent") if request else None, "timestamp": now_iso()})
+    fname = f.get("original_filename") or f.get("file_name") or "file"
+    return Response(content=data, media_type=f.get("content_type") or ct,
+                    headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+
+
 @api_router.get("/documents/expiring")
 async def documents_expiring(within: int = 90, user: dict = Depends(get_current_user)):
     today = datetime.now(timezone.utc).date()
@@ -12663,6 +12881,10 @@ async def seed():
     await db.customers.create_index("phone")
     await db.customers.create_index("email")
     await db.customers.create_index("whatsapp")
+    await db.company_files.create_index("category")
+    await db.company_files.create_index("created_at")
+    await db.file_downloads.create_index("file_id")
+    await db.file_downloads.create_index("timestamp")
     await db.invoices.create_index("booking_id")
     await db.payments.create_index("invoice_id")
     await db.travelers.create_index("booking_id")

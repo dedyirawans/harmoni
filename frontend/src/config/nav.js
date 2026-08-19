@@ -1,7 +1,7 @@
 import {
   LayoutDashboard, Users2, Briefcase, Package, CalendarCheck, Calculator,
   Receipt, Percent, FileBarChart, Plug, UserCog, Settings, ScrollText,
-  Plane, PlaneTakeoff, Bell, Wallet, TrendingUp, ListChecks, FileText, ShieldCheck, CheckSquare, Building2, Activity, Bot, MessageCircle, BrainCircuit, MessageSquareHeart, Wrench, Gauge,
+  Plane, PlaneTakeoff, Bell, Wallet, TrendingUp, ListChecks, FileText, ShieldCheck, CheckSquare, Building2, Activity, Bot, MessageCircle, BrainCircuit, MessageSquareHeart, Wrench, Gauge, FolderDown,
 } from "lucide-react";
 
 // Route -> permission required (mirrors backend). null = any authenticated user.
@@ -33,6 +33,7 @@ export const ROUTE_PERMS = {
   "/follow-ups": "sales.view",
   "/tasks": null,
   "/approval-center": null,
+  "/documents": null,
 };
 
 export const MENUS = {
@@ -54,6 +55,7 @@ export const MENUS = {
     { label: "Approval", path: "/approval-center", icon: ShieldCheck },
     { label: "Reports", path: "/reports", icon: FileBarChart },
     { label: "Forecasting", path: "/forecast", icon: TrendingUp },
+    { label: "Documents", path: "/documents", icon: FolderDown },
     { label: "AI & WhatsApp", path: "/ai-hub", icon: Bot },
     { label: "User Management", path: "/users", icon: UserCog },
     { label: "Settings", path: "/settings", icon: Settings },
@@ -71,6 +73,7 @@ export const MENUS = {
     { label: "Packages", path: "/packages", icon: Plane },
     { label: "Departures", path: "/departures", icon: PlaneTakeoff },
     { label: "My Commission", path: "/commission", icon: Wallet },
+    { label: "Documents", path: "/documents", icon: FolderDown },
     { label: "Reports", path: "/reports", icon: FileBarChart },
     { label: "Cancellations", path: "/approvals", icon: ShieldCheck },
     { label: "Notifications", path: "/notifications", icon: Bell },
@@ -88,6 +91,7 @@ export const MENUS = {
     { label: "Packages", path: "/products", icon: Package },
     { label: "Tax", path: "/tax", icon: Percent },
     { label: "Commission", path: "/commission", icon: Wallet },
+    { label: "Documents", path: "/documents", icon: FolderDown },
     { label: "Reports", path: "/reports", icon: FileBarChart },
     { label: "Notifications", path: "/notifications", icon: Bell },
   ],
