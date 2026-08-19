@@ -1,3 +1,12 @@
+## Brosur AI — Varian, PDF Multi-Halaman, Watermark/Logo, Foto Referensi (2026-06) — DONE ✅
+- **Varian brosur (1–3)**: `generate-infographic` menerima `variants` (1-3) & membuat beberapa gaya berbeda SECARA PARALEL (asyncio.gather → ~17s untuk 2, hindari timeout ingress). Mengembalikan list; mengembalikan varian yang sukses meski salah satu gagal (Nano Banana kadang balas tanpa gambar).
+- **PDF multi-halaman**: `POST /packages/{pid}/brochures/generate-pdf` → cover infografis AI (Nano Banana) + halaman Itinerary (per hari) + halaman Harga & Fasilitas, disusun via reportlab, footer logo+kontak tiap halaman. Disimpan kind=AI_PDF (application/pdf). Verified: PDF 2MB multi-halaman valid.
+- **Watermark & Logo**: helper `_stamp_brochure_image` menempelkan bar bawah (logo + company_name + phone/website dari settings) pada setiap gambar brosur AI; PDF punya footer branding di tiap halaman.
+- **Foto referensi**: `reference_ids` (id brosur gambar terunggah) → di-decode base64 → dikirim sebagai `ImageContent` ke Nano Banana (mode editing) untuk dijadikan elemen visual. UI: seksi "Foto referensi untuk AI" (centang thumbnail). Upload foto = endpoint upload gambar yang sama.
+- **Frontend** `BrochureTab.jsx`: dropdown Jumlah Varian, seksi foto referensi, tombol Generate Infografis / Generate PDF Multi-Halaman / Upload; galeri kartu dengan badge AI / AI PDF / Upload.
+- Helpers baru: `_fetch_img_bytes`, `_stamp_brochure_image`, `_brochure_reference_images`, `_brochure_prompt`, `_nano_banana_image`.
+
+
 ## Brosur Paket: Upload/Download + Generate Infografis AI (2026-06) — DONE ✅ (AI E2E tervalidasi)
 - **Lokasi**: tab "Brosur" di halaman Detail Paket (Product Management). Super Admin (product.manage) upload/generate/hapus; Sales (product.view) melihat & download.
 - **Backend** (server.py, koleksi `package_brochures`):

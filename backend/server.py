@@ -9247,11 +9247,114 @@ async def public_brochure(bid: str, sig: str = Query("")):
     return Response(content=content, media_type=b.get("content_type") or ct)
 
 
+def _fetch_img_bytes(src):
+    try:
+        if not src:
+            return None
+        if src.startswith("data:"):
+            import base64 as _b
+            return _b.b64decode(src.split(",", 1)[1])
+        if src.startswith("http"):
+            r = _requests.get(src, timeout=10)
+            return r.content if r.ok else None
+    except Exception:
+        return None
+    return None
+
+
+def _stamp_brochure_image(img_bytes, info):
+    """Tempelkan bar logo + kontak agency di bagian bawah gambar brosur."""
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+        import io as _io
+        im = Image.open(_io.BytesIO(img_bytes)).convert("RGBA")
+        W, H = im.size
+        bar_h = max(60, int(H * 0.08))
+        overlay = Image.new("RGBA", (W, bar_h), (15, 23, 42, 225))
+        im.alpha_composite(overlay, (0, H - bar_h))
+        d = ImageDraw.Draw(im)
+        try:
+            f1 = ImageFont.load_default(size=max(16, int(bar_h * 0.32)))
+            f2 = ImageFont.load_default(size=max(12, int(bar_h * 0.24)))
+        except Exception:
+            f1 = ImageFont.load_default()
+            f2 = f1
+        x = 24
+        logo_b = _fetch_img_bytes(info.get("logo_url"))
+        if logo_b:
+            try:
+                lg = Image.open(_io.BytesIO(logo_b)).convert("RGBA")
+                lh = int(bar_h * 0.66)
+                lw = max(1, int(lg.width * (lh / max(1, lg.height))))
+                lg = lg.resize((lw, lh))
+                im.alpha_composite(lg, (x, H - bar_h + (bar_h - lh) // 2))
+                x += lw + 18
+            except Exception:
+                pass
+        name = info.get("company_name") or "Safar Travel"
+        contact = "  ·  ".join([v for v in [info.get("phone"), info.get("website")] if v])
+        d.text((x, H - bar_h + int(bar_h * 0.14)), name, fill=(255, 255, 255, 255), font=f1)
+        if contact:
+            d.text((x, H - bar_h + int(bar_h * 0.55)), contact, fill=(203, 213, 225, 255), font=f2)
+        out = _io.BytesIO()
+        im.convert("RGB").save(out, format="PNG")
+        return out.getvalue()
+    except Exception:
+        return img_bytes
+
+
+async def _brochure_reference_images(ref_ids):
+    imgs = []
+    import base64 as _b64
+    for rid in (ref_ids or [])[:4]:
+        rb = await db.package_brochures.find_one({"id": rid, "is_deleted": {"$ne": True}})
+        if rb and (rb.get("content_type") or "").startswith("image/"):
+            try:
+                content, _ct = get_object(rb["storage_path"])
+                imgs.append(_b64.b64encode(content).decode())
+            except Exception:
+                pass
+    return imgs
+
+
+def _brochure_prompt(pkg, itin_txt, price, theme, highlights, promo, cta, extra, has_ref):
+    p = (
+        "Buatkan POSTER INFOGRAFIS BROSUR PARIWISATA format potret (portrait) yang menarik, modern, rapi, "
+        "layak cetak, dengan hierarki teks yang jelas dan ikon sederhana. Semua teks dalam BAHASA INDONESIA dan dieja dengan benar. "
+        f"Tema warna: {theme}. "
+        f"JUDUL BESAR: {pkg.get('package_name', 'Paket Wisata')}. "
+        f"Destinasi: {pkg.get('destination') or pkg.get('country') or '-'}. Durasi: {pkg.get('duration') or '-'}. "
+        + (f"Harga mulai Rp{price:,}/pax. " if price else "")
+        + (f"Highlight fasilitas: {highlights}. " if highlights else "")
+        + f"Ringkasan itinerary: {itin_txt}. "
+        + (f"Promo: {promo}. " if promo else "")
+        + (f"Ajakan (CTA) di bagian bawah: {cta}. " if cta else "")
+        + (f"Catatan tambahan: {extra}. " if extra else "")
+        + ("Gunakan FOTO REFERENSI terlampir sebagai elemen visual utama (mis. foto hotel/destinasi), integrasikan secara natural. " if has_ref else "")
+        + "Sertakan nuansa Islami/perjalanan yang relevan bila ini paket Umrah. Sisakan ruang kosong di bagian paling bawah untuk footer. Tata letak bersih dan profesional."
+    )
+    return p
+
+
+async def _nano_banana_image(prompt, ref_imgs, session_tag):
+    from emergentintegrations.llm.chat import LlmChat, UserMessage, ImageContent
+    import base64 as _b64
+    chat = LlmChat(api_key=os.environ["EMERGENT_LLM_KEY"], session_id=f"{session_tag}-{_uuid.uuid4()}",
+                   system_message="You are a professional graphic designer creating travel brochure infographics.")
+    chat.with_model("gemini", "gemini-3.1-flash-image-preview").with_params(modalities=["image", "text"])
+    msg = UserMessage(text=prompt, file_contents=[ImageContent(x) for x in ref_imgs]) if ref_imgs else UserMessage(text=prompt)
+    _t, images = await chat.send_message_multimodal_response(msg)
+    if not images:
+        return None
+    return _b64.b64decode(images[0]["data"])
+
+
 @api_router.post("/packages/{pid}/brochures/generate-infographic")
 async def generate_brochure_infographic(pid: str, body: dict, user: dict = Depends(require_permission("product.manage"))):
     pkg = await db.packages.find_one({"_id": ObjectId(pid)}) if ObjectId.is_valid(pid) else None
     if not pkg:
         raise HTTPException(status_code=404, detail="Package tidak ditemukan")
+    variants = max(1, min(3, int(body.get("variants") or 1)))
     itins = await db.package_itineraries.find({"package_id": pid}).sort("day", 1).to_list(30)
     itin_txt = "; ".join(f"Hari {i.get('day')}: {i.get('activity') or i.get('location') or ''}" for i in itins[:8]) or "-"
     price = int(pkg.get("selling_price") or 0)
@@ -9260,39 +9363,152 @@ async def generate_brochure_infographic(pid: str, body: dict, user: dict = Depen
     promo = (body.get("promo") or "").strip()
     cta = (body.get("cta") or "").strip()
     extra = (body.get("extra") or "").strip()
-    prompt = (
-        "Buatkan POSTER INFOGRAFIS BROSUR PARIWISATA format potret (portrait) yang menarik, modern, rapi, "
-        "layak cetak, dengan hierarki teks yang jelas dan ikon sederhana. Semua teks dalam BAHASA INDONESIA dan dieja dengan benar. "
-        f"Tema warna: {theme}. "
-        f"JUDUL BESAR: {pkg.get('package_name','Paket Wisata')}. "
-        f"Destinasi: {pkg.get('destination') or pkg.get('country') or '-'}. Durasi: {pkg.get('duration') or '-'}. "
-        + (f"Harga mulai Rp{price:,}/pax. " if price else "")
-        + (f"Highlight fasilitas: {highlights}. " if highlights else "")
-        + f"Ringkasan itinerary: {itin_txt}. "
-        + (f"Promo: {promo}. " if promo else "")
-        + (f"Ajakan (CTA) di bagian bawah: {cta}. " if cta else "")
-        + (f"Catatan tambahan: {extra}. " if extra else "")
-        + "Sertakan nuansa Islami/perjalanan yang relevan bila ini paket Umrah. Jangan menaruh watermark. Tata letak bersih dan profesional."
-    )
+    ref_imgs = await _brochure_reference_images(body.get("reference_ids"))
+    info = await get_settings_dict()
+    base_prompt = _brochure_prompt(pkg, itin_txt, price, theme, highlights, promo, cta, extra, bool(ref_imgs))
+    styles = ["gaya modern minimalis dengan banyak white space", "gaya mewah elegan premium dengan aksen emas",
+              "gaya cerah dinamis ramah keluarga dengan ilustrasi"]
+    import asyncio as _asyncio
+    prompts = [base_prompt + (f" Gunakan {styles[i % len(styles)]}." if variants > 1 else "") for i in range(variants)]
+    results = await _asyncio.gather(*[_nano_banana_image(p, ref_imgs, f"brochure-{pid}") for p in prompts], return_exceptions=True)
+    recs = []
+    first_err = None
+    for i, raw in enumerate(results):
+        if isinstance(raw, Exception):
+            first_err = first_err or raw
+            continue
+        if not raw:
+            continue
+        img_bytes = _stamp_brochure_image(raw, info)
+        bid = str(_uuid.uuid4())
+        path = f"{_APP_NAME}/brochures/{pid}/{bid}.png"
+        result = put_object(path, img_bytes, "image/png")
+        rec = {"id": bid, "package_id": pid, "kind": "AI", "storage_path": result["path"], "content_type": "image/png",
+               "original_filename": f"brosur-ai-{(pkg.get('package_name') or 'paket')[:24]}-v{i + 1}.png",
+               "size": result.get("size", len(img_bytes)), "is_deleted": False, "created_by": user["name"],
+               "created_at": now_iso(), "gen_meta": {"theme": theme, "style": styles[i % len(styles)] if variants > 1 else theme,
+               "highlights": highlights, "promo": promo, "cta": cta}}
+        await db.package_brochures.insert_one(rec)
+        recs.append(_brochure_out(rec))
+    if not recs:
+        raise HTTPException(status_code=502, detail=f"AI tidak menghasilkan gambar. {str(first_err)[:140] if first_err else 'Coba lagi atau ubah input.'}")
+    return recs
+
+
+@api_router.post("/packages/{pid}/brochures/generate-pdf")
+async def generate_brochure_pdf(pid: str, body: dict, user: dict = Depends(require_permission("product.manage"))):
+    pkg = await db.packages.find_one({"_id": ObjectId(pid)}) if ObjectId.is_valid(pid) else None
+    if not pkg:
+        raise HTTPException(status_code=404, detail="Package tidak ditemukan")
+    itins = await db.package_itineraries.find({"package_id": pid}).sort("day", 1).to_list(50)
+    itin_txt = "; ".join(f"Hari {i.get('day')}: {i.get('activity') or i.get('location') or ''}" for i in itins[:8]) or "-"
+    price = int(pkg.get("selling_price") or 0)
+    theme = (body.get("theme") or "hijau elegan dengan aksen emas").strip()
+    highlights = (body.get("highlights") or "").strip()
+    promo = (body.get("promo") or "").strip()
+    cta = (body.get("cta") or "").strip()
+    ref_imgs = await _brochure_reference_images(body.get("reference_ids"))
+    info = await get_settings_dict()
+    cover_prompt = _brochure_prompt(pkg, itin_txt, price, theme, highlights, promo, cta, "", bool(ref_imgs)) + " Fokus sebagai HALAMAN SAMPUL (cover) brosur."
     try:
-        from emergentintegrations.llm.chat import LlmChat, UserMessage
-        chat = LlmChat(api_key=os.environ["EMERGENT_LLM_KEY"], session_id=f"brochure-{pid}-{_uuid.uuid4()}",
-                       system_message="You are a professional graphic designer creating travel brochure infographics.")
-        chat.with_model("gemini", "gemini-3.1-flash-image-preview").with_params(modalities=["image", "text"])
-        _txt, images = await chat.send_message_multimodal_response(UserMessage(text=prompt))
+        cover_raw = await _nano_banana_image(cover_prompt, ref_imgs, f"brochure-pdf-{pid}")
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Gagal generate brosur AI: {str(e)[:160]}")
-    if not images:
-        raise HTTPException(status_code=502, detail="AI tidak menghasilkan gambar. Coba lagi atau ubah input.")
-    import base64 as _b64
-    img_bytes = _b64.b64decode(images[0]["data"])
+        raise HTTPException(status_code=502, detail=f"Gagal generate cover AI: {str(e)[:160]}")
+    cover_bytes = _stamp_brochure_image(cover_raw, info) if cover_raw else None
+    try:
+        import io as _io
+        from reportlab.lib.pagesizes import A4
+        from reportlab.lib.units import mm
+        from reportlab.lib.utils import ImageReader
+        from reportlab.pdfgen import canvas as _rcanvas
+        buf = _io.BytesIO()
+        c = _rcanvas.Canvas(buf, pagesize=A4)
+        PW, PH = A4
+
+        def footer():
+            c.setFillColorRGB(0.06, 0.09, 0.16)
+            c.rect(0, 0, PW, 16 * mm, fill=1, stroke=0)
+            c.setFillColorRGB(1, 1, 1)
+            c.setFont("Helvetica-Bold", 10)
+            c.drawString(12 * mm, 9 * mm, (info.get("company_name") or "Safar Travel")[:60])
+            c.setFont("Helvetica", 8)
+            c.setFillColorRGB(0.8, 0.85, 0.9)
+            contact = "  |  ".join([v for v in [info.get("phone"), info.get("website"), info.get("address")] if v])
+            c.drawString(12 * mm, 4.5 * mm, contact[:120])
+            lb = _fetch_img_bytes(info.get("logo_url"))
+            if lb:
+                try:
+                    c.drawImage(ImageReader(_io.BytesIO(lb)), PW - 32 * mm, 3.5 * mm, width=20 * mm, height=10 * mm, preserveAspectRatio=True, mask="auto")
+                except Exception:
+                    pass
+
+        # Page 1: cover
+        if cover_bytes:
+            try:
+                img = ImageReader(_io.BytesIO(cover_bytes))
+                iw, ih = img.getSize()
+                ratio = min((PW - 20 * mm) / iw, (PH - 40 * mm) / ih)
+                dw, dh = iw * ratio, ih * ratio
+                c.drawImage(img, (PW - dw) / 2, (PH - dh) / 2 + 8 * mm, width=dw, height=dh, preserveAspectRatio=True, mask="auto")
+            except Exception:
+                pass
+        footer()
+        c.showPage()
+
+        # Page 2: itinerary
+        c.setFillColorRGB(0.1, 0.1, 0.12)
+        c.setFont("Helvetica-Bold", 18)
+        c.drawString(15 * mm, PH - 25 * mm, f"Itinerary — {(pkg.get('package_name') or '')[:38]}")
+        y = PH - 36 * mm
+        for it in itins:
+            if y < 24 * mm:
+                footer(); c.showPage(); y = PH - 25 * mm
+            c.setFillColorRGB(0.1, 0.1, 0.12); c.setFont("Helvetica-Bold", 11)
+            c.drawString(15 * mm, y, f"Hari {it.get('day')}: {(it.get('activity') or it.get('location') or '')[:80]}")
+            y -= 6 * mm
+            det = "  ·  ".join([v for v in [it.get("hotel"), it.get("meal"), it.get("transport")] if v])
+            if det:
+                c.setFont("Helvetica", 9); c.setFillColorRGB(0.4, 0.4, 0.45)
+                c.drawString(18 * mm, y, det[:100]); y -= 6 * mm
+            y -= 2 * mm
+        if not itins:
+            c.setFont("Helvetica", 11); c.setFillColorRGB(0.5, 0.5, 0.5)
+            c.drawString(15 * mm, y, "Itinerary belum tersedia.")
+        footer()
+        c.showPage()
+
+        # Page 3: harga & fasilitas
+        c.setFillColorRGB(0.1, 0.1, 0.12); c.setFont("Helvetica-Bold", 18)
+        c.drawString(15 * mm, PH - 25 * mm, "Harga & Fasilitas")
+        y = PH - 38 * mm
+        c.setFont("Helvetica", 12); c.setFillColorRGB(0.1, 0.1, 0.12)
+        for lbl, val in [("Harga Dewasa / Pax", price), ("Harga Anak", pkg.get("child_price")), ("Harga Infant", pkg.get("infant_price"))]:
+            if val:
+                c.drawString(15 * mm, y, f"{lbl}: Rp{int(val):,}"); y -= 8 * mm
+        if highlights:
+            y -= 4 * mm; c.setFont("Helvetica-Bold", 12); c.drawString(15 * mm, y, "Highlight Fasilitas:"); y -= 7 * mm
+            c.setFont("Helvetica", 10)
+            for ln in [highlights[k:k + 90] for k in range(0, len(highlights), 90)][:6]:
+                c.drawString(18 * mm, y, ln); y -= 6 * mm
+        if promo:
+            y -= 4 * mm; c.setFillColorRGB(0.85, 0.3, 0.1); c.setFont("Helvetica-Bold", 12)
+            c.drawString(15 * mm, y, f"Promo: {promo[:80]}"); y -= 7 * mm
+        if cta:
+            c.setFillColorRGB(0.1, 0.45, 0.2); c.setFont("Helvetica-Bold", 12)
+            c.drawString(15 * mm, y, cta[:90])
+        footer()
+        c.showPage()
+        c.save()
+        pdf_bytes = buf.getvalue()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Gagal menyusun PDF: {str(e)[:160]}")
     bid = str(_uuid.uuid4())
-    path = f"{_APP_NAME}/brochures/{pid}/{bid}.png"
-    result = put_object(path, img_bytes, "image/png")
-    rec = {"id": bid, "package_id": pid, "kind": "AI", "storage_path": result["path"], "content_type": "image/png",
-           "original_filename": f"brosur-ai-{(pkg.get('package_name') or 'paket')[:30]}.png", "size": result.get("size", len(img_bytes)),
+    path = f"{_APP_NAME}/brochures/{pid}/{bid}.pdf"
+    result = put_object(path, pdf_bytes, "application/pdf")
+    rec = {"id": bid, "package_id": pid, "kind": "AI_PDF", "storage_path": result["path"], "content_type": "application/pdf",
+           "original_filename": f"brosur-{(pkg.get('package_name') or 'paket')[:24]}.pdf", "size": result.get("size", len(pdf_bytes)),
            "is_deleted": False, "created_by": user["name"], "created_at": now_iso(),
-           "gen_meta": {"theme": theme, "highlights": highlights, "promo": promo, "cta": cta}}
+           "gen_meta": {"theme": theme, "pages": ["cover", "itinerary", "harga"]}}
     await db.package_brochures.insert_one(rec)
     return _brochure_out(rec)
 
