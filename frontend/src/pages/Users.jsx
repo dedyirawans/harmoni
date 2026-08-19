@@ -78,6 +78,7 @@ export default function Users() {
     } catch (err) { toast.error(formatApiErrorDetail(err.response?.data?.detail)); }
   };
 
+  const [reassign, setReassign] = useState(null);
   const remove = async (u) => {
     const reason = window.prompt(`Alasan mengarsipkan user "${u.name}" (wajib):`, "");
     if (reason === null) return;
@@ -85,6 +86,22 @@ export default function Users() {
     try {
       await api.delete(`/users/${u._id}`, { params: { reason } });
       toast.success("User diarsipkan");
+      load();
+    } catch (err) {
+      const d = err.response?.data?.detail;
+      if (err.response?.status === 409 && d?.summary) {
+        setReassign({ user: u, summary: d.summary, reason, toId: "" });
+      } else { toast.error(formatApiErrorDetail(d)); }
+    }
+  };
+  const doReassign = async () => {
+    if (!reassign?.toId) return toast.error("Pilih user tujuan");
+    try {
+      const r = await api.post(`/users/${reassign.user._id}/reassign`, { to_user_id: reassign.toId });
+      toast.success(`Dipindahkan ${r.data.total} data ke ${r.data.to_user_name}`);
+      await api.delete(`/users/${reassign.user._id}`, { params: { reason: reassign.reason } });
+      toast.success("User diarsipkan setelah data dipindahkan");
+      setReassign(null);
       load();
     } catch (err) { toast.error(formatApiErrorDetail(err.response?.data?.detail)); }
   };
@@ -258,6 +275,34 @@ export default function Users() {
           </Table>
         )}
       </Card>
+
+      <Dialog open={!!reassign} onOpenChange={(o) => !o && setReassign(null)}>
+        <DialogContent className="bg-white max-w-lg" data-testid="reassign-dialog">
+          <DialogHeader>
+            <DialogTitle>Pindahkan Data Sebelum Hapus User</DialogTitle>
+            <DialogDescription>User <b>{reassign?.user?.name}</b> masih memiliki data ter-assign. Pilih user tujuan untuk memindahkan data, lalu user akan diarsipkan.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-1 text-sm bg-slate-50 rounded p-3">
+            {reassign && Object.entries(reassign.summary).map(([k, v]) => (
+              <div key={k} className="flex justify-between"><span className="text-slate-600">{k}</span><span className="font-semibold">{v}</span></div>
+            ))}
+          </div>
+          <div>
+            <label className="text-xs text-slate-500">Pindahkan ke user</label>
+            <select className="w-full border rounded-md h-10 px-2 mt-1 bg-white" data-testid="reassign-target"
+              value={reassign?.toId || ""} onChange={(e) => setReassign((r) => ({ ...r, toId: e.target.value }))}>
+              <option value="">— Pilih user —</option>
+              {(users || []).filter((x) => x._id !== reassign?.user?._id && x.status !== "archived" && !x.is_deleted).map((x) => (
+                <option key={x._id} value={x._id}>{x.name} ({x.role})</option>
+              ))}
+            </select>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setReassign(null)}>Batal</Button>
+            <Button onClick={doReassign} data-testid="reassign-confirm-btn">Pindahkan & Arsipkan</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

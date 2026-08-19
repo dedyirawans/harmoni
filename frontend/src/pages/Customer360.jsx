@@ -15,7 +15,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import {
   ArrowLeft, Loader2, Phone, Mail, MapPin, StickyNote, MessageSquare, CalendarClock,
   Briefcase, Clock, User as UserIcon, Upload, Eye, Trash2, RefreshCw, UserCog,
-  Sparkles, Copy, ShieldCheck, FileText, Send, Lightbulb,
+  Sparkles, Copy, ShieldCheck, FileText, Send, Lightbulb, Pencil, History,
 } from "lucide-react";
 import { toast } from "sonner";
 import { expiryTone, daysUntil } from "@/components/ExpiringDocsWidget";
@@ -96,6 +96,7 @@ export default function Customer360() {
             <div className="mt-5 grid grid-cols-2 gap-2">
               <Button size="sm" variant="outline" onClick={() => setDialog("note")} data-testid="qa-note"><StickyNote className="h-4 w-4 mr-1" aria-hidden="true" />Note</Button>
               <Button size="sm" variant="outline" onClick={() => setDialog("comm")} data-testid="qa-comm"><MessageSquare className="h-4 w-4 mr-1" aria-hidden="true" />Log Msg</Button>
+              <EditCustomerButton customer={c} onDone={load} />
               <Button size="sm" className="col-span-2 bg-blue-600 hover:bg-blue-700" onClick={() => setDialog("follow")} data-testid="qa-follow"><CalendarClock className="h-4 w-4 mr-1" aria-hidden="true" />Schedule Follow Up</Button>
             </div>
           </CardContent>
@@ -125,6 +126,7 @@ export default function Customer360() {
               <TabsTrigger value="followups" data-testid="tab-followups">Follow Ups</TabsTrigger>
               <TabsTrigger value="documents" data-testid="tab-documents">Documents</TabsTrigger>
               <TabsTrigger value="timeline" data-testid="tab-timeline">Activity Timeline</TabsTrigger>
+              <TabsTrigger value="audit" data-testid="tab-audit"><History className="h-3.5 w-3.5 mr-1 text-slate-500" aria-hidden="true" />Riwayat Perubahan</TabsTrigger>
               <TabsTrigger value="ai-assistant" data-testid="tab-ai-assistant"><Sparkles className="h-3.5 w-3.5 mr-1 text-purple-500" aria-hidden="true" />AI Assistant</TabsTrigger>
             </TabsList>
 
@@ -267,6 +269,10 @@ export default function Customer360() {
             <TabsContent value="ai-assistant">
               <AIAssistantTab customerId={id} customerName={c.full_name} />
             </TabsContent>
+
+            <TabsContent value="audit">
+              <AuditTab customerId={id} />
+            </TabsContent>
           </Tabs>
         </div>
       </div>
@@ -321,6 +327,140 @@ function ChangePicButton({ customerId, currentPicId, onDone }) {
         </DialogContent>
       </Dialog>
     </>
+  );
+}
+
+function EditCustomerButton({ customer, onDone }) {
+  const [open, setOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [form, setForm] = useState({});
+  const openDialog = () => {
+    setForm({
+      full_name: customer.full_name || "", whatsapp: customer.whatsapp || "", phone: customer.phone || "",
+      email: customer.email || "", gender: customer.gender || "", date_of_birth: customer.date_of_birth || "",
+      nik: customer.nik || "", passport_number: customer.passport_number || "", passport_expiry: customer.passport_expiry || "",
+      address: customer.address || "", city: customer.city || "", province: customer.province || "",
+      postal_code: customer.postal_code || "", country: customer.country || "",
+      customer_type: customer.customer_type || "", customer_source: customer.customer_source || "", notes: customer.notes || "",
+    });
+    setOpen(true);
+  };
+  const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e?.target ? e.target.value : e }));
+  const save = async () => {
+    if (!(form.full_name || "").trim()) return toast.error("Nama wajib diisi");
+    setSaving(true);
+    try {
+      await api.put(`/customers/${customer._id || customer.id}`, form);
+      toast.success("Data customer diperbarui");
+      setOpen(false);
+      onDone();
+    } catch (e) {
+      const st = e.response?.status;
+      const d = e.response?.data?.detail;
+      if (st === 409) toast.error(typeof d === "string" ? d : "Nomor HP/WhatsApp sudah terdaftar pada customer lain.");
+      else toast.error(formatApiErrorDetail(d));
+    } finally { setSaving(false); }
+  };
+  const Field = ({ k, label, type = "text" }) => (
+    <div className="space-y-1">
+      <Label className="text-xs">{label}</Label>
+      <Input type={type} value={form[k] || ""} onChange={set(k)} data-testid={`edit-cust-${k}`} />
+    </div>
+  );
+  return (
+    <>
+      <Button size="sm" variant="outline" className="col-span-2 border-blue-200 text-blue-700 hover:bg-blue-50" onClick={openDialog} data-testid="edit-customer-btn">
+        <Pencil className="h-4 w-4 mr-1" aria-hidden="true" />Edit Customer
+      </Button>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="bg-white max-w-2xl max-h-[85vh] overflow-y-auto" data-testid="edit-customer-dialog">
+          <DialogHeader>
+            <DialogTitle className="font-display">Edit Data Customer</DialogTitle>
+            <DialogDescription>Perbarui data customer. Perubahan akan tercatat di Riwayat Perubahan.</DialogDescription>
+          </DialogHeader>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 py-2">
+            <div className="sm:col-span-2"><Field k="full_name" label="Nama Lengkap" /></div>
+            <Field k="whatsapp" label="WhatsApp" />
+            <Field k="phone" label="No. HP" />
+            <Field k="email" label="Email" type="email" />
+            <div className="space-y-1">
+              <Label className="text-xs">Gender</Label>
+              <Select value={form.gender || ""} onValueChange={set("gender")}>
+                <SelectTrigger data-testid="edit-cust-gender"><SelectValue placeholder="Pilih" /></SelectTrigger>
+                <SelectContent className="bg-white">
+                  <SelectItem value="Male">Laki-laki</SelectItem>
+                  <SelectItem value="Female">Perempuan</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <Field k="date_of_birth" label="Tanggal Lahir" type="date" />
+            <Field k="nik" label="NIK" />
+            <Field k="passport_number" label="No. Paspor" />
+            <Field k="passport_expiry" label="Masa Berlaku Paspor" type="date" />
+            <div className="sm:col-span-2"><Field k="address" label="Alamat" /></div>
+            <Field k="city" label="Kota" />
+            <Field k="province" label="Provinsi" />
+            <Field k="postal_code" label="Kode Pos" />
+            <Field k="country" label="Negara" />
+            <div className="space-y-1">
+              <Label className="text-xs">Tipe Customer</Label>
+              <Select value={form.customer_type || ""} onValueChange={set("customer_type")}>
+                <SelectTrigger data-testid="edit-cust-customer_type"><SelectValue placeholder="Pilih" /></SelectTrigger>
+                <SelectContent className="bg-white">
+                  <SelectItem value="Prospect">Prospect</SelectItem>
+                  <SelectItem value="Customer">Customer</SelectItem>
+                  <SelectItem value="VIP">VIP</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <Field k="customer_source" label="Sumber" />
+            <div className="sm:col-span-2 space-y-1">
+              <Label className="text-xs">Catatan</Label>
+              <Textarea value={form.notes || ""} onChange={set("notes")} data-testid="edit-cust-notes" />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setOpen(false)}>Batal</Button>
+            <Button className="bg-blue-600 hover:bg-blue-700" onClick={save} disabled={saving} data-testid="edit-customer-save-btn">
+              {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : "Simpan Perubahan"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
+function AuditTab({ customerId }) {
+  const [logs, setLogs] = useState(null);
+  useEffect(() => {
+    api.get(`/customers/${customerId}/audit`).then((r) => setLogs(r.data || [])).catch(() => setLogs([]));
+  }, [customerId]);
+  if (logs === null) return <div className="p-8 flex justify-center"><Loader2 className="h-5 w-5 animate-spin text-blue-600" /></div>;
+  return (
+    <Card className="border-slate-200 shadow-sm"><CardContent className="p-6" data-testid="customer-audit">
+      {logs.length === 0 ? (
+        <p className="text-sm text-slate-400 text-center py-6">Belum ada riwayat perubahan.</p>
+      ) : (
+        <ol className="relative border-l border-slate-200 ml-2 space-y-5">
+          {logs.map((l, i) => (
+            <li key={i} className="ml-5" data-testid={`audit-row-${i}`}>
+              <span className="absolute -left-1.5 h-3 w-3 rounded-full bg-amber-500 border-2 border-white" />
+              <div className="flex items-center justify-between">
+                <p className="text-sm font-medium text-slate-900">Ubah <span className="font-mono text-amber-700">{l.field}</span></p>
+                <span className="text-xs text-slate-400">{fmtDateTime(l.timestamp)}</span>
+              </div>
+              <p className="text-sm text-slate-500 mt-0.5">
+                <span className="line-through text-slate-400">{String(l.old_value ?? "—")}</span>
+                {" → "}
+                <span className="text-slate-800 font-medium">{String(l.new_value ?? "—")}</span>
+              </p>
+              <p className="text-[11px] text-slate-400 mt-0.5">oleh {l.changed_by || "—"} · {l.changed_by_role || ""}</p>
+            </li>
+          ))}
+        </ol>
+      )}
+    </CardContent></Card>
   );
 }
 

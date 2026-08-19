@@ -455,6 +455,11 @@ async def delete_user(user_id: str, request: Request, reason: str = Query(""), u
         raise HTTPException(status_code=404, detail="User not found")
     if str(existing["_id"]) == user["_id"]:
         raise HTTPException(status_code=400, detail="You cannot archive your own account")
+    _summary = await _user_assigned_summary(user_id)
+    if sum(_summary.values()) > 0:
+        raise HTTPException(status_code=409, detail={
+            "message": "User masih memiliki data yang ter-assign. Data harus dipindahkan ke user lain sebelum user dapat dihapus.",
+            "summary": _summary})
     await db.users.update_one({"_id": ObjectId(user_id)}, {"$set": {"is_deleted": True, "status": "ARCHIVED", "archived_by": user["name"], "archived_at": now_iso()}})
     await log_audit(user, "user", "archive_user", request, record_id=user_id, old=serialize(dict(existing)), new={"status": "ARCHIVED"}, reason=reason)
     return {"message": "User archived", "status": "ARCHIVED"}
@@ -468,6 +473,69 @@ async def restore_user(user_id: str, request: Request, user: dict = Depends(requ
     await db.users.update_one({"_id": ObjectId(user_id)}, {"$set": {"is_deleted": False, "status": "active"}})
     await log_audit(user, "user", "restore_user", request, record_id=user_id, new={"status": "active"})
     return {"message": "User restored"}
+
+
+_ASSIGN_OWNER_FIELDS = ["sales_pic_id", "assigned_to_id", "salesperson_id", "owner_id", "pic_id", "assigned_user_id"]
+_ASSIGN_NAME_MAP = {"sales_pic_id": "sales_pic_name", "assigned_to_id": "assigned_to_name",
+                    "salesperson_id": "salesperson_name", "owner_id": "owner_name", "pic_id": "pic_name",
+                    "assigned_user_id": "assigned_user_name"}
+_ASSIGN_COLLECTIONS = {"Customers": "customers", "Leads": "leads", "Orders": "orders", "Bookings": "bookings",
+                       "Quotations": "quotations", "Follow Ups": "ai_followup_queue", "Tasks": "tasks",
+                       "Forecasts": "forecasts", "Sales Activities": "sales_activities"}
+
+
+async def _user_assigned_summary(uid: str):
+    out = {}
+    for label, coll in _ASSIGN_COLLECTIONS.items():
+        q = {"is_deleted": {"$ne": True}, "$or": [{f: uid} for f in _ASSIGN_OWNER_FIELDS]}
+        try:
+            c = await db[coll].count_documents(q)
+        except Exception:
+            c = 0
+        if c:
+            out[label] = c
+    return out
+
+
+@api_router.get("/users/{user_id}/assigned-summary")
+async def user_assigned_summary(user_id: str, user: dict = Depends(require_role("super_admin"))):
+    return {"user_id": user_id, "summary": await _user_assigned_summary(user_id),
+            "total": sum((await _user_assigned_summary(user_id)).values())}
+
+
+@api_router.post("/users/{user_id}/reassign")
+async def reassign_user_data(user_id: str, body: dict, request: Request, user: dict = Depends(require_role("super_admin"))):
+    to_id = (body or {}).get("to_user_id")
+    if not to_id or not ObjectId.is_valid(to_id) or to_id == user_id:
+        raise HTTPException(status_code=400, detail="Pilih user tujuan yang valid (berbeda).")
+    target = await db.users.find_one({"_id": ObjectId(to_id)})
+    if not target or target.get("is_deleted"):
+        raise HTTPException(status_code=404, detail="User tujuan tidak ditemukan")
+    tname = target.get("name")
+    moved = {}
+    for label, coll in _ASSIGN_COLLECTIONS.items():
+        n = 0
+        for f in _ASSIGN_OWNER_FIELDS:
+            try:
+                r = await db[coll].update_many({f: user_id}, {"$set": {f: to_id, _ASSIGN_NAME_MAP.get(f, f + "_name"): tname}})
+                n += r.modified_count
+            except Exception:
+                pass
+        if n:
+            moved[label] = n
+    src = await db.users.find_one({"_id": ObjectId(user_id)})
+    await db.reassign_audit.insert_one({"from_user_id": user_id, "from_user_name": (src or {}).get("name"),
+        "to_user_id": to_id, "to_user_name": tname, "records_moved": moved,
+        "total": sum(moved.values()), "performed_by": user["name"], "timestamp": now_iso()})
+    await log_audit(user, "user", "reassign_user_data", request, record_id=user_id,
+                    new={"to": tname, "moved": moved})
+    return {"ok": True, "moved": moved, "total": sum(moved.values()), "to_user_name": tname}
+
+
+@api_router.get("/customers/{cid}/audit")
+async def get_customer_audit(cid: str, user: dict = Depends(require_permission("crm.view"))):
+    logs = await db.customer_audit.find({"customer_id": cid}).sort("timestamp", -1).to_list(500)
+    return [serialize(x) for x in logs]
 
 
 # ----------------------------------------------------------------------------
@@ -1404,6 +1472,12 @@ class CustomerUpdate(BaseModel):
     sales_pic_id: Optional[str] = None
     tags: Optional[List[str]] = None
     notes: Optional[str] = None
+    phone: Optional[str] = None
+    province: Optional[str] = None
+    postal_code: Optional[str] = None
+    company_name: Optional[str] = None
+    customer_category: Optional[str] = None
+    status: Optional[str] = None
 
 
 class NoteCreate(BaseModel):
@@ -1570,6 +1644,13 @@ async def update_customer(cid: str, body: CustomerUpdate, request: Request,
     if not can_access_record(user, doc):
         raise HTTPException(status_code=403, detail="403 Forbidden: not your customer")
     updates = {k: v for k, v in body.model_dump(exclude_none=True).items()}
+    for fld in ("phone", "whatsapp"):
+        val = (updates.get(fld) or "").strip()
+        if val:
+            dup = await db.customers.find_one({"_id": {"$ne": ObjectId(cid)}, "is_deleted": {"$ne": True},
+                                               "$or": [{"phone": val}, {"whatsapp": val}]})
+            if dup:
+                raise HTTPException(status_code=409, detail="Nomor HP/WhatsApp sudah terdaftar pada customer lain.")
     new_pic = updates.pop("sales_pic_id", None)
     if new_pic is not None:
         if user["role"] != "super_admin":
@@ -1581,6 +1662,14 @@ async def update_customer(cid: str, body: CustomerUpdate, request: Request,
         updates["sales_pic_name"] = pic.get("name")
         updates["branch"] = pic.get("branch", doc.get("branch", ""))
     await db.customers.update_one({"_id": ObjectId(cid)}, {"$set": updates})
+    for _k, _v in updates.items():
+        if _k in ("sales_pic_name", "branch"):
+            continue
+        _old = doc.get(_k)
+        if str(_old if _old is not None else "") != str(_v if _v is not None else ""):
+            await db.customer_audit.insert_one({"customer_id": cid, "customer_name": doc.get("full_name"),
+                "field": _k, "old_value": _old, "new_value": _v, "changed_by": user["name"],
+                "changed_by_id": user["_id"], "changed_by_role": user["role"], "timestamp": now_iso()})
     if new_pic is not None and str(doc.get("sales_pic_id") or "") != str(new_pic):
         await log_activity(cid, None, "pic_change",
                            f"PIC Sales diganti: {doc.get('sales_pic_name') or '—'} → {updates.get('sales_pic_name')}",

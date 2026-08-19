@@ -1,3 +1,11 @@
+## PHASE 10E-1 — Customer Edit UI + Riwayat Perubahan (Audit) + User Reassign UI (2026-06) — DONE ✅ (testing_agent iter_50: FE 100%)
+- **Edit Customer UI**: tombol "Edit Customer" (data-testid=edit-customer-btn) di profil Customer 360 → dialog `EditCustomerButton` (Customer360.jsx) dengan form field standar (nama, WA, HP, email, gender, tgl lahir, NIK, paspor, alamat, kota, provinsi, kode pos, negara, tipe, sumber, catatan). Kirim `PUT /api/customers/{id}`. Error nomor HP/WA duplikat (409) ditangani dengan toast ramah, dialog tetap terbuka.
+- **Riwayat Perubahan (Audit) UI**: tab "Riwayat Perubahan" (data-testid=tab-audit) → `AuditTab` fetch `GET /api/customers/{id}/audit`, tampil timeline field-level (field, old→new, oleh siapa + role + waktu).
+- **User Reassign UI** (Users.jsx): sudah lengkap dari sebelumnya — DELETE user 409 (ada data ter-assign) → dialog `reassign-dialog` (ringkasan data, pilih user tujuan, `POST /users/{id}/reassign` lalu arsip).
+- Backend Phase 10E-1 (update_customer audit+409, customer_audit, delete_user 409, reassign) sudah ada & teruji curl dari sesi sebelumnya. Verified iter_50: edit notes sukses, 409 duplikat WA (6282323338838), audit-row muncul, archive dummy9g→reassign ke andi.sales sukses. Catatan: dummy9g DIPULIHKAN kembali (aktif) pasca-test agar kredensial valid.
+- Non-blocking (LOW): warning hydration `<span>` di dalam `<option>` Users.jsx (dev-only, tak pengaruh fungsi).
+
+
 ## Brosur — Fix teks "LOGO AGENCY" & Tombol Hapus jelas (2026-06) — DONE ✅
 - **Fix placeholder "LOGO AGENCY"**: prompt `_brochure_prompt` kini eksplisit MELARANG AI menggambar logo/placeholder/tulisan 'LOGO'/'LOGO AGENCY'/'YOUR LOGO' — cukup sisakan area kosong; logo asli ditempel sistem. Verified: brosur baru tampil dengan logo HWI asli (kanan atas), tanpa teks placeholder.
 - **Tombol Hapus**: tiap kartu brosur kini punya tombol "Hapus" berlabel merah (super admin/canManage) + container flex-wrap agar rapi. (Sebelumnya hanya ikon.)
