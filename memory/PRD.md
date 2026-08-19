@@ -1,3 +1,11 @@
+## PHASE 10F-4 — Demo Data: Payment & Commission (2026-06) — DONE ✅ (curl-validated)
+- Seed idempoten `/app/scripts/seed_10f4.py` (guard 10F4). Untuk 24 booking 10F-3: buat Invoice (db.invoices) + Payment (db.payments) + booking.payment_schedule (DP+Pelunasan) + paid_total/outstanding_total/payment_status. TIDAK menyentuh Tax/AI/WA/SA/Accounting.
+- **Payment status**: PAID 9 / PARTIAL 8 / PENDING 4 / OVERDUE 3. Konsistensi 100%: outstanding = total − paid (PAID→0, PENDING→paid 0, PARTIAL→0<paid<total). Invoice status (Paid/Partially Paid/Unpaid/Overdue) sesuai logika `_recompute_invoice_status`.
+- **Totals**: TOTAL Rp 1.339.385.000 | PAID Rp 745.871.000 | OUTSTANDING Rp 593.514.000.
+- **Commission**: dihitung oleh **ENGINE EXISTING** (bukan hardcode) via `POST /commissions/closings/2026-08/calculate` (reopen→recalculate). Scheme aktif = "Skema Tier" basis PAID, product_type TOUR, non-auto, 100k/pax. Hasil: period 2026-08, 7 pax, **Rp 700.000**, status REVIEW/PENDING (belum PAYABLE — butuh approval SA + full payment). Terdistribusi 4 sales (Fajar 300k, Andi 200k, Rina Maharani 100k, Rina Sales 100k). AUTO SALES & non-TOUR & belum-lunas otomatis tidak dapat komisi (sesuai rule engine).
+- Catatan: komisi hanya untuk booking TOUR lunas non-auto (sesuai satu-satunya scheme ACTIVE yang ada); booking UMRAH/AUTO tidak menghasilkan komisi karena tidak ada scheme yang cocok — ini perilaku engine existing, bukan bug.
+
+
 ## PHASE 10F-3 — Demo Data: Quotation & Booking (2026-06) — DONE ✅ (curl-validated)
 - Seed idempoten `/app/scripts/seed_10f3.py` (guard `demo_seed_flags` batch=10F3). Reuse 85 lead 10F-2 + 16 paket/departure 10F-1. TIDAK membuat payment/commission (menyusul 10F-4). TIDAK menyentuh SA/Accounting/Tax/AI/WA/paket.
 - **CATATAN ARSITEKTUR**: CRM ini TIDAK punya modul Order terpisah — alur = Quotation → convert → Booking. Jadi "Orders" = record Booking (unified). Order count = Booking count = 24.
