@@ -1,3 +1,8 @@
+## Cover 16:9 Crop + Cover di Overview Product Management (2026-06) — DONE ✅ (curl-verified)
+- **16:9 auto-crop**: `POST /packages/{pid}/cover` kini center-crop gambar ke rasio 16:9 (Pillow) + resize maks 1280px → simpan JPEG. Verified: upload 1000×1000 → tersaji 1000×562 (ratio 1.779 ≈ 16:9), image/jpeg.
+- **Cover di overview**: kartu paket di Product Management (`Products.jsx`) diubah dari tinggi tetap `h-28` → `aspect-video` (16:9) sehingga cover tampil proporsional & seragam di grid overview (TOUR & UMRAH).
+
+
 ## Galeri Paket + Kelola Cover di Product Management (2026-06) — DONE ✅ (curl + screenshot verified)
 - **Galeri paket**: setiap paket kini punya `gallery` (3 foto: cover + 2 foto travel) — di-set di seed_10f1.py (fungsi `gallery_for`) & diisi ke 16 paket existing. Tampil di halaman detail paket.
 - **Kelola Cover (Product Management)**: backend `POST /packages/{pid}/cover` (upload/replace, validasi JPG/PNG/WEBP maks 8MB → simpan object storage, cover_image = URL publik `/api/public/package-cover/{pid}?v=ts`), `DELETE /packages/{pid}/cover` (hapus), `GET /public/package-cover/{pid}` (serve publik tanpa auth untuk <img>). Semua admin ops = permission `product.manage`.

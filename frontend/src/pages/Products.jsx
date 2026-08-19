@@ -136,7 +136,7 @@ export default function Products() {
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4" data-testid="packages-grid">
           {rows.map((p) => (
             <Card key={p._id} onClick={() => navigate(`${base}/${p._id}`)} className="border-slate-200 shadow-sm hover:shadow-md transition-shadow duration-200 cursor-pointer overflow-hidden" data-testid={`package-card-${p._id}`}>
-              <div className="h-28 bg-slate-100 relative">
+              <div className="aspect-video bg-slate-100 relative">
                 {p.cover_image ? <img src={p.cover_image} alt="" className="h-full w-full object-cover" /> : <div className="h-full w-full flex items-center justify-center"><PackageIcon className="h-8 w-8 text-slate-300" aria-hidden="true" /></div>}
                 <Badge variant="outline" className={`absolute top-2 right-2 ${PKG_STATUS_COLORS[p.status]}`}>{p.status}</Badge>
                 <Badge variant="outline" className="absolute top-2 left-2 bg-white/90 text-slate-700">{subLabel(p.product_type, p.sub_category) || p.product_type}</Badge>

@@ -10223,11 +10223,28 @@ async def upload_package_cover(pid: str, file: UploadFile = File(...), user: dic
         raise HTTPException(status_code=400, detail="File kosong")
     if len(data) > 8 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="Ukuran gambar maksimal 8MB")
-    result = put_object(f"{_APP_NAME}/package_covers/{pid}.{ext}", data, file.content_type or "image/png")
+    # Center-crop to 16:9 and resize so covers are always proportional
+    try:
+        from PIL import Image
+        import io as _io
+        img = Image.open(_io.BytesIO(data)).convert("RGB")
+        w, h = img.size
+        target = 16 / 9
+        if w / h > target:
+            nw = int(h * target); x = (w - nw) // 2; img = img.crop((x, 0, x + nw, h))
+        elif w / h < target:
+            nh = int(w / target); y = (h - nh) // 2; img = img.crop((0, y, w, y + nh))
+        if img.width > 1280:
+            img = img.resize((1280, 720))
+        buf = _io.BytesIO(); img.save(buf, format="JPEG", quality=85); data = buf.getvalue()
+        ext = "jpg"; ctype = "image/jpeg"
+    except Exception:
+        ctype = file.content_type or f"image/{ext}"
+    result = put_object(f"{_APP_NAME}/package_covers/{pid}.{ext}", data, ctype)
     import time as _t
     url = f"{_public_base({})}/api/public/package-cover/{pid}?v={int(_t.time())}"
     await db.packages.update_one({"_id": ObjectId(pid)}, {"$set": {
-        "cover_storage_path": result["path"], "cover_content_type": file.content_type or f"image/{ext}", "cover_image": url}})
+        "cover_storage_path": result["path"], "cover_content_type": ctype, "cover_image": url}})
     return {"cover_image": url}
 
 
