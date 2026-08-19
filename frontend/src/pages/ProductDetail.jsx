@@ -85,6 +85,24 @@ export default function ProductDetail() {
         </TabsList>
 
         <TabsContent value="overview">
+          {(p.cover_image || (p.gallery || []).length > 0) && (
+            <div className="mb-4" data-testid="detail-cover-wrap">
+              {p.cover_image && (
+                <div className="aspect-video max-h-72 w-full overflow-hidden rounded-lg bg-slate-100 border border-slate-200">
+                  <img src={p.cover_image} alt={p.package_name} className="h-full w-full object-cover" data-testid="detail-cover-img" />
+                </div>
+              )}
+              {(p.gallery || []).filter((g) => g && g !== p.cover_image).length > 0 && (
+                <div className="mt-3 grid grid-cols-3 sm:grid-cols-4 gap-2" data-testid="detail-gallery">
+                  {(p.gallery || []).filter((g) => g && g !== p.cover_image).slice(0, 8).map((g, i) => (
+                    <div key={i} className="aspect-video overflow-hidden rounded-md bg-slate-100 border border-slate-200">
+                      <img src={g} alt={`galeri ${i + 1}`} className="h-full w-full object-cover" data-testid={`detail-gallery-img-${i}`} />
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
             <Card className="border-slate-200 lg:col-span-2"><CardContent className="p-6">
               <p className="text-slate-600 leading-relaxed">{p.description || "No description."}</p>
