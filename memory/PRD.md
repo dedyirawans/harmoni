@@ -1,3 +1,12 @@
+## PHASE 10F-5 — Demo Data: Supplier & WhatsApp Conversations (2026-06) — DONE ✅ (curl/db-validated)
+- Seed idempoten `/app/scripts/seed_10f5.py` (guard 10F5). DB-only, TIDAK memanggil WhatsApp API / API.co.id; TIDAK menyentuh Tax/AI config/SA/Accounting.
+- **12 Suppliers** realistis (Airline 2, Hotel 3, Transport 2, Tour Operator 2, Visa Provider 1, Muthawwif 1, Insurance 1) + **bank_accounts** (nomor fiktif; 4 supplier multi-rekening; tepat 1 primary per supplier).
+- **16 conversation threads / 53 pesan** DEMO WhatsApp di koleksi `conversations`. sender_type: CUSTOMER 25 / AI 21 / SALES 7 (direction & ai_or_human konsisten). Semua pesan punya customer valid (53/53).
+- **12 jenis percakapan** dicakup (Package/Price/Seat/Itinerary/Umrah/Payment Inquiry, Booking Intent, Follow Up, Human Handover, Not Interested, Package Comparison, Repeat Customer). Harga & nama paket mereferensi paket demo ASLI (mis. "Untuk 4 pax totalnya sekitar RpXX").
+- **Atribusi**: 3 thread **AUTO SALES** (AI→Lead→Booking) tertaut ke booking AUTO SALES 10F-3 (customer+package konsisten, 3/3). 3 thread **Human Handover** (AI→REQUIRES_HUMAN→SALES→Booking) tertaut booking SALES. 2 pesan berstatus REQUIRES_HUMAN (muncul di inbox handover).
+- Validasi: conversation→customer OK; AUTO SALES→booking→package/customer konsisten; booking→customer/package tetap valid dari fase sebelumnya.
+
+
 ## PHASE 10F-4 — Demo Data: Payment & Commission (2026-06) — DONE ✅ (curl-validated)
 - Seed idempoten `/app/scripts/seed_10f4.py` (guard 10F4). Untuk 24 booking 10F-3: buat Invoice (db.invoices) + Payment (db.payments) + booking.payment_schedule (DP+Pelunasan) + paid_total/outstanding_total/payment_status. TIDAK menyentuh Tax/AI/WA/SA/Accounting.
 - **Payment status**: PAID 9 / PARTIAL 8 / PENDING 4 / OVERDUE 3. Konsistensi 100%: outstanding = total − paid (PAID→0, PENDING→paid 0, PARTIAL→0<paid<total). Invoice status (Paid/Partially Paid/Unpaid/Overdue) sesuai logika `_recompute_invoice_status`.
