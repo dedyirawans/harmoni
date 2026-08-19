@@ -1,3 +1,11 @@
+## Enhancements after 10F: Reset script + Umrah scheme + Cover images + Commission approval (2026-06) — DONE ✅
+- **Master reset+reseed**: `/app/scripts/reset_reseed_10f.py` — hapus SEMUA data demo/transaksional lama + semua user selain super_admin/accounting, lalu reseed 10F-1..10F-5 berurutan, recompute seat departure, ensure Umrah scheme, jalankan engine komisi + SA approval. Preserved: SA/Accounting/roles/permissions/Tax/AI/WhatsApp/API.co.id/company_files.
+- **DIJALANKAN**: seluruh data demo lama (customers 142, leads 93, bookings 40, quotations 68, packages 40, conversations 67, dll) DIHAPUS; kini HANYA data 10F fresh: 130 customers, 85 leads, 16 packages, 18 departures, 50 quotations, 24 bookings, 12 suppliers, 53 conversations, 5 sales.
+- **Umrah commission scheme** ACTIVE dibuat ("Skema Komisi Umrah", basis PAID, tier 250k/350k/500k per pax, non-auto).
+- **Cover image** ditambahkan ke seed_10f1.py: tiap paket tour/umrah punya `cover_image` (Unsplash sesuai destinasi: Japan/Korea/Turkiye/Thailand/Swiss/Singapore/France/Bali; Umrah = Kaaba/Madinah).
+- **Commission approval**: closing 2026-08 = **CLOSED + sa_approval APPROVED** (payable), Rp600.000, 3 sales (Fajar 300k, Andi 200k, Rina Maharani 100k). Payout→PAID **digated ke 2026-09** oleh business rule existing (`_current_month() < payout_month`) — bukan bug, sesuai aturan payout bulan berikutnya.
+
+
 ## PHASE 10F-6 — Demo Data Validation & Dashboard Consistency (2026-06) — DONE ✅ (read-only validasi + 1 cleanup)
 - Validasi menyeluruh koleksi seed 10F (customers/leads/quotations/bookings/payments/commission/suppliers/conversations): SEMUA relasi & konsistensi PASS.
 - **Cleanup 1 error nyata**: 16 departure punya `available_seat` basi (10F-3 meng-`$inc` confirmed_pax tanpa update available). Diperbaiki `available_seat = quota − confirmed_pax` (+status FULL/ALMOST FULL/OPEN). Hanya menyentuh koleksi `departures`. 0 inkonsistensi tersisa.

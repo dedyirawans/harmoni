@@ -35,6 +35,20 @@ DESTS = [
     ("Labuan Bajo", "Indonesia", "Domestic"), ("Raja Ampat", "Indonesia", "Domestic"),
 ]
 
+U = "https://images.unsplash.com/photo-"
+Q = "?crop=entropy&cs=srgb&fm=jpg&q=80&w=1200"
+DEST_IMG = {
+    "Japan": U + "1574236170880-fbbca132d83d" + Q,
+    "South Korea": U + "1708566305701-b74043eada3d" + Q,
+    "Turkiye": U + "1527838832700-5059252407fa" + Q,
+    "Thailand": U + "1563492065599-3520f775eeed" + Q,
+    "Switzerland": U + "1521292270410-a8c4d716d518" + Q,
+    "Singapore": U + "1620033263019-f2ec2c738a60" + Q,
+    "France": U + "1511739001486-6bfe10ce785f" + Q,
+    "Bali": U + "1711609110590-5ad5c4599e56" + Q,
+}
+UMRAH_IMG = [U + "1592326871020-04f58c1a52f3" + Q, U + "1711261817080-8f064416206c" + Q]
+
 # (name, dest, country, duration, sell, hpp, seats[(quota,confirmed)], itinerary[(loc,act)])
 TOURS = [
     ("Japan Autumn 2026", "Japan", "Japan", "7 Days", 32500000, 25500000, [(30, 18), (25, 7)], "2026-10-12"),
@@ -106,7 +120,7 @@ async def main():
         gp = sell - hpp
         doc = {"package_code": f"TOUR-1{i+1:03d}", "package_name": name, "product_type": "TOUR",
                "category": dest, "destination": dest, "country": country, "duration": dur,
-               "description": f"Paket tour {name} bersama Harmoni Wisata Internusa.", "cover_image": "", "gallery": [],
+               "description": f"Paket tour {name} bersama Harmoni Wisata Internusa.", "cover_image": DEST_IMG.get(dest, ""), "gallery": [],
                "min_pax": 2, "max_pax": max(s[0] for s in seats), "selling_price": sell, "child_price": round(sell*0.9),
                "infant_price": round(sell*0.2), "single_supplement": round(sell*0.2), "currency": "IDR",
                "tax_treatment": "Non-PPN", "commission_eligibility": True, "status": "ACTIVE",
@@ -126,7 +140,7 @@ async def main():
         gp = sell - hpp
         doc = {"package_code": f"UMR-1{i+1:03d}", "package_name": name, "product_type": "UMRAH",
                "category": "Umrah", "destination": "Makkah & Madinah", "country": "Saudi Arabia", "duration": dur,
-               "description": f"Paket {name} — bimbingan ibadah lengkap.", "cover_image": "", "gallery": [],
+               "description": f"Paket {name} — bimbingan ibadah lengkap.", "cover_image": UMRAH_IMG[i % len(UMRAH_IMG)], "gallery": [],
                "min_pax": 4, "max_pax": max(s[0] for s in seats), "selling_price": sell, "child_price": round(sell*0.9),
                "infant_price": round(sell*0.2), "single_supplement": round(sell*0.22), "currency": "IDR",
                "tax_treatment": "Non-PPN", "commission_eligibility": True, "status": "ACTIVE",
