@@ -1,0 +1,25 @@
+{
+  "summary": "Verified P0 fix for Customer 360 page. Tested Super Admin (dedyirawan18@gmail.com) opening 5 different customers via /crm list -> all rendered Customer360 page successfully with full profile, totals (leads/quotations/bookings), and tabs. Tested Sales (andi.pratama@harmoniwisata.co.id) opening 3 assigned customers -> all opened successfully. Also verified that Sales accessing a non-owned customer id via direct URL returns the graceful 403 UI ('Customer not available (403 / not found).' + 'You cannot view this customer' toast) with NO crash. No 500 errors from /api/customers/{cid}/360 observed. The ObjectId serialization fix in serialize() is working end-to-end.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "CRM Customers list", "issues": ["Sales workspace header reads 'Your customer master — you only see customers assigned to you.' which is fine for Sales, but Super Admin sees identical copy (should say 'all customers' for SA). Minor copy issue, not blocking."]}
+    ]
+  },
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "serialize() fix correctly stringifies any top-level ObjectId; consider also handling nested ObjectIds recursively for future safety (e.g., embedded lead_id/customer_id inside array items) to prevent similar 500s.",
+    "Customer360.jsx line 30-33 collapses both 403 and 404 into the same 'null' state; would improve UX to distinguish 'not owned' vs 'not found' in message text. Current implementation already shows a toast for 403 which is good."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "N/A (frontend-only)", "frontend": "100%"},
+  "test_credentials": "Super Admin dedyirawan18@gmail.com/Admin@123, Sales andi.pratama@harmoniwisata.co.id/Sales@123",
+  "seed_data_creation": "None",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Customer 360 P0 bug fixed and verified. Customer list uses row click (tr[data-testid=customer-row-{id}]) to navigate to /crm/{id}. Login inputs are plain input (index 0 = email/username, index 1 = password). Sign-in button uses role=button name='Sign in'. Sales role sees 46 owned customers, Admin sees 130.",
+  "rca of the issue": "The GET /api/customers/{cid}/360 endpoint aggregated quotations where 'lead_id' was stored as a raw MongoDB ObjectId. Original serialize() only stringified the top-level '_id' but returned other ObjectId fields as-is, so FastAPI's JSONResponse failed to serialize -> HTTP 500. Frontend caught non-200 and rendered the generic 'Customer not available (403 / not found).' message. Fix: serialize() now iterates all top-level fields and converts any ObjectId to str; historical quotations documents also migrated so lead_id is a string. Verified: 5/5 Admin customers and 3/3 Sales-owned customers now load; 403 path for non-owned still returns proper graceful message."
+}

@@ -1,3 +1,9 @@
+## Fix P0 — Customer 360 "Customer not available (403 / not found)" (2026-06) — DONE ✅ (curl + testing_agent 100%)
+- **Root cause**: `GET /api/customers/{cid}/360` return HTTP 500 (bukan 403). Koleksi `quotations` hasil seeding 10F menyimpan field `lead_id` sebagai `ObjectId` mentah, sedangkan `serialize()` hanya meng-convert `_id` → FastAPI gagal encode JSON. Frontend `Customer360.jsx` menampilkan pesan generik "Customer not available (403 / not found)" untuk semua non-200.
+- **Fix**: (1) `serialize()` (server.py ~L204) kini meng-convert SEMUA field ObjectId top-level → string. (2) Migrasi data: 50 quotations dengan `lead_id` ObjectId di-convert ke string. (3) `scripts/seed_10f3.py` L81 diperbaiki agar simpan `str(ld["_id"])`.
+- **Verified**: 129/129 customer `/360` HTTP 200 (curl). testing_agent iter_55: Super Admin 5/5 & Sales 3/3 buka Customer 360 sukses; path 403 non-owned tetap graceful. Frontend 100%.
+
+
 ## Cover 16:9 Crop + Cover di Overview Product Management (2026-06) — DONE ✅ (curl-verified)
 - **16:9 auto-crop**: `POST /packages/{pid}/cover` kini center-crop gambar ke rasio 16:9 (Pillow) + resize maks 1280px → simpan JPEG. Verified: upload 1000×1000 → tersaji 1000×562 (ratio 1.779 ≈ 16:9), image/jpeg.
 - **Cover di overview**: kartu paket di Product Management (`Products.jsx`) diubah dari tinggi tetap `h-28` → `aspect-video` (16:9) sehingga cover tampil proporsional & seragam di grid overview (TOUR & UMRAH).

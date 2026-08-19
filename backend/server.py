@@ -205,6 +205,10 @@ def serialize(doc: dict) -> dict:
     if doc and "_id" in doc:
         doc["_id"] = str(doc["_id"])
         doc["id"] = doc["_id"]
+    if doc:
+        for _k, _v in list(doc.items()):
+            if isinstance(_v, ObjectId):
+                doc[_k] = str(_v)
     doc.pop("password_hash", None)
     return doc
 

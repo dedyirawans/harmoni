@@ -78,7 +78,7 @@ async def main():
         qnum = await next_num("QT", db.quotations, "quotation_number")
         qdoc = {"quotation_number": qnum, "customer_id": ld["customer_id"], "customer_name": ld["customer_name"],
                 "package_id": ld["package_id"], "package_name": p["package_name"], "package_version": p.get("version", 1),
-                "departure_id": str(dep["_id"]) if dep else None, "lead_id": ld["_id"], "pax": pax, "room_type": "QUAD",
+                "departure_id": str(dep["_id"]) if dep else None, "lead_id": str(ld["_id"]), "pax": pax, "room_type": "QUAD",
                 "addons": [], "per_pax_price": per_pax, "base_price": per_pax, "gross": subtotal, "addon_total": 0,
                 "subtotal": subtotal, "discount_type": "PERCENT", "discount_value": pct, "discount_percent": pct,
                 "discount_amount": disc, "tax_percent": 0, "tax_amount": 0, "total": total,
