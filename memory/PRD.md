@@ -1,3 +1,10 @@
+## PHASE 10F-1 — Demo Master Data Seed (Sales, Destinations, Packages, Departures) (2026-06) — DONE ✅ (curl-validated)
+- Seed idempoten via `/app/scripts/seed_10f1.py` (guard koleksi `demo_seed_flags` batch=10F1). ADITIF — TIDAK menghapus paket lama (dipakai oleh booking existing) agar tidak merusak booking/report.
+- Dibuat: **5 Sales user** realistis (Andi Pratama, Rina Maharani, Fajar Ramadhan, Siti Aulia, Rizky Saputra @harmoniwisata.co.id, role=sales, status active, data_scope own, password Sales@123), **14 Destinations** (koleksi `destinations`: 9 internasional + 5 domestik), **10 Tour packages** (TOUR-1001..1010), **6 Umrah packages** (UMR-1001..1006), **18 Departures** (Agu 2026–Jan 2027, utilisasi kursi bervariasi OPEN/ALMOST FULL/FULL).
+- Setiap paket punya package_costs (HPP), package_itineraries, included/excluded, dan departure terhubung. HPP tetap terlindungi oleh `strip_hpp` (permission-based) — Sales TIDAK melihat HPP (diverifikasi: 0 kebocoran), Super Admin melihat HPP.
+- PRESERVED: Super Admin (dedyirawan18@gmail.com), Accounting (accounting@safarcrm.com), roles, permissions, AI, WhatsApp, API.co.id, Tax — semua TIDAK berubah. Tidak membuat customer/lead/booking/payment/quotation/commission.
+
+
 ## Documents — Preview Inline + Filter Kategori & Pencarian (2026-06) — DONE ✅ (backend curl + FE smoke)
 - **Preview inline**: `GET /files/{fid}/download?inline=1` kini set `Content-Disposition: inline` (bukan attachment) + dicatat sebagai aksi `PREVIEW` di log. Frontend: tombol mata (data-testid=preview-file-*) → dialog pratinjau (PDF via iframe, gambar via img); tombol Unduh di dalam preview. Hanya muncul untuk content_type image/* atau pdf.
 - **Filter & pencarian**: input pencarian nama/deskripsi file (data-testid=file-search-input) + dropdown filter kategori (data-testid=file-category-filter, "Semua Kategori" + 9 kategori). Filtering di sisi klien atas daftar file yang sudah ter-scope RBAC.
