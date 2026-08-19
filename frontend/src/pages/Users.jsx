@@ -26,7 +26,7 @@ import { UserPlus, MoreVertical, Loader2, Users2 } from "lucide-react";
 import { toast } from "sonner";
 import { useAuth } from "@/context/AuthContext";
 
-const EMPTY = { name: "", email: "", phone: "", username: "", role: "sales", status: "active", branch: "", data_scope: "own", password: "" };
+const EMPTY = { name: "", email: "", phone: "", username: "", role: "sales", status: "active", branch: "", data_scope: "own", password: "", title: "", signature: "" };
 
 export default function Users() {
   const { user: me } = useAuth();
@@ -199,6 +199,24 @@ export default function Users() {
               <div className="space-y-2 col-span-2 sm:col-span-1">
                 <Label>{editing ? "New password (optional)" : "Password"}</Label>
                 <Input type="password" value={form.password} onChange={(e) => set("password")(e.target.value)} data-testid="user-password-input" />
+              </div>
+              <div className="space-y-2 col-span-2 sm:col-span-1">
+                <Label>Jabatan</Label>
+                <Input value={form.title || ""} onChange={(e) => set("title")(e.target.value)} placeholder="mis. Sales Consultant" data-testid="user-title-input" />
+              </div>
+              <div className="space-y-2 col-span-2">
+                <Label>Tanda Tangan Digital (PNG, maks 2MB)</Label>
+                <div className="flex items-center gap-3">
+                  {form.signature ? <img src={form.signature} alt="signature" className="h-14 w-28 rounded object-contain border border-slate-200 bg-white" data-testid="user-signature-preview" /> : <div className="h-14 w-28 rounded bg-slate-100 flex items-center justify-center text-[10px] text-slate-400">TTD</div>}
+                  <div className="flex-1 space-y-1">
+                    <input type="file" accept="image/png,image/*" data-testid="user-signature-upload" onChange={(e) => {
+                      const f = e.target.files?.[0]; if (!f) return;
+                      if (f.size > 2 * 1024 * 1024) { toast.error("Tanda tangan maksimal 2MB"); return; }
+                      const rd = new FileReader(); rd.onload = () => set("signature")(rd.result); rd.readAsDataURL(f);
+                    }} />
+                    {form.signature && <Button variant="ghost" size="sm" className="text-red-600 h-7" onClick={() => set("signature")("")} data-testid="user-signature-clear">Hapus tanda tangan</Button>}
+                  </div>
+                </div>
               </div>
             </div>
             <DialogFooter>

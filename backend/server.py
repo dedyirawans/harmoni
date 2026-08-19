@@ -245,6 +245,8 @@ class UserCreate(BaseModel):
     branch: Optional[str] = ""
     data_scope: str = "own"
     password: str
+    title: Optional[str] = ""
+    signature: Optional[str] = ""
 
 
 class UserUpdate(BaseModel):
@@ -257,6 +259,13 @@ class UserUpdate(BaseModel):
     branch: Optional[str] = None
     data_scope: Optional[str] = None
     password: Optional[str] = None
+    title: Optional[str] = None
+    signature: Optional[str] = None
+
+
+class MyProfileUpdate(BaseModel):
+    title: Optional[str] = None
+    signature: Optional[str] = None
 
 
 class RolePermissionsUpdate(BaseModel):
@@ -390,6 +399,16 @@ async def change_password(body: ChangePasswordRequest, request: Request, user: d
     return {"message": "Password changed successfully"}
 
 
+@api_router.put("/auth/me/profile")
+async def update_my_profile(body: MyProfileUpdate, request: Request, user: dict = Depends(get_current_user)):
+    updates = {k: v for k, v in body.model_dump(exclude_none=True).items()}
+    if updates:
+        await db.users.update_one({"_id": ObjectId(user["_id"])}, {"$set": updates})
+        await log_audit(user, "user", "update_profile", request, record_id=user["_id"],
+                        new={k: (v if k != "signature" else "[signature]") for k, v in updates.items()})
+    return serialize(await db.users.find_one({"_id": ObjectId(user["_id"])}))
+
+
 # ----------------------------------------------------------------------------
 # USER MANAGEMENT (super admin)
 # ----------------------------------------------------------------------------
@@ -412,6 +431,7 @@ async def create_user(body: UserCreate, request: Request, user: dict = Depends(r
         "role": body.role, "status": body.status, "branch": body.branch,
         "data_scope": body.data_scope if body.role == "sales" else "all",
         "password_hash": hash_password(body.password),
+        "title": body.title or "", "signature": body.signature or "",
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     res = await db.users.insert_one(doc)
@@ -3903,6 +3923,7 @@ DOC_TEMPLATE_DEFAULTS = {
     "invoice_title": "INVOICE", "quotation_title": "QUOTATION", "receipt_title": "KWITANSI PEMBAYARAN",
     "show_qr": True, "paid_stamp_text": "PAID", "public_base_url": "", "quotation_watermark_text": "DRAFT",
     "invoice_terms": "", "quotation_terms": "",
+    "signer_name": "", "signer_title": "", "signature_url": "", "stamp_url": "",
 }
 _FRONTEND_BASE_CACHE = None
 
@@ -3972,6 +3993,10 @@ class DocTemplateUpdate(BaseModel):
     quotation_watermark_text: Optional[str] = None
     invoice_terms: Optional[str] = None
     quotation_terms: Optional[str] = None
+    signer_name: Optional[str] = None
+    signer_title: Optional[str] = None
+    signature_url: Optional[str] = None
+    stamp_url: Optional[str] = None
     public_base_url: Optional[str] = None
 
 
@@ -4012,7 +4037,7 @@ async def doc_template_preview(body: dict, user: dict = Depends(require_permissi
         sample["terms"] = tpl.get("invoice_terms" if k == "INVOICE" else "quotation_terms") or sample["terms"]
         qr = _public_pdf_url(tpl, kind, "contoh")
         wm = tpl.get("quotation_watermark_text", "DRAFT") if k == "QUOTATION" else None
-        pdf = build_document_pdf(k, sample, company, tpl=tpl, qr_url=qr, paid=(kind == "invoice"), watermark=wm)
+        pdf = build_document_pdf(k, sample, company, tpl=tpl, qr_url=qr, paid=(kind == "invoice"), watermark=wm, signer=_default_signer(tpl))
     return Response(content=pdf, media_type="application/pdf", headers={"Content-Disposition": "inline; filename=preview.pdf"})
 
 
@@ -4267,7 +4292,88 @@ def _qr_image(url, size_mm=22):
         return None
 
 
-def build_document_pdf(kind: str, data: dict, company: dict, itineraries=None, tpl=None, qr_url=None, paid=False, watermark=None) -> bytes:
+def _load_pil_image(src):
+    try:
+        if not src:
+            return None
+        import base64
+        from PIL import Image
+        if src.startswith("data:"):
+            raw = base64.b64decode(src.split(",", 1)[1])
+        elif src.startswith("http"):
+            raw = _requests.get(src, timeout=10).content
+        else:
+            return None
+        return Image.open(BytesIO(raw)).convert("RGBA")
+    except Exception:
+        return None
+
+
+def _compose_sign_stamp(signature_src, stamp_src, w_px=460, h_px=230):
+    """Composite signature (front) + company stamp (behind, semi-transparent) into one PNG."""
+    try:
+        from PIL import Image
+        sign = _load_pil_image(signature_src)
+        stamp = _load_pil_image(stamp_src)
+        if not sign and not stamp:
+            return None
+        canvas = Image.new("RGBA", (w_px, h_px), (255, 255, 255, 0))
+        if stamp:
+            s = stamp.copy()
+            ratio = min(w_px / s.width, h_px / s.height)
+            s = s.resize((max(1, int(s.width * ratio)), max(1, int(s.height * ratio))))
+            alpha = s.split()[3].point(lambda p: int(p * 0.8))
+            s.putalpha(alpha)
+            canvas.alpha_composite(s, ((w_px - s.width) // 2, (h_px - s.height) // 2))
+        if sign:
+            g = sign.copy()
+            ratio = min(w_px / g.width, h_px / g.height)
+            g = g.resize((max(1, int(g.width * ratio)), max(1, int(g.height * ratio))))
+            canvas.alpha_composite(g, ((w_px - g.width) // 2, (h_px - g.height) // 2))
+        out = BytesIO()
+        canvas.save(out, format="PNG")
+        out.seek(0)
+        return out
+    except Exception:
+        return None
+
+
+def _signature_block(signer, tpl, base_font, bold_font):
+    """Build a right-aligned signature flowable: 'Hormat kami,' + signature/stamp image + name + title."""
+    if not signer:
+        return None
+    name = (signer.get("name") or "").strip()
+    title = (signer.get("title") or "").strip()
+    if not name and not title and not signer.get("signature_url") and not tpl.get("stamp_url"):
+        return None
+    styles = getSampleStyleSheet()
+    cen = ParagraphStyle("sigc", parent=styles["Normal"], fontName=base_font, fontSize=9,
+                         alignment=1, textColor=colors.HexColor("#334155"))
+    cenb = ParagraphStyle("sigcb", parent=cen, fontName=bold_font, fontSize=9.5,
+                          textColor=colors.HexColor("#0f172a"))
+    parts = [Paragraph("Hormat kami,", cen)]
+    img_buf = _compose_sign_stamp(signer.get("signature_url"), tpl.get("stamp_url"))
+    if img_buf:
+        im = RLImage(img_buf)
+        ratio = min(46 * mm / im.imageWidth, 23 * mm / im.imageHeight)
+        im.drawWidth = im.imageWidth * ratio
+        im.drawHeight = im.imageHeight * ratio
+        im.hAlign = "CENTER"
+        parts += [Spacer(1, 2 * mm), im, Spacer(1, 1 * mm)]
+    else:
+        parts.append(Spacer(1, 20 * mm))
+    parts.append(Paragraph(f"<u>{name or '&nbsp;'}</u>", cenb))
+    if title:
+        parts.append(Paragraph(title, cen))
+    inner = Table([[p] for p in parts], colWidths=[56 * mm])
+    inner.setStyle(TableStyle([("ALIGN", (0, 0), (-1, -1), "CENTER"), ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                               ("TOPPADDING", (0, 0), (-1, -1), 0), ("BOTTOMPADDING", (0, 0), (-1, -1), 1)]))
+    wrap = Table([["", inner]], colWidths=[114 * mm, 56 * mm])
+    wrap.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP")]))
+    return wrap
+
+
+def build_document_pdf(kind: str, data: dict, company: dict, itineraries=None, tpl=None, qr_url=None, paid=False, watermark=None, signer=None) -> bytes:
     tpl = tpl or DOC_TEMPLATE_DEFAULTS
     primary = colors.HexColor(tpl.get("primary_color") or "#1d4ed8")
     accent = colors.HexColor(tpl.get("accent_color") or "#f59e0b")
@@ -4343,6 +4449,11 @@ def build_document_pdf(kind: str, data: dict, company: dict, itineraries=None, t
         el.append(Spacer(1, 8 * mm))
         el.append(Paragraph(_clean_terms(tpl.get("footer_text")), ParagraphStyle("f", parent=small, textColor=accent)))
 
+    sig = _signature_block(signer, tpl, base_font, bold_font)
+    if sig:
+        el.append(Spacer(1, 10 * mm))
+        el.append(sig)
+
     def _stamp(canvas, _d):
         if paid:
             text, col, size = tpl.get("paid_stamp_text", "PAID"), colors.Color(0.13, 0.7, 0.4, alpha=0.22), 84
@@ -4363,6 +4474,35 @@ def build_document_pdf(kind: str, data: dict, company: dict, itineraries=None, t
     return buf.getvalue()
 
 
+def _default_signer(tpl):
+    return {"name": tpl.get("signer_name") or "", "title": tpl.get("signer_title") or "",
+            "signature_url": tpl.get("signature_url") or ""}
+
+
+async def _resolve_signer(kind, doc, tpl):
+    """Invoice/receipt -> default signer from settings. Quotation -> the sales who made it,
+    unless it was created by AI/Auto Sales (then default)."""
+    default = _default_signer(tpl)
+    if kind != "quotation":
+        return default
+    sid = doc.get("sales_pic_id")
+    nm = str(doc.get("sales_pic_name") or "").upper()
+    cb = str(doc.get("created_by") or "").upper()
+    auto = (not sid) or (nm in ("AUTO SALES", "AI AGENT")) or (cb in ("AI AGENT", "AUTO SALES"))
+    if auto:
+        return default
+    u = None
+    try:
+        if ObjectId.is_valid(str(sid)):
+            u = await db.users.find_one({"_id": ObjectId(sid)})
+    except Exception:
+        u = None
+    if not u:
+        return default
+    return {"name": u.get("name") or default["name"], "title": u.get("title") or "",
+            "signature_url": u.get("signature") or ""}
+
+
 async def _render_invoice_pdf(inv):
     tpl = await _get_doc_template()
     company = await db.company_settings.find_one({"key": "company"}) or {}
@@ -4376,7 +4516,8 @@ async def _render_invoice_pdf(inv):
     data["paid_amount"] = max(_tot - _out, 0)
     data["terms"] = tpl.get("invoice_terms") or inv.get("terms") or ""
     qr = _public_pdf_url(tpl, "invoice", iid)
-    return build_document_pdf("INVOICE", data, company, tpl=tpl, qr_url=qr, paid=paid), inv.get("invoice_number")
+    signer = await _resolve_signer("invoice", inv, tpl)
+    return build_document_pdf("INVOICE", data, company, tpl=tpl, qr_url=qr, paid=paid, signer=signer), inv.get("invoice_number")
 
 
 async def _render_quotation_pdf(q):
@@ -4387,7 +4528,8 @@ async def _render_quotation_pdf(q):
     data["terms"] = tpl.get("quotation_terms") or q.get("terms") or ""
     qr = _public_pdf_url(tpl, "quotation", str(q.get("_id")))
     wm = tpl.get("quotation_watermark_text", "DRAFT") if str(q.get("status", "")).upper() != "ACCEPTED" else None
-    return build_document_pdf("QUOTATION", data, company, itins, tpl=tpl, qr_url=qr, watermark=wm), q.get("quotation_number")
+    signer = await _resolve_signer("quotation", q, tpl)
+    return build_document_pdf("QUOTATION", data, company, itins, tpl=tpl, qr_url=qr, watermark=wm, signer=signer), q.get("quotation_number")
 
 
 async def _render_receipt_pdf(r, tpl=None):
@@ -4423,6 +4565,9 @@ async def _render_receipt_pdf(r, tpl=None):
         if qr:
             el += [Spacer(1, 10), qr, Paragraph("Scan untuk verifikasi kwitansi", ParagraphStyle("qs", parent=styles["Normal"], fontSize=8))]
     el += [Spacer(1, 16), Paragraph(_clean_terms(tpl.get("footer_text")) or "Terima kasih atas pembayaran Anda.", styles["Normal"])]
+    _rc_sig = _signature_block(_default_signer(tpl), tpl, base_font, bold_font)
+    if _rc_sig:
+        el += [Spacer(1, 10 * mm), _rc_sig]
     paid_full = float(r.get("outstanding_total") or 0) <= 0
 
     def _stamp(canvas, _d):

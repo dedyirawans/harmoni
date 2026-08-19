@@ -1,3 +1,16 @@
+## Fitur — Tanda Tangan, Nama, Jabatan & Stempel di Invoice/Kwitansi/Quotation (2026-06) — DONE ✅ (curl + PDF-render + UI verified)
+- **Aturan penanda tangan**: Quotation → Nama/Jabatan/TTD milik SALES pembuatnya (via `sales_pic_id`). Quotation dari AI/Auto Sales → pakai default Settings. Invoice & Kwitansi → selalu default Settings. Stempel → selalu dari Settings, dipakai semua dokumen.
+- **Backend** (`server.py`):
+  - `doc_template` + defaults + `DocTemplateUpdate`: tambah `signer_name`, `signer_title`, `signature_url`, `stamp_url`.
+  - User model (`UserCreate`/`UserUpdate`) + create/update: tambah `title` (jabatan) & `signature` (PNG data URL). Endpoint self-service `PUT /api/auth/me/profile` (title+signature) untuk semua user.
+  - Helper: `_load_pil_image`, `_compose_sign_stamp` (Pillow: komposit TTD di depan + stempel semi-transparan di belakang → 1 PNG), `_signature_block` (blok kanan-bawah: "Hormat kami," → gambar → Nama garis-bawah tebal → Jabatan), `_resolve_signer(kind,doc,tpl)`.
+  - `build_document_pdf(..., signer=)` render blok; `_render_invoice/quotation/receipt_pdf` + preview meneruskan signer sesuai aturan.
+- **Frontend**:
+  - Settings > Template Dokumen: field Nama Penanda Tangan, Jabatan, upload TTD Default (PNG), upload Stempel (PNG) — maks 2MB, data URL.
+  - User Management create/edit: field Jabatan + upload Tanda Tangan Digital per user.
+  - Menu profil kanan-atas: dialog "Profil & Tanda Tangan" (jabatan + TTD) agar tiap sales upload sendiri.
+- **Verified**: Quotation nyata (Andi Pratama) tampil TTD+jabatan miliknya; Invoice & Kwitansi nyata tampil default (Dedy Irawan/Direktur); stempel menimpa TTD; semua preview & PDF endpoint 200; UI baru muncul tanpa error.
+
 ## Fix — Preview PDF Quotation gagal di halaman Settings (2026-06) — DONE ✅ (curl + screenshot-verified)
 - **Gejala**: Di Settings > Template Dokumen, klik "Preview PDF" untuk Quotation → toast "Gagal membuat preview". `POST /api/doc-template/preview` return HTTP 500.
 - **Akar masalah**: `quotation_terms` (rich-text) tersimpan dengan tag HTML tidak seimbang (ada `</b>` tanpa `<b>` pembuka). Parser mini-HTML ReportLab `Paragraph` menolaknya: `Parse error: saw </b> instead of expected </para>`. `_clean_terms` mempertahankan `<b>/<i>/<u>` tapi tidak menyeimbangkannya.

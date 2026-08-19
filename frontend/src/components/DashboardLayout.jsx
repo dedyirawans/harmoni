@@ -4,7 +4,7 @@ import { useAuth } from "@/context/AuthContext";
 import { useBranding } from "@/context/BrandingContext";
 import { MENUS, ROLE_LABELS } from "@/config/nav";
 import api, { formatApiErrorDetail } from "@/lib/api";
-import { Plane, Menu, LogOut, KeyRound, ChevronDown, Search, Bell } from "lucide-react";
+import { Plane, Menu, LogOut, KeyRound, ChevronDown, Search, Bell, FileSignature } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -106,6 +106,61 @@ function ChangePasswordDialog({ open, onOpenChange }) {
         <DialogFooter>
           <Button onClick={submit} disabled={loading} className="bg-blue-600 hover:bg-blue-700" data-testid="cp-submit-button">
             {loading ? "Saving..." : "Update password"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function ProfileDialog({ open, onOpenChange }) {
+  const [title, setTitle] = useState("");
+  const [signature, setSignature] = useState("");
+  const [loading, setLoading] = useState(false);
+  useEffect(() => {
+    if (!open) return;
+    api.get("/auth/me").then((r) => { setTitle(r.data?.title || ""); setSignature(r.data?.signature || ""); }).catch(() => {});
+  }, [open]);
+  const submit = async () => {
+    setLoading(true);
+    try {
+      await api.put("/auth/me/profile", { title, signature });
+      toast.success("Profil & tanda tangan tersimpan");
+      onOpenChange(false);
+    } catch (err) {
+      toast.error(formatApiErrorDetail(err.response?.data?.detail));
+    } finally { setLoading(false); }
+  };
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="bg-white" data-testid="profile-dialog">
+        <DialogHeader>
+          <DialogTitle className="font-display">Profil & Tanda Tangan</DialogTitle>
+          <DialogDescription>Atur jabatan dan unggah tanda tangan digital (PNG) Anda. Dipakai pada quotation yang Anda buat.</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-4 py-2">
+          <div className="space-y-2">
+            <Label>Jabatan</Label>
+            <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="mis. Sales Consultant" data-testid="profile-title-input" />
+          </div>
+          <div className="space-y-2">
+            <Label>Tanda Tangan Digital (PNG, maks 2MB)</Label>
+            <div className="flex items-center gap-3">
+              {signature ? <img src={signature} alt="signature" className="h-14 w-28 rounded object-contain border border-slate-200 bg-white" data-testid="profile-signature-preview" /> : <div className="h-14 w-28 rounded bg-slate-100 flex items-center justify-center text-[10px] text-slate-400">TTD</div>}
+              <div className="flex-1 space-y-1">
+                <input type="file" accept="image/png,image/*" data-testid="profile-signature-upload" onChange={(e) => {
+                  const f = e.target.files?.[0]; if (!f) return;
+                  if (f.size > 2 * 1024 * 1024) { toast.error("Tanda tangan maksimal 2MB"); return; }
+                  const rd = new FileReader(); rd.onload = () => setSignature(rd.result); rd.readAsDataURL(f);
+                }} />
+                {signature && <Button variant="ghost" size="sm" className="text-red-600 h-7" onClick={() => setSignature("")} data-testid="profile-signature-clear">Hapus tanda tangan</Button>}
+              </div>
+            </div>
+          </div>
+        </div>
+        <DialogFooter>
+          <Button onClick={submit} disabled={loading} className="bg-blue-600 hover:bg-blue-700" data-testid="profile-submit-button">
+            {loading ? "Menyimpan..." : "Simpan profil"}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -219,6 +274,7 @@ export default function DashboardLayout({ children }) {
   const navigate = useNavigate();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [cpOpen, setCpOpen] = useState(false);
+  const [profileOpen, setProfileOpen] = useState(false);
 
   const doLogout = async () => {
     await logout();
@@ -272,6 +328,9 @@ export default function DashboardLayout({ children }) {
                 <div className="text-xs text-slate-500 font-normal">{user.email}</div>
               </DropdownMenuLabel>
               <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={() => setProfileOpen(true)} data-testid="menu-profile">
+                <FileSignature className="h-4 w-4 mr-2" aria-hidden="true" /> Profil & Tanda Tangan
+              </DropdownMenuItem>
               <DropdownMenuItem onClick={() => setCpOpen(true)} data-testid="menu-change-password">
                 <KeyRound className="h-4 w-4 mr-2" aria-hidden="true" /> Change password
               </DropdownMenuItem>
@@ -287,6 +346,7 @@ export default function DashboardLayout({ children }) {
       </div>
 
       <ChangePasswordDialog open={cpOpen} onOpenChange={setCpOpen} />
+      <ProfileDialog open={profileOpen} onOpenChange={setProfileOpen} />
     </div>
   );
 }

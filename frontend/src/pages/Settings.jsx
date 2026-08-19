@@ -395,6 +395,35 @@ function DocTemplateTab({ canManage }) {
             </div>
           </div>
         </div>
+        <div className="sm:col-span-2 border-t border-slate-100 pt-3 mt-1"><p className="font-semibold text-slate-700 text-sm">Tanda Tangan & Stempel (Default)</p><p className="text-xs text-slate-400">Dipakai untuk Invoice, Kwitansi, dan Quotation dari AI/Auto Sales. Stempel dipakai di semua dokumen.</p></div>
+        <div className="space-y-2"><Label>Nama Penanda Tangan (Default)</Label><Input value={t.signer_name || ""} onChange={set("signer_name")} placeholder="mis. Dedy Irawan" data-testid="tpl-signer-name" disabled={!canManage} /></div>
+        <div className="space-y-2"><Label>Jabatan (Default)</Label><Input value={t.signer_title || ""} onChange={set("signer_title")} placeholder="mis. Direktur" data-testid="tpl-signer-title" disabled={!canManage} /></div>
+        <div className="space-y-2 sm:col-span-2"><Label>Tanda Tangan Default (PNG)</Label>
+          <div className="flex items-center gap-3">
+            {t.signature_url ? <img src={t.signature_url} alt="signature" className="h-14 w-28 rounded object-contain border border-slate-200 bg-white" data-testid="tpl-signature-preview" /> : <div className="h-14 w-28 rounded bg-slate-100 flex items-center justify-center text-[10px] text-slate-400">TTD</div>}
+            <div className="flex-1 space-y-2">
+              {canManage && <input type="file" accept="image/png,image/*" data-testid="tpl-signature-upload" onChange={(e) => {
+                const f = e.target.files?.[0]; if (!f) return;
+                if (f.size > 2 * 1024 * 1024) { toast.error("Tanda tangan maksimal 2MB"); return; }
+                const rd = new FileReader(); rd.onload = () => setT((o) => ({ ...o, signature_url: rd.result })); rd.readAsDataURL(f);
+              }} />}
+              {t.signature_url && canManage && <Button variant="ghost" size="sm" className="text-red-600 h-7" onClick={() => setT((o) => ({ ...o, signature_url: "" }))} data-testid="tpl-signature-clear">Hapus</Button>}
+            </div>
+          </div>
+        </div>
+        <div className="space-y-2 sm:col-span-2"><Label>Stempel Perusahaan (PNG)</Label>
+          <div className="flex items-center gap-3">
+            {t.stamp_url ? <img src={t.stamp_url} alt="stamp" className="h-16 w-16 rounded object-contain border border-slate-200 bg-white" data-testid="tpl-stamp-preview" /> : <div className="h-16 w-16 rounded bg-slate-100 flex items-center justify-center text-[10px] text-slate-400">STEMPEL</div>}
+            <div className="flex-1 space-y-2">
+              {canManage && <input type="file" accept="image/png,image/*" data-testid="tpl-stamp-upload" onChange={(e) => {
+                const f = e.target.files?.[0]; if (!f) return;
+                if (f.size > 2 * 1024 * 1024) { toast.error("Stempel maksimal 2MB"); return; }
+                const rd = new FileReader(); rd.onload = () => setT((o) => ({ ...o, stamp_url: rd.result })); rd.readAsDataURL(f);
+              }} />}
+              {t.stamp_url && canManage && <Button variant="ghost" size="sm" className="text-red-600 h-7" onClick={() => setT((o) => ({ ...o, stamp_url: "" }))} data-testid="tpl-stamp-clear">Hapus</Button>}
+            </div>
+          </div>
+        </div>
         <div className="space-y-2 sm:col-span-2"><Label>Teks Footer</Label><Input value={t.footer_text || ""} onChange={set("footer_text")} data-testid="tpl-footer" disabled={!canManage} /></div>
         <div className="space-y-2 sm:col-span-2"><Label>Terms &amp; Conditions — Invoice</Label><RichText value={t.invoice_terms} onChange={(v) => setT((o) => ({ ...o, invoice_terms: v }))} disabled={!canManage} testid="tpl-invoice-terms" /></div>
         <div className="space-y-2 sm:col-span-2"><Label>Terms &amp; Conditions — Quotation</Label><RichText value={t.quotation_terms} onChange={(v) => setT((o) => ({ ...o, quotation_terms: v }))} disabled={!canManage} testid="tpl-quotation-terms" /></div>
