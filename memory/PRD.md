@@ -1,3 +1,11 @@
+## PHASE 10F-6 — Demo Data Validation & Dashboard Consistency (2026-06) — DONE ✅ (read-only validasi + 1 cleanup)
+- Validasi menyeluruh koleksi seed 10F (customers/leads/quotations/bookings/payments/commission/suppliers/conversations): SEMUA relasi & konsistensi PASS.
+- **Cleanup 1 error nyata**: 16 departure punya `available_seat` basi (10F-3 meng-`$inc` confirmed_pax tanpa update available). Diperbaiki `available_seat = quota − confirmed_pax` (+status FULL/ALMOST FULL/OPEN). Hanya menyentuh koleksi `departures`. 0 inkonsistensi tersisa.
+- **Dashboard live dari DB** (BUKAN hardcode): Super Admin (Users 12, Customers 142, Leads 93, Packages 40); Sales/Andi (My Leads 24, Quotations 9, Bookings 6, Commission); Accounting (Transactions, Pending Tax, Commission Payable, Gross Margin). Angka mencerminkan data seed nyata + data pra-eksisting.
+- Preserved: Super Admin, Accounting, AI, Knowledge Base, Communication Style, WhatsApp, API.co.id, Roles, Permissions — TIDAK berubah. Tax TIDAK dimodifikasi.
+- Variasi realistis dipertahankan (pending payment, overdue follow-up, lost lead, expired/cancelled quotation).
+
+
 ## PHASE 10F-5 — Demo Data: Supplier & WhatsApp Conversations (2026-06) — DONE ✅ (curl/db-validated)
 - Seed idempoten `/app/scripts/seed_10f5.py` (guard 10F5). DB-only, TIDAK memanggil WhatsApp API / API.co.id; TIDAK menyentuh Tax/AI config/SA/Accounting.
 - **12 Suppliers** realistis (Airline 2, Hotel 3, Transport 2, Tour Operator 2, Visa Provider 1, Muthawwif 1, Insurance 1) + **bank_accounts** (nomor fiktif; 4 supplier multi-rekening; tepat 1 primary per supplier).
