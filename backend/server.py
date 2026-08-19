@@ -935,6 +935,235 @@ async def forecast_dashboard(user: dict = Depends(require_role("super_admin"))):
     }
 
 
+# ----------------------------------------------------------------------------
+# Phase 10E-2 — Manual Forecast CRUD (Super Admin only)
+# ----------------------------------------------------------------------------
+class ForecastCreate(BaseModel):
+    period: str                                 # "YYYY-MM"
+    salesperson_id: Optional[str] = None
+    salesperson_name: str
+    team: Optional[str] = ""
+    branch: Optional[str] = ""
+    forecast_revenue: float = 0
+    forecast_pax: int = 0
+    forecast_gross_profit: float = 0
+    forecast_margin: Optional[float] = None     # percent; auto-computed if None
+    category: str = "GENERAL"
+    status: str = "DRAFT"
+    notes: Optional[str] = ""
+
+
+class ForecastUpdate(BaseModel):
+    period: Optional[str] = None
+    salesperson_id: Optional[str] = None
+    salesperson_name: Optional[str] = None
+    team: Optional[str] = None
+    branch: Optional[str] = None
+    forecast_revenue: Optional[float] = None
+    forecast_pax: Optional[int] = None
+    forecast_gross_profit: Optional[float] = None
+    forecast_margin: Optional[float] = None
+    category: Optional[str] = None
+    status: Optional[str] = None
+    notes: Optional[str] = None
+
+
+FORECAST_CATEGORIES = ["UMRAH", "HAJI", "TOUR", "CORPORATE", "GENERAL", "OTHER"]
+FORECAST_STATUSES = ["DRAFT", "SUBMITTED", "APPROVED", "ACHIEVED", "MISSED"]
+_PERIOD_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
+
+
+def _forecast_out(doc: dict) -> dict:
+    d = serialize(dict(doc))
+    return d
+
+
+def _validate_forecast(period, salesperson_name, revenue, pax, gp):
+    if not period or not _PERIOD_RE.match(str(period).strip()):
+        raise HTTPException(status_code=400, detail="Periode wajib diisi dengan format YYYY-MM (contoh 2026-07).")
+    if not (salesperson_name or "").strip():
+        raise HTTPException(status_code=400, detail="Salesperson wajib diisi.")
+    for label, val in (("Forecast Revenue", revenue), ("Forecast Pax", pax), ("Forecast Gross Profit", gp)):
+        try:
+            n = float(val)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail=f"{label} harus berupa angka.")
+        if n < 0:
+            raise HTTPException(status_code=400, detail=f"{label} tidak boleh negatif.")
+
+
+def _forecast_margin(revenue, gp, provided):
+    if provided is not None:
+        return round(float(provided), 2)
+    r = float(revenue or 0)
+    return round((float(gp or 0) / r) * 100, 2) if r > 0 else 0.0
+
+
+async def _forecast_summary():
+    docs = await db.forecasts.find({"is_deleted": {"$ne": True}}).to_list(5000)
+    by_period, by_category = {}, {}
+    tot_rev = tot_pax = tot_gp = 0.0
+    for d in docs:
+        rev = float(d.get("forecast_revenue") or 0)
+        pax = int(d.get("forecast_pax") or 0)
+        gp = float(d.get("forecast_gross_profit") or 0)
+        tot_rev += rev; tot_pax += pax; tot_gp += gp
+        p = d.get("period") or "—"
+        bp = by_period.setdefault(p, {"period": p, "revenue": 0.0, "pax": 0, "gross_profit": 0.0, "count": 0})
+        bp["revenue"] += rev; bp["pax"] += pax; bp["gross_profit"] += gp; bp["count"] += 1
+        c = d.get("category") or "OTHER"
+        bc = by_category.setdefault(c, {"category": c, "revenue": 0.0, "pax": 0, "gross_profit": 0.0, "count": 0})
+        bc["revenue"] += rev; bc["pax"] += pax; bc["gross_profit"] += gp; bc["count"] += 1
+    for bp in by_period.values():
+        bp["revenue"] = round(bp["revenue"], 2); bp["gross_profit"] = round(bp["gross_profit"], 2)
+        bp["margin"] = round((bp["gross_profit"] / bp["revenue"]) * 100, 2) if bp["revenue"] > 0 else 0.0
+    for bc in by_category.values():
+        bc["revenue"] = round(bc["revenue"], 2); bc["gross_profit"] = round(bc["gross_profit"], 2)
+    return {
+        "total_revenue": round(tot_rev, 2),
+        "total_pax": tot_pax,
+        "total_gross_profit": round(tot_gp, 2),
+        "total_margin": round((tot_gp / tot_rev) * 100, 2) if tot_rev > 0 else 0.0,
+        "count": len(docs),
+        "by_period": sorted(by_period.values(), key=lambda x: x["period"], reverse=True),
+        "by_category": sorted(by_category.values(), key=lambda x: -x["revenue"]),
+    }
+
+
+@api_router.get("/forecast/meta")
+async def forecast_meta(user: dict = Depends(require_role("super_admin"))):
+    sales = await db.users.find({"role": {"$in": ["sales", "super_admin"]}, "is_deleted": {"$ne": True}}).to_list(500)
+    return {
+        "categories": FORECAST_CATEGORIES,
+        "statuses": FORECAST_STATUSES,
+        "salespeople": [{"id": str(u["_id"]), "name": u.get("name"), "role": u.get("role"),
+                         "branch": u.get("branch", "")} for u in sales],
+    }
+
+
+@api_router.get("/forecast/records")
+async def list_forecasts(period: Optional[str] = None, status: Optional[str] = None,
+                         category: Optional[str] = None, include_deleted: bool = False,
+                         user: dict = Depends(require_role("super_admin"))):
+    query = {} if include_deleted else {"is_deleted": {"$ne": True}}
+    if period:
+        query["period"] = period
+    if status:
+        query["status"] = status
+    if category:
+        query["category"] = category
+    docs = await db.forecasts.find(query).sort([("period", -1), ("created_at", -1)]).to_list(5000)
+    return {"records": [_forecast_out(d) for d in docs], "summary": await _forecast_summary()}
+
+
+@api_router.get("/forecast/records/{fid}")
+async def get_forecast(fid: str, user: dict = Depends(require_role("super_admin"))):
+    if not ObjectId.is_valid(fid):
+        raise HTTPException(status_code=404, detail="Forecast tidak ditemukan")
+    doc = await db.forecasts.find_one({"_id": ObjectId(fid)})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Forecast tidak ditemukan")
+    return _forecast_out(doc)
+
+
+@api_router.post("/forecast/records")
+async def create_forecast(body: ForecastCreate, request: Request, user: dict = Depends(require_role("super_admin"))):
+    _validate_forecast(body.period, body.salesperson_name, body.forecast_revenue, body.forecast_pax, body.forecast_gross_profit)
+    category = (body.category or "GENERAL").strip().upper()
+    period = body.period.strip()
+    # Duplicate guard: same salesperson + period + category
+    dup_or = [{"salesperson_name": body.salesperson_name.strip()}]
+    if body.salesperson_id:
+        dup_or.append({"salesperson_id": body.salesperson_id})
+    dup = await db.forecasts.find_one({"is_deleted": {"$ne": True}, "period": period,
+                                       "category": category, "$or": dup_or})
+    if dup:
+        raise HTTPException(status_code=409, detail="Forecast untuk salesperson, periode, dan kategori ini sudah ada.")
+    doc = {
+        "period": period,
+        "salesperson_id": body.salesperson_id,
+        "salesperson_name": body.salesperson_name.strip(),
+        "team": (body.team or "").strip(),
+        "branch": (body.branch or "").strip(),
+        "forecast_revenue": round(float(body.forecast_revenue or 0), 2),
+        "forecast_pax": int(body.forecast_pax or 0),
+        "forecast_gross_profit": round(float(body.forecast_gross_profit or 0), 2),
+        "forecast_margin": _forecast_margin(body.forecast_revenue, body.forecast_gross_profit, body.forecast_margin),
+        "category": category,
+        "status": (body.status or "DRAFT").strip().upper(),
+        "notes": (body.notes or "").strip(),
+        "is_deleted": False,
+        "created_by": user["name"], "created_by_id": user["_id"],
+        "created_at": now_iso(), "updated_at": now_iso(),
+    }
+    res = await db.forecasts.insert_one(doc)
+    doc["_id"] = res.inserted_id
+    await log_audit(user, "forecast", "create_forecast", request, record_id=str(res.inserted_id), new=serialize(dict(doc)))
+    return _forecast_out(doc)
+
+
+@api_router.put("/forecast/records/{fid}")
+async def update_forecast(fid: str, body: ForecastUpdate, request: Request, user: dict = Depends(require_role("super_admin"))):
+    if not ObjectId.is_valid(fid):
+        raise HTTPException(status_code=404, detail="Forecast tidak ditemukan")
+    doc = await db.forecasts.find_one({"_id": ObjectId(fid)})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Forecast tidak ditemukan")
+    updates = {k: v for k, v in body.model_dump(exclude_none=True).items()}
+    merged = {**doc, **updates}
+    if "category" in updates:
+        updates["category"] = (updates["category"] or "GENERAL").strip().upper()
+        merged["category"] = updates["category"]
+    if "period" in updates:
+        updates["period"] = (updates["period"] or "").strip()
+        merged["period"] = updates["period"]
+    if "status" in updates:
+        updates["status"] = (updates["status"] or "DRAFT").strip().upper()
+    _validate_forecast(merged.get("period"), merged.get("salesperson_name"),
+                       merged.get("forecast_revenue"), merged.get("forecast_pax"), merged.get("forecast_gross_profit"))
+    # Duplicate guard on the resulting combination
+    dup_or = [{"salesperson_name": merged.get("salesperson_name")}]
+    if merged.get("salesperson_id"):
+        dup_or.append({"salesperson_id": merged.get("salesperson_id")})
+    dup = await db.forecasts.find_one({"_id": {"$ne": ObjectId(fid)}, "is_deleted": {"$ne": True},
+                                       "period": merged.get("period"), "category": merged.get("category"),
+                                       "$or": dup_or})
+    if dup:
+        raise HTTPException(status_code=409, detail="Forecast untuk salesperson, periode, dan kategori ini sudah ada.")
+    if "forecast_revenue" in updates:
+        updates["forecast_revenue"] = round(float(updates["forecast_revenue"] or 0), 2)
+    if "forecast_pax" in updates:
+        updates["forecast_pax"] = int(updates["forecast_pax"] or 0)
+    if "forecast_gross_profit" in updates:
+        updates["forecast_gross_profit"] = round(float(updates["forecast_gross_profit"] or 0), 2)
+    # Recompute margin whenever money fields change, unless explicitly provided
+    if body.forecast_margin is not None:
+        updates["forecast_margin"] = round(float(body.forecast_margin), 2)
+    elif ("forecast_revenue" in updates) or ("forecast_gross_profit" in updates):
+        updates["forecast_margin"] = _forecast_margin(merged.get("forecast_revenue"), merged.get("forecast_gross_profit"), None)
+    updates["updated_at"] = now_iso()
+    updates["updated_by"] = user["name"]
+    await db.forecasts.update_one({"_id": ObjectId(fid)}, {"$set": updates})
+    await log_audit(user, "forecast", "update_forecast", request, record_id=fid,
+                    old=serialize(dict(doc)), new=updates)
+    return _forecast_out(await db.forecasts.find_one({"_id": ObjectId(fid)}))
+
+
+@api_router.delete("/forecast/records/{fid}")
+async def delete_forecast(fid: str, request: Request, reason: str = Query(""), user: dict = Depends(require_role("super_admin"))):
+    if not ObjectId.is_valid(fid):
+        raise HTTPException(status_code=404, detail="Forecast tidak ditemukan")
+    doc = await db.forecasts.find_one({"_id": ObjectId(fid)})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Forecast tidak ditemukan")
+    if doc.get("is_deleted"):
+        raise HTTPException(status_code=400, detail="Forecast sudah dihapus.")
+    await db.forecasts.update_one({"_id": ObjectId(fid)}, {"$set": {
+        "is_deleted": True, "deleted_by": user["name"], "deleted_at": now_iso()}})
+    await log_audit(user, "forecast", "delete_forecast", request, record_id=fid,
+                    old=serialize(dict(doc)), new={"is_deleted": True}, reason=(reason or "").strip() or None)
+    return {"message": "Forecast dihapus", "id": fid}
+
 
 @api_router.get("/notifications")
 async def notifications(unread_only: bool = False, user: dict = Depends(require_permission("notifications.view"))):

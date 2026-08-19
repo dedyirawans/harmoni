@@ -1,0 +1,30 @@
+{
+  "summary": "PHASE 10E-2 Forecast Manual CRUD frontend testing complete. All 9 requested flows PASSED: two tabs (Dashboard + Forecast Manual) present under /forecast, Add Forecast with auto-computed margin=25%, duplicate 409 shows toast 'Forecast untuk salesperson, periode, dan kategori ini sudah ada.' and dialog stays open, empty-period client validation toast 'Periode wajib diisi', Edit updates revenue+status and toast 'Forecast diperbarui', View dialog shows all fields + created-by metadata ('Dibuat oleh Dedy Irawan ... diedit oleh Dedy Irawan'), Delete confirmation with exact text 'Apakah Anda yakin ingin menghapus forecast ini?', toast 'Forecast dihapus' and row removed, summary cards render. RBAC verified: Sales user (sales@safarcrm.com) has no Forecasting menu item and direct navigation to /forecast returns a '403 — Forbidden' page. Test record was cleaned up (deleted at end).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "/forecast Dashboard tab", "issues": ["React hydration warning: <div> cannot be a descendant of <p> inside Upcoming Expense ItemList (line ~574 in Forecast.jsx) — the <p> wrapping name+<Badge> renders a <div> Badge. Should use <span> instead of <p> for that name row. Non-blocking but appears in console as hydration error."]}
+    ]
+  },
+  "test_report_links": ["/app/test_reports/iteration_51.json"],
+  "action_items": [
+    "(Low priority) Fix hydration warning in Forecast.jsx Upcoming Expense ItemList render (line ~574): change the <p className='font-medium text-slate-800'>{it.name}<Badge .../></p> to <div> or use <span> around the Badge (Badge renders a <div>).",
+    "(Cosmetic) Recharts warnings 'width(-1) and height(-1)' spam in console when charts render inside inactive tab; consider mounting Dashboard content only when its tab is active or setting minHeight on ResponsiveContainer parents."
+  ],
+  "critical_code_review_comments": [
+    "Forecast.jsx is 651 lines — approaching the 700-line guideline. Consider splitting ForecastRecords, ForecastDashboard, and shared helpers (rp/rpShort/mLabel/badges) into separate files.",
+    "Delete endpoint is called with query params { reason: 'Dihapus dari UI' } — verified working; ensure backend rejects tampering (already require_role super_admin per spec).",
+    "Client validation only checks period + salesperson_name; negative numeric values rely on server 400 (input has min=0 but not enforced on submit)."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "not tested (frontend-only run)", "frontend": "100%"},
+  "test_credentials": "Super Admin dedyirawan18@gmail.com / Admin@123; Sales sales@safarcrm.com / Sales@123 (from request; login worked).",
+  "seed_data_creation": "Created 1 forecast (2026-07 UMRAH, Dedy Irawan, revenue 100M then edited to 200M) and deleted it as part of the delete flow. No residual test data.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "PHASE 10E-2 Forecast Manual CRUD is fully functional end-to-end. Auto-margin computes correctly (GP/Revenue*100 = 25%). Duplicate rule salesperson+period+category yields toast + dialog stays open. RBAC 403 page shown for Sales. Backend already curl-verified per E1. Only minor hydration warning in Upcoming Expense card (Dashboard tab).",
+  "rca of the issue": "N/A — no functional issues."
+}
