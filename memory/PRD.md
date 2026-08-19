@@ -1,3 +1,16 @@
+## PHASE 10E-4 — Supplier Bank Accounts (multi) + Booking Number Display & Global Search (2026-06) — DONE ✅ (testing_agent iter_52: FE 100%; backend curl E2E)
+### PART A — Supplier Bank Accounts
+- Supplier kini punya array `bank_accounts` (id, bank_name, account_holder, account_number, is_primary, status). Field lama `bank_account` (string) tetap dipertahankan (kompatibilitas).
+- Endpoint (super_admin/accounting): POST `/suppliers/{sid}/bank-accounts`, PUT `/suppliers/{sid}/bank-accounts/{aid}`, POST `/suppliers/{sid}/bank-accounts/{aid}/set-primary`, DELETE `/suppliers/{sid}/bank-accounts/{aid}`. Validasi bank_name+account_holder+account_number wajib; nomor rekening duplikat per supplier → 409. Hanya 1 primary (set primary meng-unset lainnya); tambah pertama auto-primary; hapus primary → auto-promote rekening lain.
+- Frontend `Suppliers.jsx`: tombol "Kelola Bank" per baris → dialog `BankAccountsDialog` (tabel rekening + Add/Edit/Delete/Set Primary + checkbox utama + status). Kolom tabel "Bank Utama" menampilkan rekening primary (+badge jumlah).
+### PART B — Booking Number & Search
+- Nomor booking existing `BKG-xxxxx` DIPAKAI ULANG (tidak ada sistem penomoran kedua). Ditampilkan jelas sebagai badge biru di Booking List.
+- `GET /bookings` kini menerima `search` (+ `status`). Search resolve nomor booking / nama customer / phone / whatsapp / email (via koleksi customers) → `$or` booking_number/customer_name/customer_id. Case-insensitive, whitespace-tolerant.
+- Index DB baru: bookings.booking_number, bookings.customer_id, bookings.customer_name, customers.phone, customers.email, customers.whatsapp.
+- Frontend `Bookings.jsx` (route `/booking`): input pencarian global "Cari nomor booking, nama customer, nomor HP, atau email..." (debounce 350ms) + filter status + tombol clear. Booking number sebagai badge prominent.
+- Verified iter_52: 15/15 flow FE PASS. Backend curl: bank CRUD/primary/duplicate/validasi/RBAC 403; search number(case-insensitive)/name/email/wa-fragment/no-match/status/sales-scope semua OK. Data uji dibersihkan. Modul AI/WhatsApp/API.co.id/Tax/Accounting tidak tersentuh. (Minor a11y: DialogDescription ditambahkan.)
+
+
 ## PHASE 10E-2 — Forecasting CRUD (Manual Forecast) (2026-06) — DONE ✅ (testing_agent iter_51: FE 100%; backend curl E2E)
 - **Forecast Manual CRUD** baru di koleksi `forecasts` (TERPISAH dari dashboard proyeksi otomatis Phase 9N). Field: period (YYYY-MM), salesperson_id/name, team, branch, forecast_revenue, forecast_pax, forecast_gross_profit, forecast_margin (auto = GP/Revenue×100 bila kosong), category, status, notes, is_deleted, audit metadata.
 - **Backend** (server.py, semua `require_role("super_admin")`): GET `/forecast/meta` (categories/statuses/salespeople), GET `/forecast/records` (list + summary per periode & kategori), GET/POST/PUT/DELETE `/forecast/records[/{id}]`. Duplikat ditolak 409 (salesperson + period + category). Validasi 400 (period format YYYY-MM, salesperson wajib, angka ≥0). **Soft delete** (`is_deleted=true`) + audit via `log_audit(module="forecast")` untuk create/update/delete (user, waktu, old→new value).

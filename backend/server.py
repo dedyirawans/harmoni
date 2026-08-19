@@ -3528,6 +3528,104 @@ async def update_supplier(sid: str, body: dict, request: Request, user: dict = D
     return serialize(await db.suppliers.find_one({"_id": ObjectId(sid)}))
 
 
+# ---- Supplier Bank Accounts (Phase 10E-4) ----
+def _validate_bank(body: dict):
+    bn = (body.get("bank_name") or "").strip()
+    ah = (body.get("account_holder") or "").strip()
+    an = (body.get("account_number") or "").strip()
+    if not bn:
+        raise HTTPException(status_code=400, detail="Nama bank wajib diisi")
+    if not ah:
+        raise HTTPException(status_code=400, detail="Nama pemilik rekening wajib diisi")
+    if not an:
+        raise HTTPException(status_code=400, detail="Nomor rekening wajib diisi")
+    return bn, ah, an
+
+
+async def _get_supplier(sid: str):
+    if not ObjectId.is_valid(sid):
+        raise HTTPException(status_code=404, detail="Supplier not found")
+    sup = await db.suppliers.find_one({"_id": ObjectId(sid)})
+    if not sup:
+        raise HTTPException(status_code=404, detail="Supplier not found")
+    return sup
+
+
+@api_router.post("/suppliers/{sid}/bank-accounts")
+async def add_bank_account(sid: str, body: dict, request: Request, user: dict = Depends(_SUP_ROLE)):
+    sup = await _get_supplier(sid)
+    bn, ah, an = _validate_bank(body)
+    accounts = sup.get("bank_accounts") or []
+    if any((a.get("account_number") or "").strip() == an for a in accounts):
+        raise HTTPException(status_code=409, detail="Nomor rekening sudah ada untuk supplier ini")
+    make_primary = bool(body.get("is_primary")) or len(accounts) == 0
+    if make_primary:
+        for a in accounts:
+            a["is_primary"] = False
+    acc = {"id": str(ObjectId()), "bank_name": bn, "account_holder": ah, "account_number": an,
+           "is_primary": make_primary, "status": (body.get("status") or "ACTIVE").upper(),
+           "created_at": now_iso()}
+    accounts.append(acc)
+    await db.suppliers.update_one({"_id": ObjectId(sid)}, {"$set": {"bank_accounts": accounts}})
+    await log_audit(user, "supplier", "add_bank_account", request, record_id=sid, new=acc)
+    return serialize(await db.suppliers.find_one({"_id": ObjectId(sid)}))
+
+
+@api_router.put("/suppliers/{sid}/bank-accounts/{aid}")
+async def update_bank_account(sid: str, aid: str, body: dict, request: Request, user: dict = Depends(_SUP_ROLE)):
+    sup = await _get_supplier(sid)
+    bn, ah, an = _validate_bank(body)
+    accounts = sup.get("bank_accounts") or []
+    target = next((a for a in accounts if a.get("id") == aid), None)
+    if not target:
+        raise HTTPException(status_code=404, detail="Rekening tidak ditemukan")
+    if any(a.get("id") != aid and (a.get("account_number") or "").strip() == an for a in accounts):
+        raise HTTPException(status_code=409, detail="Nomor rekening sudah ada untuk supplier ini")
+    make_primary = bool(body.get("is_primary"))
+    for a in accounts:
+        if a.get("id") == aid:
+            a.update({"bank_name": bn, "account_holder": ah, "account_number": an,
+                      "status": (body.get("status") or a.get("status") or "ACTIVE").upper()})
+            if make_primary:
+                a["is_primary"] = True
+        elif make_primary:
+            a["is_primary"] = False
+    if not any(a.get("is_primary") for a in accounts):
+        accounts[0]["is_primary"] = True
+    await db.suppliers.update_one({"_id": ObjectId(sid)}, {"$set": {"bank_accounts": accounts}})
+    await log_audit(user, "supplier", "update_bank_account", request, record_id=sid, new={"id": aid, "account_number": an})
+    return serialize(await db.suppliers.find_one({"_id": ObjectId(sid)}))
+
+
+@api_router.post("/suppliers/{sid}/bank-accounts/{aid}/set-primary")
+async def set_primary_bank_account(sid: str, aid: str, request: Request, user: dict = Depends(_SUP_ROLE)):
+    sup = await _get_supplier(sid)
+    accounts = sup.get("bank_accounts") or []
+    if not any(a.get("id") == aid for a in accounts):
+        raise HTTPException(status_code=404, detail="Rekening tidak ditemukan")
+    for a in accounts:
+        a["is_primary"] = (a.get("id") == aid)
+    await db.suppliers.update_one({"_id": ObjectId(sid)}, {"$set": {"bank_accounts": accounts}})
+    await log_audit(user, "supplier", "set_primary_bank", request, record_id=sid, new={"id": aid})
+    return serialize(await db.suppliers.find_one({"_id": ObjectId(sid)}))
+
+
+@api_router.delete("/suppliers/{sid}/bank-accounts/{aid}")
+async def delete_bank_account(sid: str, aid: str, request: Request, user: dict = Depends(_SUP_ROLE)):
+    sup = await _get_supplier(sid)
+    accounts = sup.get("bank_accounts") or []
+    target = next((a for a in accounts if a.get("id") == aid), None)
+    if not target:
+        raise HTTPException(status_code=404, detail="Rekening tidak ditemukan")
+    was_primary = target.get("is_primary")
+    accounts = [a for a in accounts if a.get("id") != aid]
+    if was_primary and accounts and not any(a.get("is_primary") for a in accounts):
+        accounts[0]["is_primary"] = True
+    await db.suppliers.update_one({"_id": ObjectId(sid)}, {"$set": {"bank_accounts": accounts}})
+    await log_audit(user, "supplier", "delete_bank_account", request, record_id=sid, old={"id": aid})
+    return serialize(await db.suppliers.find_one({"_id": ObjectId(sid)}))
+
+
 @api_router.delete("/suppliers/{sid}")
 async def delete_supplier(sid: str, request: Request, reason: str = Query(""), user: dict = Depends(require_role("super_admin"))):
     if not (reason or "").strip():
@@ -4573,10 +4671,21 @@ async def convert_to_booking(qid: str, body: dict, request: Request, user: dict 
 
 
 @api_router.get("/bookings")
-async def list_bookings(status: Optional[str] = None, user: dict = Depends(require_permission("booking.view"))):
+async def list_bookings(status: Optional[str] = None, search: Optional[str] = None,
+                        user: dict = Depends(require_permission("booking.view"))):
     query = owner_filter(user)
     if status and status != "all":
         query = {**query, "status": status}
+    s = (search or "").strip()
+    if s:
+        rx = {"$regex": re.escape(s), "$options": "i"}
+        or_clauses = [{"booking_number": rx}, {"customer_name": rx}]
+        # Resolve phone / email / name against customers to search by customer_id
+        cust = await db.customers.find({"$or": [{"phone": rx}, {"whatsapp": rx}, {"email": rx}, {"full_name": rx}]}).to_list(500)
+        cids = [str(c["_id"]) for c in cust]
+        if cids:
+            or_clauses.append({"customer_id": {"$in": cids}})
+        query = {**query, "$and": [{"$or": or_clauses}]} if query else {"$or": or_clauses}
     docs = await db.bookings.find(query).sort("created_at", -1).to_list(1000)
     return [serialize(d) for d in docs]
 
@@ -12548,6 +12657,12 @@ async def seed():
                   "settings.numbering.booking_prefix": "BKG"}})
     await db.quotations.create_index("sales_pic_id")
     await db.bookings.create_index("sales_pic_id")
+    await db.bookings.create_index("booking_number")
+    await db.bookings.create_index("customer_id")
+    await db.bookings.create_index("customer_name")
+    await db.customers.create_index("phone")
+    await db.customers.create_index("email")
+    await db.customers.create_index("whatsapp")
     await db.invoices.create_index("booking_id")
     await db.payments.create_index("invoice_id")
     await db.travelers.create_index("booking_id")

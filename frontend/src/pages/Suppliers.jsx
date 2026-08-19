@@ -9,7 +9,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogTrigger } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Building2, Plus, Loader2, Trash2, Coins } from "lucide-react";
+import { Building2, Plus, Loader2, Trash2, Coins, Landmark, Star, Pencil } from "lucide-react";
 import { toast } from "sonner";
 
 const TYPES = ["Airline", "Hotel", "Transport", "Visa Provider", "Tour Operator", "Guide", "Muthawwif", "Insurance", "Other"];
@@ -43,6 +43,7 @@ function SuppliersTab() {
   const [open, setOpen] = useState(false);
   const [f, setF] = useState({ name: "", type: "Hotel", contact: "", email: "", phone: "", address: "", tax_info: "", bank_account: "" });
   const [saving, setSaving] = useState(false);
+  const [manageBank, setManageBank] = useState(null);
   const load = () => api.get("/suppliers").then((r) => setRows(r.data)).catch(() => setRows([]));
   useEffect(() => { load(); }, []);
   const set = (k) => (e) => setF((o) => ({ ...o, [k]: e.target.value }));
@@ -59,7 +60,7 @@ function SuppliersTab() {
         <Dialog open={open} onOpenChange={setOpen}>
           <DialogTrigger asChild><Button size="sm" className="bg-blue-600 hover:bg-blue-700" data-testid="add-supplier-btn"><Plus className="h-4 w-4 mr-1" />Tambah Supplier</Button></DialogTrigger>
           <DialogContent className="bg-white max-w-lg" data-testid="supplier-dialog">
-            <DialogHeader><DialogTitle className="font-display">Tambah Supplier</DialogTitle></DialogHeader>
+            <DialogHeader><DialogTitle className="font-display">Tambah Supplier</DialogTitle><DialogDescription>Isi data supplier baru.</DialogDescription></DialogHeader>
             <div className="grid grid-cols-2 gap-3 py-2">
               <div className="space-y-1 col-span-2"><Label className="text-xs">Nama Supplier</Label><Input value={f.name} onChange={set("name")} data-testid="supplier-name" /></div>
               <div className="space-y-1"><Label className="text-xs">Tipe</Label>
@@ -78,16 +79,113 @@ function SuppliersTab() {
       </div>
       {rows === null ? <div className="p-8 flex justify-center"><Loader2 className="h-5 w-5 animate-spin text-blue-600" /></div>
        : rows.length === 0 ? <p className="p-6 text-center text-sm text-slate-400" data-testid="suppliers-empty">Belum ada supplier.</p>
-       : <Table data-testid="suppliers-table"><TableHeader><TableRow className="bg-slate-50"><TableHead>Nama</TableHead><TableHead>Tipe</TableHead><TableHead>Kontak</TableHead><TableHead>Bank</TableHead><TableHead>Status</TableHead></TableRow></TableHeader>
-         <TableBody>{rows.map((s) => (
+       : <Table data-testid="suppliers-table"><TableHeader><TableRow className="bg-slate-50"><TableHead>Nama</TableHead><TableHead>Tipe</TableHead><TableHead>Kontak</TableHead><TableHead>Bank Utama</TableHead><TableHead>Status</TableHead><TableHead className="text-right">Aksi</TableHead></TableRow></TableHeader>
+         <TableBody>{rows.map((s) => {
+           const primary = (s.bank_accounts || []).find((a) => a.is_primary) || (s.bank_accounts || [])[0];
+           const count = (s.bank_accounts || []).length;
+           return (
            <TableRow key={s._id} data-testid={`supplier-${s._id}`}>
              <TableCell className="font-medium text-slate-900">{s.name}</TableCell>
              <TableCell><Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200">{s.type}</Badge></TableCell>
              <TableCell className="text-slate-600 text-sm">{s.contact || "—"}<div className="text-xs text-slate-400">{s.phone} {s.email}</div></TableCell>
-             <TableCell className="text-slate-600 text-sm">{s.bank_account || "—"}</TableCell>
+             <TableCell className="text-slate-600 text-sm">
+               {primary ? (<div><div className="flex items-center gap-1 font-medium text-slate-800">{primary.bank_name}{count > 1 && <Badge variant="outline" className="ml-1 text-[9px] bg-slate-50 text-slate-500">+{count - 1}</Badge>}</div><div className="text-xs text-slate-400">{primary.account_holder} · {primary.account_number}</div></div>)
+                 : (s.bank_account || <span className="text-slate-400">—</span>)}
+             </TableCell>
              <TableCell><Badge variant="outline" className={s.status === "ACTIVE" ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-slate-100 text-slate-500"}>{s.status}</Badge></TableCell>
-           </TableRow>))}</TableBody></Table>}
+             <TableCell className="text-right">
+               <Button size="sm" variant="outline" onClick={() => setManageBank(s)} data-testid={`manage-bank-${s._id}`}><Landmark className="h-4 w-4 mr-1 text-blue-600" />Kelola Bank</Button>
+             </TableCell>
+           </TableRow>);})}</TableBody></Table>}
+      <BankAccountsDialog supplier={manageBank} onClose={() => setManageBank(null)} onSaved={load} />
     </Card>
+  );
+}
+
+function BankAccountsDialog({ supplier, onClose, onSaved }) {
+  const [accounts, setAccounts] = useState([]);
+  const [form, setForm] = useState(null); // {id?, bank_name, account_holder, account_number, is_primary, status}
+  const [saving, setSaving] = useState(false);
+  useEffect(() => { setAccounts(supplier?.bank_accounts || []); setForm(null); }, [supplier]);
+  if (!supplier) return null;
+  const sid = supplier._id;
+
+  const refresh = (updated) => { setAccounts(updated.bank_accounts || []); onSaved && onSaved(); };
+  const startAdd = () => setForm({ bank_name: "", account_holder: "", account_number: "", is_primary: (accounts.length === 0), status: "ACTIVE" });
+  const startEdit = (a) => setForm({ ...a });
+  const save = async () => {
+    if (!form.bank_name.trim() || !form.account_holder.trim() || !form.account_number.trim())
+      return toast.error("Nama bank, pemilik, dan nomor rekening wajib diisi");
+    setSaving(true);
+    try {
+      const r = form.id
+        ? await api.put(`/suppliers/${sid}/bank-accounts/${form.id}`, form)
+        : await api.post(`/suppliers/${sid}/bank-accounts`, form);
+      toast.success(form.id ? "Rekening diperbarui" : "Rekening ditambahkan");
+      refresh(r.data); setForm(null);
+    } catch (e) {
+      const st = e.response?.status;
+      toast.error(st === 409 ? (e.response?.data?.detail || "Nomor rekening duplikat") : formatApiErrorDetail(e.response?.data?.detail));
+    } finally { setSaving(false); }
+  };
+  const setPrimary = async (aid) => {
+    try { const r = await api.post(`/suppliers/${sid}/bank-accounts/${aid}/set-primary`); toast.success("Rekening utama diperbarui"); refresh(r.data); }
+    catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); }
+  };
+  const del = async (aid) => {
+    try { const r = await api.delete(`/suppliers/${sid}/bank-accounts/${aid}`); toast.success("Rekening dihapus"); refresh(r.data); }
+    catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); }
+  };
+
+  return (
+    <Dialog open={!!supplier} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="bg-white max-w-2xl" data-testid="bank-accounts-dialog">
+        <DialogHeader><DialogTitle className="font-display flex items-center gap-2"><Landmark className="h-5 w-5 text-blue-600" />Rekening Bank — {supplier.name}</DialogTitle></DialogHeader>
+        <div className="space-y-3 py-1">
+          {accounts.length === 0 ? <p className="text-sm text-slate-400 text-center py-4" data-testid="bank-empty">Belum ada rekening bank.</p>
+            : (
+            <Table data-testid="bank-accounts-table">
+              <TableHeader><TableRow className="bg-slate-50"><TableHead>Bank</TableHead><TableHead>Pemilik</TableHead><TableHead>No. Rekening</TableHead><TableHead>Primary</TableHead><TableHead>Status</TableHead><TableHead className="text-right">Aksi</TableHead></TableRow></TableHeader>
+              <TableBody>{accounts.map((a) => (
+                <TableRow key={a.id} data-testid={`bank-row-${a.id}`}>
+                  <TableCell className="font-medium text-slate-900">{a.bank_name}</TableCell>
+                  <TableCell className="text-slate-600">{a.account_holder}</TableCell>
+                  <TableCell className="font-mono text-slate-600">{a.account_number}</TableCell>
+                  <TableCell>{a.is_primary ? <Badge className="bg-amber-100 text-amber-700 border-amber-200"><Star className="h-3 w-3 mr-1" />Primary</Badge> : <Button size="sm" variant="ghost" className="text-xs text-slate-500" onClick={() => setPrimary(a.id)} data-testid={`set-primary-${a.id}`}>Set Primary</Button>}</TableCell>
+                  <TableCell><Badge variant="outline" className={a.status === "ACTIVE" ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-slate-100 text-slate-500"}>{a.status}</Badge></TableCell>
+                  <TableCell className="text-right whitespace-nowrap">
+                    <Button size="icon" variant="ghost" onClick={() => startEdit(a)} data-testid={`edit-bank-${a.id}`}><Pencil className="h-4 w-4 text-blue-600" /></Button>
+                    <Button size="icon" variant="ghost" className="text-red-600" onClick={() => del(a.id)} data-testid={`del-bank-${a.id}`}><Trash2 className="h-4 w-4" /></Button>
+                  </TableCell>
+                </TableRow>))}</TableBody>
+            </Table>
+          )}
+
+          {form ? (
+            <div className="border border-slate-200 rounded-lg p-3 space-y-3 bg-slate-50/60" data-testid="bank-form">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="space-y-1"><Label className="text-xs">Nama Bank *</Label><Input value={form.bank_name} onChange={(e) => setForm((o) => ({ ...o, bank_name: e.target.value }))} placeholder="BCA" data-testid="bank-name-input" /></div>
+                <div className="space-y-1"><Label className="text-xs">Nama Pemilik *</Label><Input value={form.account_holder} onChange={(e) => setForm((o) => ({ ...o, account_holder: e.target.value }))} placeholder="PT ABC" data-testid="bank-holder-input" /></div>
+                <div className="space-y-1"><Label className="text-xs">No. Rekening *</Label><Input value={form.account_number} onChange={(e) => setForm((o) => ({ ...o, account_number: e.target.value }))} placeholder="123456" data-testid="bank-number-input" /></div>
+              </div>
+              <div className="flex items-center gap-4">
+                <label className="flex items-center gap-2 text-sm text-slate-600"><input type="checkbox" checked={!!form.is_primary} onChange={(e) => setForm((o) => ({ ...o, is_primary: e.target.checked }))} data-testid="bank-primary-check" /> Jadikan rekening utama</label>
+                <Select value={form.status} onValueChange={(v) => setForm((o) => ({ ...o, status: v }))}>
+                  <SelectTrigger className="w-36 h-9" data-testid="bank-status-select"><SelectValue /></SelectTrigger>
+                  <SelectContent className="bg-white">{["ACTIVE", "INACTIVE"].map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent>
+                </Select>
+              </div>
+              <div className="flex justify-end gap-2">
+                <Button variant="outline" size="sm" onClick={() => setForm(null)}>Batal</Button>
+                <Button size="sm" className="bg-blue-600 hover:bg-blue-700" onClick={save} disabled={saving} data-testid="bank-save-btn">{saving ? "..." : form.id ? "Simpan" : "Tambah"}</Button>
+              </div>
+            </div>
+          ) : (
+            <Button size="sm" className="bg-blue-600 hover:bg-blue-700" onClick={startAdd} data-testid="add-bank-btn"><Plus className="h-4 w-4 mr-1" />Add Bank Account</Button>
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
