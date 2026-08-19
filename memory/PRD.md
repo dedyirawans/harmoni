@@ -1,3 +1,12 @@
+## Brosur AI — Preview, Logo Atas, Tanpa Itinerary, Unduh Gambar/PDF (2026-06) — DONE ✅
+- **Preview**: dialog di BrochureTab menampilkan gambar penuh (object-contain) atau PDF via iframe (`?auth=token`), plus tombol unduh. Klik thumbnail/tombol "Preview".
+- **Tanpa itinerary**: dihapus dari prompt AI (`_brochure_prompt`) & dari PDF (halaman itinerary dihapus → PDF kini 2 halaman: cover + Harga & Fasilitas). Verified /Page ≈2.
+- **Watermark = LOGO dari Settings, di ATAS**: `_stamp_brochure_image(img, info, position)` menempel logo (logo_url dari settings) di atas gambar dengan backdrop transparan; posisi top-left/top-center/top-right (selector "Posisi Logo" di form). Bar teks bawah dihapus. Jika tak ada logo → gambar dibiarkan apa adanya.
+- **Unduh Gambar & PDF**: `GET /brochures/{bid}/download?format=image|pdf`; untuk brosur gambar, `format=pdf` mengonversi gambar→PDF 1 halaman (reportlab) on-the-fly. UI kartu gambar punya tombol "Gambar" + "PDF"; kartu PDF punya "Unduh". Verified: image 200/png, image→pdf 200/application/pdf valid.
+- Frontend: form kini punya selector Jumlah Varian + Posisi Logo; kartu punya Preview + unduh Gambar/PDF.
+- Catatan: generate gambar AI kadang timeout gateway (~intermittent Nano Banana); generate-pdf & konversi terverifikasi. Endpoint mengembalikan varian yang sukses.
+
+
 ## Brosur AI — Varian, PDF Multi-Halaman, Watermark/Logo, Foto Referensi (2026-06) — DONE ✅
 - **Varian brosur (1–3)**: `generate-infographic` menerima `variants` (1-3) & membuat beberapa gaya berbeda SECARA PARALEL (asyncio.gather → ~17s untuk 2, hindari timeout ingress). Mengembalikan list; mengembalikan varian yang sukses meski salah satu gagal (Nano Banana kadang balas tanpa gambar).
 - **PDF multi-halaman**: `POST /packages/{pid}/brochures/generate-pdf` → cover infografis AI (Nano Banana) + halaman Itinerary (per hari) + halaman Harga & Fasilitas, disusun via reportlab, footer logo+kontak tiap halaman. Disimpan kind=AI_PDF (application/pdf). Verified: PDF 2MB multi-halaman valid.

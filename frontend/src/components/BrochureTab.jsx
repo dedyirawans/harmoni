@@ -6,7 +6,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Loader2, Upload, Download, Trash2, Sparkles, FileText, FileType2, ImagePlus } from "lucide-react";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Loader2, Upload, Download, Trash2, Sparkles, FileText, FileType2, ImagePlus, Eye, FileImage } from "lucide-react";
 import { toast } from "sonner";
 
 export function BrochureTab({ pkgId, canManage }) {
@@ -14,9 +15,11 @@ export function BrochureTab({ pkgId, canManage }) {
   const [uploading, setUploading] = useState(false);
   const [gen, setGen] = useState({ theme: "", highlights: "", promo: "", cta: "", extra: "" });
   const [variants, setVariants] = useState("1");
+  const [logoPos, setLogoPos] = useState("top-right");
   const [refIds, setRefIds] = useState([]);
   const [generating, setGenerating] = useState(false);
   const [pdfGen, setPdfGen] = useState(false);
+  const [preview, setPreview] = useState(null);
 
   const load = useCallback(() => api.get(`/packages/${pkgId}/brochures`).then((r) => setItems(r.data)).catch(() => setItems([])), [pkgId]);
   useEffect(() => { load(); }, [load]);
@@ -31,20 +34,20 @@ export function BrochureTab({ pkgId, canManage }) {
       await api.post(`/packages/${pkgId}/brochures`, fd, { headers: { "Content-Type": "multipart/form-data" } });
       toast.success("File berhasil diunggah");
       await load();
-    } catch (err) {
-      toast.error(err?.response?.data?.detail || "Gagal mengunggah");
-    } finally {
-      setUploading(false);
-      e.target.value = "";
-    }
+    } catch (err) { toast.error(err?.response?.data?.detail || "Gagal mengunggah"); }
+    finally { setUploading(false); e.target.value = ""; }
   };
 
-  const download = async (b) => {
+  const download = async (b, format) => {
     try {
-      const r = await api.get(`/brochures/${b.id}/download`, { responseType: "blob" });
+      const q = format ? `?format=${format}` : "";
+      const r = await api.get(`/brochures/${b.id}/download${q}`, { responseType: "blob" });
       const url = URL.createObjectURL(r.data);
       const a = document.createElement("a");
-      a.href = url; a.download = b.filename || "brosur"; a.click();
+      const base = (b.filename || "brosur").replace(/\.[^.]+$/, "");
+      a.href = url;
+      a.download = format === "pdf" ? `${base}.pdf` : (b.filename || "brosur");
+      a.click();
       URL.revokeObjectURL(url);
     } catch { toast.error("Gagal mengunduh"); }
   };
@@ -60,7 +63,7 @@ export function BrochureTab({ pkgId, canManage }) {
   const generate = async () => {
     setGenerating(true);
     try {
-      const res = await api.post(`/packages/${pkgId}/brochures/generate-infographic`, { ...gen, variants: Number(variants), reference_ids: refIds });
+      const res = await api.post(`/packages/${pkgId}/brochures/generate-infographic`, { ...gen, variants: Number(variants), logo_position: logoPos, reference_ids: refIds });
       toast.success(`${res.data.length} varian brosur dibuat AI`);
       await load();
     } catch (err) { toast.error(err?.response?.data?.detail || "Gagal generate brosur AI"); }
@@ -70,8 +73,8 @@ export function BrochureTab({ pkgId, canManage }) {
   const generatePdf = async () => {
     setPdfGen(true);
     try {
-      await api.post(`/packages/${pkgId}/brochures/generate-pdf`, { ...gen, reference_ids: refIds });
-      toast.success("Brosur PDF multi-halaman dibuat");
+      await api.post(`/packages/${pkgId}/brochures/generate-pdf`, { ...gen, logo_position: logoPos, reference_ids: refIds });
+      toast.success("Brosur PDF dibuat");
       await load();
     } catch (err) { toast.error(err?.response?.data?.detail || "Gagal membuat PDF"); }
     finally { setPdfGen(false); }
@@ -87,11 +90,11 @@ export function BrochureTab({ pkgId, canManage }) {
       {canManage && (
         <Card className="border-slate-200"><CardContent className="p-5 space-y-4">
           <div className="flex items-center gap-2 text-sm font-semibold text-slate-800"><Sparkles className="h-4 w-4 text-indigo-600" /> Generate Brosur (AI · Nano Banana)</div>
-          <p className="text-xs text-slate-500">Data paket (nama, harga, durasi, destinasi, itinerary) dipakai otomatis. Isi field opsional agar hasil lebih tajam. Logo & kontak agency ditempelkan otomatis.</p>
+          <p className="text-xs text-slate-500">Data paket (nama, harga, durasi, destinasi) dipakai otomatis. Logo agency (dari Settings) ditempel di bagian atas gambar.</p>
           <div className="grid sm:grid-cols-2 gap-3">
             <div><Label className="text-xs">Tema / Nuansa Warna</Label><Input value={gen.theme} onChange={(e) => setGen({ ...gen, theme: e.target.value })} placeholder="mis. hijau elegan aksen emas" data-testid="gen-theme" /></div>
             <div><Label className="text-xs">Promo / Diskon</Label><Input value={gen.promo} onChange={(e) => setGen({ ...gen, promo: e.target.value })} placeholder="mis. Early bird diskon 10%" data-testid="gen-promo" /></div>
-            <div className="sm:col-span-2"><Label className="text-xs">Highlight Fasilitas</Label><Textarea rows={2} value={gen.highlights} onChange={(e) => setGen({ ...gen, highlights: e.target.value })} placeholder="mis. Hotel bintang 5 dekat Masjidil Haram, maskapai Saudia, bimbingan ustadz" data-testid="gen-highlights" /></div>
+            <div className="sm:col-span-2"><Label className="text-xs">Highlight Fasilitas</Label><Textarea rows={2} value={gen.highlights} onChange={(e) => setGen({ ...gen, highlights: e.target.value })} placeholder="mis. Hotel bintang 5 dekat Masjidil Haram, maskapai Saudia" data-testid="gen-highlights" /></div>
             <div><Label className="text-xs">Ajakan (CTA)</Label><Input value={gen.cta} onChange={(e) => setGen({ ...gen, cta: e.target.value })} placeholder="mis. Booking sekarang: WA 0812-xxxx" data-testid="gen-cta" /></div>
             <div><Label className="text-xs">Catatan Tambahan</Label><Input value={gen.extra} onChange={(e) => setGen({ ...gen, extra: e.target.value })} placeholder="opsional" data-testid="gen-extra" /></div>
             <div><Label className="text-xs">Jumlah Varian</Label>
@@ -101,6 +104,16 @@ export function BrochureTab({ pkgId, canManage }) {
                   <SelectItem value="1">1 varian</SelectItem>
                   <SelectItem value="2">2 varian (beda gaya)</SelectItem>
                   <SelectItem value="3">3 varian (beda gaya)</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div><Label className="text-xs">Posisi Logo</Label>
+              <Select value={logoPos} onValueChange={setLogoPos}>
+                <SelectTrigger data-testid="gen-logo-pos"><SelectValue /></SelectTrigger>
+                <SelectContent className="bg-white">
+                  <SelectItem value="top-left">Atas Kiri</SelectItem>
+                  <SelectItem value="top-center">Atas Tengah</SelectItem>
+                  <SelectItem value="top-right">Atas Kanan</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -125,7 +138,7 @@ export function BrochureTab({ pkgId, canManage }) {
               {generating ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Membuat…</> : <><Sparkles className="h-4 w-4 mr-2" /> Generate Infografis</>}
             </Button>
             <Button variant="outline" onClick={generatePdf} disabled={busy} data-testid="gen-pdf-btn">
-              {pdfGen ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Menyusun PDF…</> : <><FileType2 className="h-4 w-4 mr-2" /> Generate PDF Multi-Halaman</>}
+              {pdfGen ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Menyusun PDF…</> : <><FileType2 className="h-4 w-4 mr-2" /> Generate PDF</>}
             </Button>
             <label className="cursor-pointer inline-flex items-center gap-2 h-10 px-4 rounded-md border text-sm hover:bg-slate-50" data-testid="upload-brochure-label">
               {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />} Upload Brosur / Foto (PDF/Gambar)
@@ -140,27 +153,56 @@ export function BrochureTab({ pkgId, canManage }) {
         <div className="text-center text-slate-400 text-sm py-10 border rounded-md">Belum ada brosur/foto untuk paket ini.</div>
       ) : (
         <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {items.map((b) => (
-            <Card key={b.id} className="border-slate-200 overflow-hidden" data-testid={`brochure-card-${b.id}`}>
-              <div className="h-44 bg-slate-100 flex items-center justify-center overflow-hidden">
-                {b.is_image && b.public_url
-                  ? <img src={b.public_url} alt={b.filename} className="w-full h-full object-cover" />
-                  : <div className="flex flex-col items-center text-slate-300"><FileText className="h-12 w-12" /><span className="text-[10px] mt-1 uppercase">{(b.content_type || "").includes("pdf") ? "PDF" : "FILE"}</span></div>}
-              </div>
-              <CardContent className="p-3 space-y-2">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-xs font-medium text-slate-700 truncate">{b.filename}</span>
-                  <span className={`text-[10px] px-1.5 py-0.5 rounded shrink-0 ${b.kind === "AI" ? "bg-indigo-100 text-indigo-700" : b.kind === "AI_PDF" ? "bg-rose-100 text-rose-700" : "bg-slate-100 text-slate-600"}`}>{b.kind === "AI" ? "AI" : b.kind === "AI_PDF" ? "AI PDF" : "Upload"}</span>
-                </div>
-                <div className="flex gap-2">
-                  <Button size="sm" variant="outline" className="h-8 flex-1" onClick={() => download(b)} data-testid={`download-brochure-${b.id}`}><Download className="h-3.5 w-3.5 mr-1" /> Unduh</Button>
-                  {canManage && <Button size="sm" variant="outline" className="h-8 text-red-600 hover:text-red-700" onClick={() => remove(b)} data-testid={`delete-brochure-${b.id}`}><Trash2 className="h-3.5 w-3.5" /></Button>}
-                </div>
-              </CardContent>
-            </Card>
-          ))}
+          {items.map((b) => {
+            const isPdf = (b.content_type || "").includes("pdf");
+            return (
+              <Card key={b.id} className="border-slate-200 overflow-hidden" data-testid={`brochure-card-${b.id}`}>
+                <button type="button" onClick={() => setPreview(b)} className="block w-full h-44 bg-slate-100 overflow-hidden group relative" data-testid={`preview-brochure-${b.id}`}>
+                  {b.is_image && b.public_url
+                    ? <img src={b.public_url} alt={b.filename} className="w-full h-full object-cover" />
+                    : <div className="flex flex-col items-center justify-center h-full text-slate-300"><FileText className="h-12 w-12" /><span className="text-[10px] mt-1 uppercase">{isPdf ? "PDF" : "FILE"}</span></div>}
+                  <span className="absolute inset-0 bg-black/0 group-hover:bg-black/30 transition-colors flex items-center justify-center opacity-0 group-hover:opacity-100"><Eye className="h-6 w-6 text-white" /></span>
+                </button>
+                <CardContent className="p-3 space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-medium text-slate-700 truncate">{b.filename}</span>
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded shrink-0 ${b.kind === "AI" ? "bg-indigo-100 text-indigo-700" : b.kind === "AI_PDF" ? "bg-rose-100 text-rose-700" : "bg-slate-100 text-slate-600"}`}>{b.kind === "AI" ? "AI" : b.kind === "AI_PDF" ? "AI PDF" : "Upload"}</span>
+                  </div>
+                  <div className="flex gap-1.5">
+                    <Button size="sm" variant="outline" className="h-8 flex-1 text-xs" onClick={() => setPreview(b)} data-testid={`preview-btn-${b.id}`}><Eye className="h-3.5 w-3.5 mr-1" /> Preview</Button>
+                    {b.is_image
+                      ? <>
+                          <Button size="sm" variant="outline" className="h-8 text-xs" onClick={() => download(b, "image")} data-testid={`download-img-${b.id}`}><FileImage className="h-3.5 w-3.5 mr-1" /> Gambar</Button>
+                          <Button size="sm" variant="outline" className="h-8 text-xs" onClick={() => download(b, "pdf")} data-testid={`download-pdf-${b.id}`}><FileType2 className="h-3.5 w-3.5 mr-1" /> PDF</Button>
+                        </>
+                      : <Button size="sm" variant="outline" className="h-8 text-xs" onClick={() => download(b)} data-testid={`download-brochure-${b.id}`}><Download className="h-3.5 w-3.5 mr-1" /> Unduh</Button>}
+                    {canManage && <Button size="sm" variant="outline" className="h-8 text-red-600 hover:text-red-700" onClick={() => remove(b)} data-testid={`delete-brochure-${b.id}`}><Trash2 className="h-3.5 w-3.5" /></Button>}
+                  </div>
+                </CardContent>
+              </Card>
+            );
+          })}
         </div>
       )}
+
+      <Dialog open={!!preview} onOpenChange={(o) => !o && setPreview(null)}>
+        <DialogContent className="max-w-3xl bg-white" data-testid="brochure-preview-dialog">
+          <DialogHeader><DialogTitle className="text-sm truncate">{preview?.filename}</DialogTitle></DialogHeader>
+          {preview && (preview.is_image
+            ? <img src={preview.public_url} alt={preview.filename} className="w-full max-h-[75vh] object-contain rounded" />
+            : <iframe title="preview" src={`${api.defaults.baseURL}/brochures/${preview.id}/download?auth=${localStorage.getItem("token") || ""}`} className="w-full h-[75vh] rounded border" />)}
+          {preview && (
+            <div className="flex gap-2 justify-end pt-2">
+              {preview.is_image
+                ? <>
+                    <Button variant="outline" onClick={() => download(preview, "image")}><FileImage className="h-4 w-4 mr-1" /> Unduh Gambar</Button>
+                    <Button onClick={() => download(preview, "pdf")}><FileType2 className="h-4 w-4 mr-1" /> Unduh PDF</Button>
+                  </>
+                : <Button onClick={() => download(preview)}><Download className="h-4 w-4 mr-1" /> Unduh PDF</Button>}
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

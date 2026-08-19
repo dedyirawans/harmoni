@@ -9214,7 +9214,7 @@ async def upload_brochure(pid: str, file: UploadFile = File(...), user: dict = D
 
 
 @api_router.get("/brochures/{bid}/download")
-async def download_brochure(bid: str, authorization: str = Header(None), auth: str = Query(None)):
+async def download_brochure(bid: str, format: str = Query(None), authorization: str = Header(None), auth: str = Query(None)):
     token = authorization[7:] if (authorization or "").startswith("Bearer ") else auth
     u = await user_from_token(token) if token else None
     if not u:
@@ -9224,7 +9224,29 @@ async def download_brochure(bid: str, authorization: str = Header(None), auth: s
         raise HTTPException(status_code=404, detail="Brosur tidak ditemukan")
     content, ct = get_object(b["storage_path"])
     fn = b.get("original_filename") or "brosur"
-    return Response(content=content, media_type=b.get("content_type") or ct,
+    mt = b.get("content_type") or ct
+    if (format or "").lower() == "pdf" and mt.startswith("image/"):
+        try:
+            import io as _io
+            from reportlab.lib.pagesizes import A4
+            from reportlab.lib.units import mm
+            from reportlab.lib.utils import ImageReader
+            from reportlab.pdfgen import canvas as _rcanvas
+            buf = _io.BytesIO()
+            c = _rcanvas.Canvas(buf, pagesize=A4)
+            PW, PH = A4
+            img = ImageReader(_io.BytesIO(content))
+            iw, ih = img.getSize()
+            ratio = min((PW - 16 * mm) / iw, (PH - 16 * mm) / ih)
+            dw, dh = iw * ratio, ih * ratio
+            c.drawImage(img, (PW - dw) / 2, (PH - dh) / 2, width=dw, height=dh, preserveAspectRatio=True, mask="auto")
+            c.save()
+            content = buf.getvalue()
+            mt = "application/pdf"
+            fn = (fn.rsplit(".", 1)[0] if "." in fn else fn) + ".pdf"
+        except Exception:
+            pass
+    return Response(content=content, media_type=mt,
                     headers={"Content-Disposition": f'attachment; filename="{fn}"'})
 
 
@@ -9262,40 +9284,33 @@ def _fetch_img_bytes(src):
     return None
 
 
-def _stamp_brochure_image(img_bytes, info):
-    """Tempelkan bar logo + kontak agency di bagian bawah gambar brosur."""
+def _stamp_brochure_image(img_bytes, info, position="top-right"):
+    """Tempelkan LOGO agency (dari Settings) di bagian atas gambar brosur."""
     try:
-        from PIL import Image, ImageDraw, ImageFont
+        logo_b = _fetch_img_bytes(info.get("logo_url"))
+        if not logo_b:
+            return img_bytes
+        from PIL import Image
         import io as _io
         im = Image.open(_io.BytesIO(img_bytes)).convert("RGBA")
         W, H = im.size
-        bar_h = max(60, int(H * 0.08))
-        overlay = Image.new("RGBA", (W, bar_h), (15, 23, 42, 225))
-        im.alpha_composite(overlay, (0, H - bar_h))
-        d = ImageDraw.Draw(im)
-        try:
-            f1 = ImageFont.load_default(size=max(16, int(bar_h * 0.32)))
-            f2 = ImageFont.load_default(size=max(12, int(bar_h * 0.24)))
-        except Exception:
-            f1 = ImageFont.load_default()
-            f2 = f1
-        x = 24
-        logo_b = _fetch_img_bytes(info.get("logo_url"))
-        if logo_b:
-            try:
-                lg = Image.open(_io.BytesIO(logo_b)).convert("RGBA")
-                lh = int(bar_h * 0.66)
-                lw = max(1, int(lg.width * (lh / max(1, lg.height))))
-                lg = lg.resize((lw, lh))
-                im.alpha_composite(lg, (x, H - bar_h + (bar_h - lh) // 2))
-                x += lw + 18
-            except Exception:
-                pass
-        name = info.get("company_name") or "Safar Travel"
-        contact = "  ·  ".join([v for v in [info.get("phone"), info.get("website")] if v])
-        d.text((x, H - bar_h + int(bar_h * 0.14)), name, fill=(255, 255, 255, 255), font=f1)
-        if contact:
-            d.text((x, H - bar_h + int(bar_h * 0.55)), contact, fill=(203, 213, 225, 255), font=f2)
+        lg = Image.open(_io.BytesIO(logo_b)).convert("RGBA")
+        lh = max(48, int(H * 0.11))
+        lw = max(1, int(lg.width * (lh / max(1, lg.height))))
+        lg = lg.resize((lw, lh))
+        margin = max(18, int(W * 0.03))
+        pos = (position or "top-right").lower()
+        if "left" in pos or "kiri" in pos:
+            x = margin
+        elif "center" in pos or "tengah" in pos:
+            x = (W - lw) // 2
+        else:
+            x = W - lw - margin
+        y = margin
+        pad = int(lh * 0.16)
+        bg = Image.new("RGBA", (lw + 2 * pad, lh + 2 * pad), (255, 255, 255, 175))
+        im.alpha_composite(bg, (max(0, x - pad), max(0, y - pad)))
+        im.alpha_composite(lg, (x, y))
         out = _io.BytesIO()
         im.convert("RGB").save(out, format="PNG")
         return out.getvalue()
@@ -9326,12 +9341,11 @@ def _brochure_prompt(pkg, itin_txt, price, theme, highlights, promo, cta, extra,
         f"Destinasi: {pkg.get('destination') or pkg.get('country') or '-'}. Durasi: {pkg.get('duration') or '-'}. "
         + (f"Harga mulai Rp{price:,}/pax. " if price else "")
         + (f"Highlight fasilitas: {highlights}. " if highlights else "")
-        + f"Ringkasan itinerary: {itin_txt}. "
         + (f"Promo: {promo}. " if promo else "")
         + (f"Ajakan (CTA) di bagian bawah: {cta}. " if cta else "")
         + (f"Catatan tambahan: {extra}. " if extra else "")
         + ("Gunakan FOTO REFERENSI terlampir sebagai elemen visual utama (mis. foto hotel/destinasi), integrasikan secara natural. " if has_ref else "")
-        + "Sertakan nuansa Islami/perjalanan yang relevan bila ini paket Umrah. Sisakan ruang kosong di bagian paling bawah untuk footer. Tata letak bersih dan profesional."
+        + "Sertakan nuansa Islami/perjalanan yang relevan bila ini paket Umrah. JANGAN memuat jadwal/itinerary harian. Sisakan ruang kosong di bagian ATAS untuk logo agency. Tata letak bersih dan profesional."
     )
     return p
 
@@ -9379,7 +9393,7 @@ async def generate_brochure_infographic(pid: str, body: dict, user: dict = Depen
             continue
         if not raw:
             continue
-        img_bytes = _stamp_brochure_image(raw, info)
+        img_bytes = _stamp_brochure_image(raw, info, (body.get("logo_position") or "top-right"))
         bid = str(_uuid.uuid4())
         path = f"{_APP_NAME}/brochures/{pid}/{bid}.png"
         result = put_object(path, img_bytes, "image/png")
@@ -9414,7 +9428,7 @@ async def generate_brochure_pdf(pid: str, body: dict, user: dict = Depends(requi
         cover_raw = await _nano_banana_image(cover_prompt, ref_imgs, f"brochure-pdf-{pid}")
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Gagal generate cover AI: {str(e)[:160]}")
-    cover_bytes = _stamp_brochure_image(cover_raw, info) if cover_raw else None
+    cover_bytes = _stamp_brochure_image(cover_raw, info, (body.get("logo_position") or "top-right")) if cover_raw else None
     try:
         import io as _io
         from reportlab.lib.pagesizes import A4
@@ -9455,29 +9469,7 @@ async def generate_brochure_pdf(pid: str, body: dict, user: dict = Depends(requi
         footer()
         c.showPage()
 
-        # Page 2: itinerary
-        c.setFillColorRGB(0.1, 0.1, 0.12)
-        c.setFont("Helvetica-Bold", 18)
-        c.drawString(15 * mm, PH - 25 * mm, f"Itinerary — {(pkg.get('package_name') or '')[:38]}")
-        y = PH - 36 * mm
-        for it in itins:
-            if y < 24 * mm:
-                footer(); c.showPage(); y = PH - 25 * mm
-            c.setFillColorRGB(0.1, 0.1, 0.12); c.setFont("Helvetica-Bold", 11)
-            c.drawString(15 * mm, y, f"Hari {it.get('day')}: {(it.get('activity') or it.get('location') or '')[:80]}")
-            y -= 6 * mm
-            det = "  ·  ".join([v for v in [it.get("hotel"), it.get("meal"), it.get("transport")] if v])
-            if det:
-                c.setFont("Helvetica", 9); c.setFillColorRGB(0.4, 0.4, 0.45)
-                c.drawString(18 * mm, y, det[:100]); y -= 6 * mm
-            y -= 2 * mm
-        if not itins:
-            c.setFont("Helvetica", 11); c.setFillColorRGB(0.5, 0.5, 0.5)
-            c.drawString(15 * mm, y, "Itinerary belum tersedia.")
-        footer()
-        c.showPage()
-
-        # Page 3: harga & fasilitas
+        # Page 2: harga & fasilitas
         c.setFillColorRGB(0.1, 0.1, 0.12); c.setFont("Helvetica-Bold", 18)
         c.drawString(15 * mm, PH - 25 * mm, "Harga & Fasilitas")
         y = PH - 38 * mm
@@ -9508,7 +9500,7 @@ async def generate_brochure_pdf(pid: str, body: dict, user: dict = Depends(requi
     rec = {"id": bid, "package_id": pid, "kind": "AI_PDF", "storage_path": result["path"], "content_type": "application/pdf",
            "original_filename": f"brosur-{(pkg.get('package_name') or 'paket')[:24]}.pdf", "size": result.get("size", len(pdf_bytes)),
            "is_deleted": False, "created_by": user["name"], "created_at": now_iso(),
-           "gen_meta": {"theme": theme, "pages": ["cover", "itinerary", "harga"]}}
+           "gen_meta": {"theme": theme, "pages": ["cover", "harga"]}}
     await db.package_brochures.insert_one(rec)
     return _brochure_out(rec)
 
