@@ -1,3 +1,12 @@
+## Brosur Paket: Upload/Download + Generate Infografis AI (2026-06) — DONE ✅ (AI E2E tervalidasi)
+- **Lokasi**: tab "Brosur" di halaman Detail Paket (Product Management). Super Admin (product.manage) upload/generate/hapus; Sales (product.view) melihat & download.
+- **Backend** (server.py, koleksi `package_brochures`):
+  - `GET /packages/{pid}/brochures` (view) · `POST /packages/{pid}/brochures` upload PDF/gambar ≤15MB (manage) · `GET /brochures/{bid}/download` (auth header atau ?auth) attachment · `DELETE /brochures/{bid}` soft-delete (manage) · `GET /public/brochure/{bid}?sig=HMAC` (serve publik untuk provider WA).
+  - `POST /packages/{pid}/brochures/generate-infographic` (manage): bangun prompt Indonesia dari data paket (nama/harga/durasi/destinasi/itinerary) + form (theme, highlights, promo, cta, extra) → **Gemini Nano Banana** `gemini-3.1-flash-image-preview` via emergentintegrations (EMERGENT_LLM_KEY) → simpan PNG ke Object Storage, record kind=AI. Verified E2E: menghasilkan infografis 761KB (tema hijau-emas, highlight fasilitas, itinerary, CTA).
+- **Frontend**: komponen `components/BrochureTab.jsx` — form generate + tombol Generate/Upload + galeri kartu brosur (preview gambar, badge AI/Upload, Unduh, Hapus). Terhubung di `ProductDetail.jsx` (tab-brochures).
+- **Integrasi WhatsApp brosur cepat**: `brochure-packages` kini menyertakan paket yang punya brosur gambar (atau cover); `send-brochure` otomatis memilih brosur GAMBAR terbaru (termasuk infografis AI) via URL publik ber-sig, fallback ke cover_image.
+
+
 ## Kirim Brosur Cepat (one-tap package brochure) (2026-06) — DONE ✅ (live send terkonfirmasi)
 - Backend: `GET /whatsapp/brochure-packages` (paket ACTIVE yang punya cover_image) + `POST /whatsapp/conversations/{cid}/send-brochure` {package_id, caption?}. Caption otomatis: nama paket + destinasi·durasi + "Mulai Rp…/pax" + promo_text. Cover http(s) → dipakai langsung sebagai media_url; base64/data → decode → Object Storage → URL publik ber-sig. Cek `_wa_outbound_allowed`, simpan pesan (media_type=image), update conversation.
 - Frontend `WhatsAppIntegration.jsx` MonitorTab: baris "Brosur cepat:" berisi tombol per paket (data-testid `wa-brochure-{id}`) — sekali klik kirim brosur ke conversation terpilih.

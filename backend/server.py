@@ -9090,10 +9090,12 @@ async def wa_brochure_packages(user: dict = Depends(require_role("super_admin"))
     docs = await db.packages.find({"status": "ACTIVE"}).sort("created_at", -1).to_list(60)
     out = []
     for p in docs:
+        pid_s = str(p["_id"])
         cov = (p.get("cover_image") or "").strip()
-        if not cov:
+        has_bro = await db.package_brochures.find_one({"package_id": pid_s, "is_deleted": {"$ne": True}, "content_type": {"$regex": "^image/"}})
+        if not cov and not has_bro:
             continue
-        out.append({"id": str(p["_id"]), "package_name": p.get("package_name"),
+        out.append({"id": pid_s, "package_name": p.get("package_name"),
                     "selling_price": p.get("selling_price"), "destination": p.get("destination"),
                     "duration": p.get("duration")})
     return out
@@ -9108,9 +9110,14 @@ async def wa_send_brochure(cid: str, body: dict, user: dict = Depends(require_ro
     pkg = await db.packages.find_one({"_id": ObjectId(pid)}) if pid and ObjectId.is_valid(pid) else None
     if not pkg:
         raise HTTPException(status_code=404, detail="Package tidak ditemukan")
-    cov = (pkg.get("cover_image") or "").strip()
+    latest_bro = await db.package_brochures.find_one({"package_id": pid, "is_deleted": {"$ne": True}, "content_type": {"$regex": "^image/"}}, sort=[("created_at", -1)])
+    cov = ""
+    if latest_bro:
+        cov = f"{_public_base({})}/api/public/brochure/{latest_bro['id']}?sig={_brochure_sig(latest_bro['id'])}"
     if not cov:
-        raise HTTPException(status_code=400, detail="Paket belum memiliki gambar brosur (cover image)")
+        cov = (pkg.get("cover_image") or "").strip()
+    if not cov:
+        raise HTTPException(status_code=400, detail="Paket belum memiliki brosur/gambar. Upload atau generate brosur dulu.")
     allowed, _r = await _wa_outbound_allowed(conv.get("customer_id"))
     if not allowed:
         raise HTTPException(status_code=400, detail=f"Pengiriman diblokir: {_r}")
@@ -9162,6 +9169,132 @@ async def wa_send_brochure(cid: str, body: dict, user: dict = Depends(require_ro
     await db.whatsapp_conversations.update_one({"_id": conv["_id"]}, {"$set": {
         "last_message": ("[brosur] " + (pkg.get("package_name") or ""))[:200], "last_activity": now_iso(), "status": "WAITING CUSTOMER"}})
     return serialize(msg)
+
+
+# ---------- Package Brochures (upload/generate/download) ----------
+def _brochure_sig(bid):
+    return _hmac.new(os.environ["JWT_SECRET"].encode(), f"brochure:{bid}".encode(), _hashlib.sha256).hexdigest()[:32]
+
+
+def _brochure_out(b):
+    is_img = (b.get("content_type") or "").startswith("image/")
+    return {"id": b["id"], "package_id": b.get("package_id"), "kind": b.get("kind"),
+            "content_type": b.get("content_type"), "filename": b.get("original_filename"),
+            "size": b.get("size"), "created_at": b.get("created_at"), "created_by": b.get("created_by"),
+            "is_image": is_img,
+            "public_url": (f"{_public_base({})}/api/public/brochure/{b['id']}?sig={_brochure_sig(b['id'])}" if is_img else None)}
+
+
+@api_router.get("/packages/{pid}/brochures")
+async def list_brochures(pid: str, user: dict = Depends(require_any_permission("product.view", "product.manage", "packages.view"))):
+    docs = await db.package_brochures.find({"package_id": pid, "is_deleted": {"$ne": True}}).sort("created_at", -1).to_list(100)
+    return [_brochure_out(b) for b in docs]
+
+
+@api_router.post("/packages/{pid}/brochures")
+async def upload_brochure(pid: str, file: UploadFile = File(...), user: dict = Depends(require_permission("product.manage"))):
+    pkg = await db.packages.find_one({"_id": ObjectId(pid)}) if ObjectId.is_valid(pid) else None
+    if not pkg:
+        raise HTTPException(status_code=404, detail="Package tidak ditemukan")
+    ct = file.content_type or "application/octet-stream"
+    if not (ct.startswith("image/") or ct == "application/pdf"):
+        raise HTTPException(status_code=400, detail="Hanya file PDF atau gambar (JPG/PNG) yang diperbolehkan")
+    data = await file.read()
+    if len(data) > 15 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Ukuran file maksimal 15MB")
+    bid = str(_uuid.uuid4())
+    ext = file.filename.split(".")[-1].lower() if file.filename and "." in file.filename else ("pdf" if ct == "application/pdf" else "png")
+    path = f"{_APP_NAME}/brochures/{pid}/{bid}.{ext}"
+    result = put_object(path, data, ct)
+    rec = {"id": bid, "package_id": pid, "kind": "UPLOAD", "storage_path": result["path"], "content_type": ct,
+           "original_filename": file.filename or f"brosur.{ext}", "size": result.get("size", len(data)),
+           "is_deleted": False, "created_by": user["name"], "created_at": now_iso()}
+    await db.package_brochures.insert_one(rec)
+    return _brochure_out(rec)
+
+
+@api_router.get("/brochures/{bid}/download")
+async def download_brochure(bid: str, authorization: str = Header(None), auth: str = Query(None)):
+    token = authorization[7:] if (authorization or "").startswith("Bearer ") else auth
+    u = await user_from_token(token) if token else None
+    if not u:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    b = await db.package_brochures.find_one({"id": bid, "is_deleted": {"$ne": True}})
+    if not b:
+        raise HTTPException(status_code=404, detail="Brosur tidak ditemukan")
+    content, ct = get_object(b["storage_path"])
+    fn = b.get("original_filename") or "brosur"
+    return Response(content=content, media_type=b.get("content_type") or ct,
+                    headers={"Content-Disposition": f'attachment; filename="{fn}"'})
+
+
+@api_router.delete("/brochures/{bid}")
+async def delete_brochure(bid: str, user: dict = Depends(require_permission("product.manage"))):
+    r = await db.package_brochures.update_one({"id": bid}, {"$set": {"is_deleted": True, "deleted_at": now_iso()}})
+    if not r.matched_count:
+        raise HTTPException(status_code=404, detail="Brosur tidak ditemukan")
+    return {"deleted": True}
+
+
+@api_router.get("/public/brochure/{bid}")
+async def public_brochure(bid: str, sig: str = Query("")):
+    if not sig or not _hmac.compare_digest(sig, _brochure_sig(bid)):
+        raise HTTPException(status_code=403, detail="Invalid signature")
+    b = await db.package_brochures.find_one({"id": bid, "is_deleted": {"$ne": True}})
+    if not b:
+        raise HTTPException(status_code=404, detail="Not found")
+    content, ct = get_object(b["storage_path"])
+    return Response(content=content, media_type=b.get("content_type") or ct)
+
+
+@api_router.post("/packages/{pid}/brochures/generate-infographic")
+async def generate_brochure_infographic(pid: str, body: dict, user: dict = Depends(require_permission("product.manage"))):
+    pkg = await db.packages.find_one({"_id": ObjectId(pid)}) if ObjectId.is_valid(pid) else None
+    if not pkg:
+        raise HTTPException(status_code=404, detail="Package tidak ditemukan")
+    itins = await db.package_itineraries.find({"package_id": pid}).sort("day", 1).to_list(30)
+    itin_txt = "; ".join(f"Hari {i.get('day')}: {i.get('activity') or i.get('location') or ''}" for i in itins[:8]) or "-"
+    price = int(pkg.get("selling_price") or 0)
+    theme = (body.get("theme") or "hijau elegan dengan aksen emas").strip()
+    highlights = (body.get("highlights") or "").strip()
+    promo = (body.get("promo") or "").strip()
+    cta = (body.get("cta") or "").strip()
+    extra = (body.get("extra") or "").strip()
+    prompt = (
+        "Buatkan POSTER INFOGRAFIS BROSUR PARIWISATA format potret (portrait) yang menarik, modern, rapi, "
+        "layak cetak, dengan hierarki teks yang jelas dan ikon sederhana. Semua teks dalam BAHASA INDONESIA dan dieja dengan benar. "
+        f"Tema warna: {theme}. "
+        f"JUDUL BESAR: {pkg.get('package_name','Paket Wisata')}. "
+        f"Destinasi: {pkg.get('destination') or pkg.get('country') or '-'}. Durasi: {pkg.get('duration') or '-'}. "
+        + (f"Harga mulai Rp{price:,}/pax. " if price else "")
+        + (f"Highlight fasilitas: {highlights}. " if highlights else "")
+        + f"Ringkasan itinerary: {itin_txt}. "
+        + (f"Promo: {promo}. " if promo else "")
+        + (f"Ajakan (CTA) di bagian bawah: {cta}. " if cta else "")
+        + (f"Catatan tambahan: {extra}. " if extra else "")
+        + "Sertakan nuansa Islami/perjalanan yang relevan bila ini paket Umrah. Jangan menaruh watermark. Tata letak bersih dan profesional."
+    )
+    try:
+        from emergentintegrations.llm.chat import LlmChat, UserMessage
+        chat = LlmChat(api_key=os.environ["EMERGENT_LLM_KEY"], session_id=f"brochure-{pid}-{_uuid.uuid4()}",
+                       system_message="You are a professional graphic designer creating travel brochure infographics.")
+        chat.with_model("gemini", "gemini-3.1-flash-image-preview").with_params(modalities=["image", "text"])
+        _txt, images = await chat.send_message_multimodal_response(UserMessage(text=prompt))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Gagal generate brosur AI: {str(e)[:160]}")
+    if not images:
+        raise HTTPException(status_code=502, detail="AI tidak menghasilkan gambar. Coba lagi atau ubah input.")
+    import base64 as _b64
+    img_bytes = _b64.b64decode(images[0]["data"])
+    bid = str(_uuid.uuid4())
+    path = f"{_APP_NAME}/brochures/{pid}/{bid}.png"
+    result = put_object(path, img_bytes, "image/png")
+    rec = {"id": bid, "package_id": pid, "kind": "AI", "storage_path": result["path"], "content_type": "image/png",
+           "original_filename": f"brosur-ai-{(pkg.get('package_name') or 'paket')[:30]}.png", "size": result.get("size", len(img_bytes)),
+           "is_deleted": False, "created_by": user["name"], "created_at": now_iso(),
+           "gen_meta": {"theme": theme, "highlights": highlights, "promo": promo, "cta": cta}}
+    await db.package_brochures.insert_one(rec)
+    return _brochure_out(rec)
 
 
 @api_router.get("/whatsapp/logs")

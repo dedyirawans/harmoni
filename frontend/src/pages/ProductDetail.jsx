@@ -5,6 +5,7 @@ import { useAuth } from "@/context/AuthContext";
 import { fmtIDR, fmtDate } from "@/config/crm";
 import { PACKAGE_STATUSES, ROOM_TYPES, PKG_STATUS_COLORS, DEP_STATUS_COLORS, UMRAH_FIELDS, COST_COMPONENTS, PRODUCT_TYPES, subLabel } from "@/config/product";
 import { ProductAdvancedFields } from "@/components/ProductAdvancedFields";
+import { BrochureTab } from "@/components/BrochureTab";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -77,6 +78,7 @@ export default function ProductDetail() {
           <TabsTrigger value="overview" data-testid="tab-overview">Overview</TabsTrigger>
           <TabsTrigger value="itinerary" data-testid="tab-itinerary">Itinerary</TabsTrigger>
           <TabsTrigger value="departures" data-testid="tab-departures">Departures</TabsTrigger>
+          <TabsTrigger value="brochures" data-testid="tab-brochures">Brosur</TabsTrigger>
           {isUmrah && <TabsTrigger value="umrah" data-testid="tab-umrah">Umrah</TabsTrigger>}
           {canHpp && <TabsTrigger value="costing" data-testid="tab-costing">Costing / HPP</TabsTrigger>}
           {canManage && <TabsTrigger value="versions" data-testid="tab-versions">Versions</TabsTrigger>}
@@ -129,6 +131,10 @@ export default function ProductDetail() {
 
         <TabsContent value="departures">
           <DeparturesTab items={data.departures} canManage={canManage} onAdd={() => setDepOpen(true)} pkgId={id} onChange={load} />
+        </TabsContent>
+
+        <TabsContent value="brochures">
+          <BrochureTab pkgId={id} canManage={canManage} />
         </TabsContent>
 
         {isUmrah && (
