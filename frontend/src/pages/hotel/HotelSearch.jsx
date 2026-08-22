@@ -33,8 +33,9 @@ function StarRow({ n }) {
 }
 
 export default function HotelSearch() {
-  const { hasPerm } = useAuth();
-  const canQuote = hasPerm("quotation.manage");
+  const { user } = useAuth();
+  const canQuote = ["super_admin", "sales", "accounting"].includes(user?.role);
+  const isAdmin = user?.role === "super_admin";
 
   const [searchType, setSearchType] = useState("city");
   const [common, setCommon] = useState({
@@ -190,9 +191,13 @@ export default function HotelSearch() {
               </div>
             ) : (
               <div className="space-y-1 lg:col-span-2">
+                <Label>Kota (untuk memfilter hotel)</Label>
+                <CityCombobox value={city.cityId} onChange={(v) => setCt("cityId", v)} />
+              </div>
+              <div className="space-y-1 lg:col-span-2">
                 <Label>Hotel (cari by nama)</Label>
-                <HotelPicker onChange={(ids) => setHotelIds(ids.join(", "))} />
-                <p className="text-[11px] text-slate-400">Cari hotel berdasarkan nama dari database Agoda, atau ketik Hotel ID manual.</p>
+                <HotelPicker cityId={Number(city.cityId) || undefined} onChange={(ids) => setHotelIds(ids.join(", "))} />
+                <p className="text-[11px] text-slate-400">Hasil dibatasi ke kota terpilih. Ketik nama hotel, atau Hotel ID manual.</p>
               </div>
             )}
             <div className="space-y-1">
@@ -420,11 +425,11 @@ export default function HotelSearch() {
                   {Number(detail.discountPercentage) > 0 && <Badge className="bg-red-500 hover:bg-red-500">{Math.round(detail.discountPercentage)}% OFF</Badge>}
                 </div>
                 <div className="flex gap-2">
-                  {detail.landingURL ? (
+                  {isAdmin && detail.landingURL ? (
                     <a href={detail.landingURL} target="_blank" rel="noreferrer" className="flex-1" data-testid="hotel-detail-book">
                       <Button className="w-full"><ExternalLink className="h-4 w-4 mr-2" />Book on Agoda</Button>
                     </a>
-                  ) : <p className="text-xs text-slate-400 flex-1">Tautan pemesanan tidak tersedia.</p>}
+                  ) : <p className="text-xs text-slate-400 flex-1 self-center">{isAdmin ? "Tautan pemesanan tidak tersedia." : "Booking ke Agoda hanya oleh Super Admin."}</p>}
                   {canQuote && (
                     <Button variant="outline" onClick={() => { setAddHotel(detail); setDetail(null); }} data-testid="hotel-detail-addquote">
                       <FilePlus2 className="h-4 w-4 mr-2" />Ke Quotation

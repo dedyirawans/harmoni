@@ -5,6 +5,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
+import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Loader2, Hotel } from "lucide-react";
 
@@ -18,24 +20,30 @@ const nightsBetween = (ci, co) => {
 };
 
 export default function AddToQuotationDialog({ open, onClose, hotel, searchCtx, customers, defaultCustomerId, onDone }) {
-  const [mode, setMode] = useState("existing"); // existing | new
+  const [mode, setMode] = useState("existing");
   const [customerId, setCustomerId] = useState(defaultCustomerId || "");
   const [nc, setNc] = useState({ full_name: "", whatsapp: "", email: "" });
   const [rooms, setRooms] = useState(1);
-  const [target, setTarget] = useState("new"); // "new" | quotationId
+  const [roomType, setRoomType] = useState("");
+  const [breakfast, setBreakfast] = useState(false);
+  const [special, setSpecial] = useState("");
+  const [target, setTarget] = useState("new");
   const [quotations, setQuotations] = useState([]);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (open) {
       setCustomerId(defaultCustomerId || "");
-      setMode(defaultCustomerId ? "existing" : "existing");
+      setMode("existing");
       setTarget("new");
       setRooms(1);
       setNc({ full_name: "", whatsapp: "", email: "" });
+      setRoomType(hotel?.roomtypeName || "");
+      setBreakfast(!!hotel?.includeBreakfast);
+      setSpecial("");
       api.get("/quotations").then((r) => setQuotations(r.data || [])).catch(() => {});
     }
-  }, [open, defaultCustomerId]);
+  }, [open, defaultCustomerId, hotel]);
 
   const custQuotations = useMemo(
     () => (quotations || []).filter((q) => q.customer_id === customerId && ["DRAFT", "SENT"].includes(q.status) && !q.converted_booking_id),
@@ -54,13 +62,14 @@ export default function AddToQuotationDialog({ open, onClose, hotel, searchCtx, 
       const payload = {
         sales_pic_id: null,
         hotel: {
-          hotelId: hotel.hotelId, hotelName: hotel.hotelName, roomtypeName: hotel.roomtypeName,
+          hotelId: hotel.hotelId, hotelName: hotel.hotelName, roomtypeName: roomType || hotel.roomtypeName,
           checkInDate: searchCtx.checkInDate, checkOutDate: searchCtx.checkOutDate, numberOfRooms: Number(rooms) || 1,
           numberOfAdults: Number(searchCtx.adults) || 1, numberOfChildren: Number(searchCtx.children) || 0,
           currency: hotel.currency || searchCtx.currency || "IDR", dailyRate: Number(hotel.dailyRate) || 0,
           crossedOutRate: hotel.crossedOutRate, discountPercentage: hotel.discountPercentage,
+          agodaBaseRate: hotel.agodaBaseRate, markupPct: hotel.markupPct,
           landingURL: hotel.landingURL, imageURL: hotel.imageURL,
-          includeBreakfast: hotel.includeBreakfast, freeWifi: hotel.freeWifi, source: "AGODA_API",
+          includeBreakfast: breakfast, freeWifi: hotel.freeWifi, specialRequest: special, source: "AGODA_API",
         },
       };
       if (mode === "new") payload.new_customer = nc; else payload.customer_id = customerId;
@@ -78,7 +87,7 @@ export default function AddToQuotationDialog({ open, onClose, hotel, searchCtx, 
 
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-w-lg" data-testid="hotel-addquote-dialog">
+      <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto" data-testid="hotel-addquote-dialog">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2"><Hotel className="h-4 w-4 text-blue-600" />Tambah ke Quotation</DialogTitle>
         </DialogHeader>
@@ -110,25 +119,40 @@ export default function AddToQuotationDialog({ open, onClose, hotel, searchCtx, 
             </div>
           )}
 
+          <div className="space-y-1">
+            <Label>Tipe Kamar (dari Agoda)</Label>
+            <Input value={roomType} onChange={(e) => setRoomType(e.target.value)} placeholder="mis. Deluxe Double Room" data-testid="addquote-roomtype" />
+          </div>
+
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1">
               <Label>Jumlah Kamar</Label>
               <Input type="number" min="1" value={rooms} onChange={(e) => setRooms(e.target.value)} data-testid="addquote-rooms" />
             </div>
-            <div className="space-y-1">
-              <Label>Quotation Tujuan</Label>
-              <Select value={target} onValueChange={setTarget}>
-                <SelectTrigger data-testid="addquote-target-select"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="new">Buat Quotation Baru</SelectItem>
-                  {custQuotations.map((q) => <SelectItem key={q._id} value={q._id}>{q.quotation_number} ({q.status})</SelectItem>)}
-                </SelectContent>
-              </Select>
+            <div className="flex items-center gap-3 pt-6">
+              <Switch checked={breakfast} onCheckedChange={setBreakfast} data-testid="addquote-breakfast" />
+              <Label className="cursor-pointer">Termasuk Sarapan</Label>
             </div>
           </div>
 
+          <div className="space-y-1">
+            <Label>Special Request</Label>
+            <Textarea value={special} onChange={(e) => setSpecial(e.target.value)} rows={2} placeholder="mis. Kamar non-smoking, lantai atas, twin bed…" data-testid="addquote-special" />
+          </div>
+
+          <div className="space-y-1">
+            <Label>Quotation Tujuan</Label>
+            <Select value={target} onValueChange={setTarget}>
+              <SelectTrigger data-testid="addquote-target-select"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="new">Buat Quotation Baru</SelectItem>
+                {custQuotations.map((q) => <SelectItem key={q._id} value={q._id}>{q.quotation_number} ({q.status})</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+
           <div className="rounded-lg border border-blue-100 bg-blue-50 p-3 text-sm flex items-center justify-between">
-            <span className="text-slate-600">{rupiah(hotel?.dailyRate, hotel?.currency)} × {nights} mlm × {rooms} kmr</span>
+            <span className="text-slate-600">{rupiah(hotel?.dailyRate, hotel?.currency)} × {nights} mlm × {rooms} kmr{hotel?.markupPct ? ` (harga +${hotel.markupPct}%)` : ""}</span>
             <span className="font-bold text-blue-700" data-testid="addquote-total">{rupiah(total, hotel?.currency)}</span>
           </div>
         </div>

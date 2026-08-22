@@ -6,7 +6,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { Plus, X, Building2 } from "lucide-react";
 
-export default function HotelPicker({ onChange }) {
+export default function HotelPicker({ cityId, onChange }) {
   const [open, setOpen] = useState(false);
   const [results, setResults] = useState([]);
   const [query, setQuery] = useState("");
@@ -20,11 +20,11 @@ export default function HotelPicker({ onChange }) {
     const q = query.trim();
     if (!q) { setResults([]); return; }
     timer.current = setTimeout(() => {
-      api.get("/hotel/hotels/search", { params: { q, limit: 20 } })
+      api.get("/hotel/hotels/search", { params: { q, cityId: cityId || undefined, limit: 20 } })
         .then((r) => setResults(r.data || [])).catch(() => {});
     }, 300);
     return () => clearTimeout(timer.current);
-  }, [query]);
+  }, [query, cityId]);
 
   const add = (h) => {
     setSelected((s) => (s.some((x) => x.hotelId === h.hotelId) ? s : [...s, h]));

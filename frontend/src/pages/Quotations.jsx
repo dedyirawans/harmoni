@@ -182,6 +182,7 @@ export default function Quotations() {
                   <p className="font-semibold text-slate-800">{hi.hotelName}</p>
                   {hi.roomtypeName && <p className="text-xs text-slate-500">{hi.roomtypeName}</p>}
                   <p className="text-xs text-slate-500">{hi.checkInDate} → {hi.checkOutDate} · {hi.nights} malam × {hi.numberOfRooms} kamar · {hi.numberOfAdults}D/{hi.numberOfChildren}A</p>
+                  {(hi.includeBreakfast || hi.specialRequest) && <p className="text-xs text-slate-500">{hi.includeBreakfast ? "Termasuk sarapan" : "Tanpa sarapan"}{hi.specialRequest ? ` · Permintaan: ${hi.specialRequest}` : ""}</p>}
                   <p className="text-xs text-slate-400">Sumber: {hi.source || "AGODA_API"} · Rate {fmtIDR(hi.agoda_daily_rate)}/malam</p>
                 </div>
                 <div className="text-right shrink-0">

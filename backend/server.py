@@ -502,7 +502,9 @@ def _hotel_item_snapshot(it: dict):
             "crossedOutRate": it.get("crossedOutRate"), "discountPercentage": it.get("discountPercentage"),
             "total": round(rate * nights * rooms), "landingURL": it.get("landingURL") or "",
             "imageURL": it.get("imageURL") or "", "includeBreakfast": it.get("includeBreakfast"),
-            "freeWifi": it.get("freeWifi"), "source": it.get("source") or "AGODA_API", "added_at": now_iso()}
+            "freeWifi": it.get("freeWifi"), "specialRequest": (it.get("specialRequest") or "").strip(),
+            "agoda_base_rate": it.get("agodaBaseRate"), "markup_pct": it.get("markupPct"),
+            "source": it.get("source") or "AGODA_API", "added_at": now_iso()}
 
 
 async def _hotel_log(user, req_type, search_type, params, status, ms, count, err_code=None, err_msg=None):
@@ -654,6 +656,14 @@ async def _agoda_call(criteria, user, search_type="city", log_meta=None, req_typ
                 data = {}
             raw = data.get("results") or data.get("Results") or []
             results = [_normalize_hotel(r) for r in raw]
+            _mk = float(s.get("markup_pct", 15) or 0)
+            for _h in results:
+                _h["markupPct"] = _mk
+                if _h.get("dailyRate"):
+                    _h["agodaBaseRate"] = _h["dailyRate"]
+                    _h["dailyRate"] = round(float(_h["dailyRate"]) * (1 + _mk / 100))
+                if _h.get("crossedOutRate"):
+                    _h["crossedOutRate"] = round(float(_h["crossedOutRate"]) * (1 + _mk / 100))
             count = len(results)
         elif status_code == 204:
             err_msg = "No content"
@@ -796,7 +806,9 @@ async def _resolve_or_create_customer(body: "HotelAddToQuotation", user):
 
 @api_router.post("/hotel/add-to-quotation")
 async def hotel_add_to_quotation(body: HotelAddToQuotation, request: Request,
-                                 user: dict = Depends(require_permission("quotation.manage"))):
+                                 user: dict = Depends(get_current_user)):
+    if user["role"] not in ("super_admin", "sales", "accounting"):
+        raise HTTPException(status_code=403, detail="Tidak diizinkan membuat quotation hotel.")
     cid, cust = await _resolve_or_create_customer(body, user)
     snap = _hotel_item_snapshot(body.hotel or {})
     if not snap.get("hotelName") or snap.get("nights", 0) <= 0:
@@ -851,7 +863,9 @@ async def hotel_add_to_quotation(body: HotelAddToQuotation, request: Request,
 
 
 @api_router.get("/hotel/stats")
-async def hotel_stats(user: dict = Depends(require_permission("quotation.manage"))):
+async def hotel_stats(user: dict = Depends(get_current_user)):
+    if user["role"] not in ("super_admin", "sales", "accounting"):
+        raise HTTPException(status_code=403, detail="403 Forbidden")
     log_q = {"request_type": "SEARCH"}
     if user["role"] == "sales":
         log_q["by"] = user["name"]
@@ -4991,6 +5005,13 @@ def build_document_pdf(kind: str, data: dict, company: dict, itineraries=None, t
             nm = hi.get("hotelName", "")
             if hi.get("roomtypeName"):
                 nm += f"<br/><font size=7 color='#64748b'>{hi.get('roomtypeName')}</font>"
+            _ex = []
+            if hi.get("includeBreakfast"):
+                _ex.append("Termasuk sarapan")
+            if hi.get("specialRequest"):
+                _ex.append("Permintaan: " + str(hi.get("specialRequest")))
+            if _ex:
+                nm += f"<br/><font size=7 color='#64748b'>{' · '.join(_ex)}</font>"
             hrows.append([Paragraph(nm, small), hi.get("checkInDate", ""), hi.get("checkOutDate", ""),
                           str(hi.get("nights", 0)), str(hi.get("numberOfRooms", 1)),
                           _money(hi.get("agoda_daily_rate")), _money(hi.get("total"))])
