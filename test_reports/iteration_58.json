@@ -1,0 +1,32 @@
+{
+  "summary": "PHASE HOTEL-3 backend + frontend testing complete. Created /app/backend/tests/test_hotel3_addquotation.py (13 tests, all PASS): create hotel-only quotation with correct nights/rooms/total math (1.5M × 3 × 2 = 9M), append second hotel_item to existing quotation with correct hotel_total sum, customer dedupe by whatsapp (reuses existing) and brand-new customer creation, sales_activities entry with source=AGODA_API + quotation_id, customer-360 timeline contains 'hotel' kind and a 'Hotel Search' entry after POST /api/hotel/search with customer_id, GET /api/hotel/stats returns {hotel_searches, hotel_quotations, hotel_revenue} for admin & sales (scoped), Accounting 403 on POST /api/hotel/add-to-quotation (no quotation.manage), Sales 200 on same endpoint, PDF for a quotation with hotel_items returns 200 application/pdf ~200KB. Frontend verified via Playwright as Super Admin, Sales, and Accounting: /hotel shows hotel-stats + hotel-stat-searches/quotations/revenue strip; /quotations shows 8 quot-hotel-badge-* elements and 8 quot-hotel-total-* lines (e.g. '+ Hotel Rp 9.000.000 / Estimasi Rp 9.000.000'); clicking a badge opens quot-hotel-dialog listing hotel item with dates, 3 malam × 2 kamar, Sumber: AGODA_API, rate, Rp 9M total, Agoda link, plus 'Total Estimasi (termasuk hotel)'. hotel-customer-ctx present for Super Admin AND Sales (both have quotation.manage). Sales /hotel shows only Hotel Search + Search History tabs (API Settings & Logs hidden). Accounting sidebar has no Hotel entry. Regression: /, /customers, /bookings, /accounting all load without ErrorBoundary output.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "/hotel as Accounting", "issues": ["Accounting has NO sidebar Hotel link (correct), but direct URL /hotel still renders the full Hotel Workspace — including hotel-stats strip (14 searches / 8 quotations / Rp 68M revenue) and the Hotel Search form — for accounting user. The sidebar hide is not backed by a route guard. Consider adding a route-level RBAC check (require quotation.view or role in [super_admin, sales]) so accounting cannot see hotel stats/search by typing the URL. Backend /api/hotel/stats is currently only gated by get_current_user (no permission), so an accounting user's browser DOES fetch the stats when landing on /hotel."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_hotel3_addquotation.py",
+    "/app/test_reports/pytest/hotel3_results.xml"
+  ],
+  "action_items": [
+    "(Minor/design) Guard the /hotel route on the frontend so accounting cannot open it via URL, OR gate GET /api/hotel/stats + GET /api/hotel/search-history behind quotation.view / role check to prevent info leak of hotel revenue to accounting."
+  ],
+  "critical_code_review_comments": [
+    "_hotel_item_snapshot cleanly freezes rate/nights/rooms/total — matches acceptance math exactly (verified 1.5M×3×2=9M and appended sum).",
+    "_resolve_or_create_customer dedupe checks whatsapp first then exact full_name; both branches exercised in tests.",
+    "hotel_add_to_quotation correctly leaves the core quotation totals (base/discount/tax/total) untouched and stores hotel figures in separate hotel_total/grand_total_with_hotel fields — regression test on POST /api/quotations with a package still returns hotel_total in (0/None).",
+    "GET /api/hotel/stats has no permission dependency (only get_current_user); accounting can call it — consider require_permission('quotation.view')."
+  ],
+  "updated_files": ["/app/backend/tests/test_hotel3_addquotation.py"],
+  "success_rate": {"backend": "100% (13/13)", "frontend": "100% acceptance criteria pass; 1 minor RBAC leak flagged for accounting /hotel URL"},
+  "test_credentials": "Super Admin dedyirawan18@gmail.com/Admin@123; Sales sales@safarcrm.com/Sales@123; Accounting accounting@safarcrm.com/Account@123 — all verified working.",
+  "seed_data_creation": "Created ~6 TEST_H3-prefixed hotel-only quotations (QT-00058..QT-000xx) and 1 brand-new TEST_H3 customer for dedupe test. All non-destructive; do NOT need cleanup for continued CRM use.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "HOTEL-3 backend contract fully verified via pytest. Live Agoda search still returns error (no live key) — cannot exercise on-card '+Quotation' → AddToQuotationDialog UI flow. Code paths for HotelSearch.jsx customer picker + Add-to-Quotation dialog appear present but unreachable E2E without a live key. When a real Agoda key is configured, retest by (1) run a City Search, (2) click '+ Quotation' on a result card, (3) verify AddToQuotationDialog opens, (4) submit → verify a new quotation is created and appears with the hotel badge on /quotations.",
+  "rca of the issue": "Minor frontend RBAC design: sidebar hide is not paired with a route guard for /hotel. Route registration in App.jsx/router should either wrap HotelWorkspace with a role/permission check (block accounting) or the two stats/search-history endpoints should return 403 for roles without quotation.view. Currently accounting typing /hotel sees full workspace + stats (Rp 68M revenue). Priority: LOW (no data-modification risk; only info leak of aggregate hotel numbers)."
+}

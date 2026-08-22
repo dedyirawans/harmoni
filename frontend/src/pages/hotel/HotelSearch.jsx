@@ -1,4 +1,5 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useAuth } from "@/context/AuthContext";
 import api, { formatApiErrorDetail } from "@/lib/api";
 import { toast } from "sonner";
 import { Card, CardContent } from "@/components/ui/card";
@@ -11,8 +12,9 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Star, Wifi, Coffee, ExternalLink, Loader2, SearchX, SlidersHorizontal, Info } from "lucide-react";
+import { Star, Wifi, Coffee, ExternalLink, Loader2, SearchX, SlidersHorizontal, Info, FilePlus2 } from "lucide-react";
 import { CURRENCIES, LANGUAGES, SORT_OPTIONS, COMMON_CITIES } from "@/pages/hotel/hotelConstants";
+import AddToQuotationDialog from "@/pages/hotel/AddToQuotationDialog";
 
 const todayPlus = (d) => { const t = new Date(); t.setDate(t.getDate() + d); return t.toISOString().slice(0, 10); };
 const today = () => new Date().toISOString().slice(0, 10);
@@ -29,6 +31,9 @@ function StarRow({ n }) {
 }
 
 export default function HotelSearch() {
+  const { hasPerm } = useAuth();
+  const canQuote = hasPerm("quotation.manage");
+
   const [searchType, setSearchType] = useState("city");
   const [common, setCommon] = useState({
     checkInDate: todayPlus(14), checkOutDate: todayPlus(15),
@@ -40,14 +45,20 @@ export default function HotelSearch() {
   });
   const [hotelIds, setHotelIds] = useState("");
 
+  const [customers, setCustomers] = useState([]);
+  const [customerCtx, setCustomerCtx] = useState("none");
+
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState(null);
-  const [meta, setMeta] = useState(null); // {status, partial, message, cached, error}
+  const [meta, setMeta] = useState(null);
   const inFlight = useRef(false);
 
   const [showFilters, setShowFilters] = useState(false);
   const [cf, setCf] = useState({ minStar: 0, minReview: 0, priceMin: "", priceMax: "", discountOnly: false, breakfast: false, wifi: false });
   const [detail, setDetail] = useState(null);
+  const [addHotel, setAddHotel] = useState(null);
+
+  useEffect(() => { if (canQuote) api.get("/customers").then((r) => setCustomers(r.data || [])).catch(() => {}); }, [canQuote]);
 
   const setC = (k, v) => setCommon((f) => ({ ...f, [k]: v }));
   const setCt = (k, v) => setCity((f) => ({ ...f, [k]: v }));
@@ -82,6 +93,7 @@ export default function HotelSearch() {
       numberOfChildren: Number(common.children) || 0,
       childrenAges: common.childrenAges.map(Number),
     };
+    if (customerCtx && customerCtx !== "none") p.customer_id = customerCtx;
     if (searchType === "city") {
       p.cityId = Number(city.cityId);
       p.sortBy = city.sortBy;
@@ -137,17 +149,35 @@ export default function HotelSearch() {
     });
   }, [results, cf]);
 
+  const searchCtx = {
+    checkInDate: common.checkInDate, checkOutDate: common.checkOutDate,
+    adults: common.adults, children: common.children, currency: common.currency,
+  };
+
   return (
     <div className="space-y-5" data-testid="hotel-search">
-      {/* SEARCH FORM */}
       <Card className="border-slate-200 shadow-sm">
         <CardContent className="p-5 space-y-4">
-          <Tabs value={searchType} onValueChange={setSearchType}>
-            <TabsList data-testid="hotel-searchtype-tabs">
-              <TabsTrigger value="city" data-testid="hotel-searchtype-city">City Search</TabsTrigger>
-              <TabsTrigger value="hotel" data-testid="hotel-searchtype-hotel">Hotel List Search</TabsTrigger>
-            </TabsList>
-          </Tabs>
+          <div className="flex items-center justify-between flex-wrap gap-3">
+            <Tabs value={searchType} onValueChange={setSearchType}>
+              <TabsList data-testid="hotel-searchtype-tabs">
+                <TabsTrigger value="city" data-testid="hotel-searchtype-city">City Search</TabsTrigger>
+                <TabsTrigger value="hotel" data-testid="hotel-searchtype-hotel">Hotel List Search</TabsTrigger>
+              </TabsList>
+            </Tabs>
+            {canQuote && (
+              <div className="flex items-center gap-2">
+                <Label className="text-xs text-slate-500">Untuk Customer</Label>
+                <Select value={customerCtx} onValueChange={setCustomerCtx}>
+                  <SelectTrigger className="w-56" data-testid="hotel-customer-ctx"><SelectValue placeholder="Tanpa customer" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">Tanpa customer</SelectItem>
+                    {customers.map((c) => <SelectItem key={c._id} value={c._id}>{c.full_name}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+          </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             {searchType === "city" ? (
@@ -203,7 +233,6 @@ export default function HotelSearch() {
             </div>
           </div>
 
-          {/* Children ages */}
           {Number(common.children) > 0 && (
             <div className="flex flex-wrap gap-3 items-end" data-testid="hotel-search-children-ages">
               {common.childrenAges.map((a, i) => (
@@ -216,7 +245,6 @@ export default function HotelSearch() {
             </div>
           )}
 
-          {/* City-only server filters */}
           {searchType === "city" && (
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4 pt-2 border-t border-slate-100">
               <div className="space-y-1">
@@ -263,7 +291,6 @@ export default function HotelSearch() {
         </CardContent>
       </Card>
 
-      {/* STATES */}
       {loading && (
         <div className="flex items-center justify-center py-16 text-slate-500" data-testid="hotel-search-loading">
           <Loader2 className="h-5 w-5 mr-2 animate-spin" /> Mencari hotel yang tersedia…
@@ -284,7 +311,6 @@ export default function HotelSearch() {
         </div>
       )}
 
-      {/* RESULTS */}
       {!loading && results && !meta?.error && results.length > 0 && (
         <div className="space-y-4" data-testid="hotel-search-results">
           <div className="flex items-center justify-between flex-wrap gap-2">
@@ -356,7 +382,12 @@ export default function HotelSearch() {
                       {Number(h.crossedOutRate) > 0 && Number(h.crossedOutRate) !== Number(h.dailyRate) ? <p className="text-xs text-slate-400 line-through">{rupiah(h.crossedOutRate, h.currency)}</p> : null}
                       <p className="text-base font-bold text-blue-600">{rupiah(h.dailyRate, h.currency)}<span className="text-xs font-normal text-slate-400">/malam</span></p>
                     </div>
-                    <Button size="sm" variant="outline" onClick={() => setDetail(h)} data-testid={`hotel-view-${h.hotelId || i}`}>Lihat Hotel</Button>
+                    <div className="flex gap-1">
+                      {canQuote && (
+                        <Button size="sm" variant="outline" onClick={() => setAddHotel(h)} data-testid={`hotel-addquote-${h.hotelId || i}`}><FilePlus2 className="h-3.5 w-3.5" /></Button>
+                      )}
+                      <Button size="sm" variant="outline" onClick={() => setDetail(h)} data-testid={`hotel-view-${h.hotelId || i}`}>Lihat</Button>
+                    </div>
                   </div>
                 </CardContent>
               </Card>
@@ -365,7 +396,6 @@ export default function HotelSearch() {
         </div>
       )}
 
-      {/* DETAIL DIALOG */}
       <Dialog open={!!detail} onOpenChange={(o) => !o && setDetail(null)}>
         <DialogContent className="max-w-lg" data-testid="hotel-detail-dialog">
           {detail && (
@@ -391,16 +421,35 @@ export default function HotelSearch() {
                   <span className="text-sm text-slate-400">/malam</span>
                   {Number(detail.discountPercentage) > 0 && <Badge className="bg-red-500 hover:bg-red-500">{Math.round(detail.discountPercentage)}% OFF</Badge>}
                 </div>
-                {detail.landingURL ? (
-                  <a href={detail.landingURL} target="_blank" rel="noreferrer" className="block" data-testid="hotel-detail-book">
-                    <Button className="w-full"><ExternalLink className="h-4 w-4 mr-2" />Book on Agoda</Button>
-                  </a>
-                ) : <p className="text-xs text-slate-400">Tautan pemesanan tidak tersedia.</p>}
+                <div className="flex gap-2">
+                  {detail.landingURL ? (
+                    <a href={detail.landingURL} target="_blank" rel="noreferrer" className="flex-1" data-testid="hotel-detail-book">
+                      <Button className="w-full"><ExternalLink className="h-4 w-4 mr-2" />Book on Agoda</Button>
+                    </a>
+                  ) : <p className="text-xs text-slate-400 flex-1">Tautan pemesanan tidak tersedia.</p>}
+                  {canQuote && (
+                    <Button variant="outline" onClick={() => { setAddHotel(detail); setDetail(null); }} data-testid="hotel-detail-addquote">
+                      <FilePlus2 className="h-4 w-4 mr-2" />Ke Quotation
+                    </Button>
+                  )}
+                </div>
               </div>
             </>
           )}
         </DialogContent>
       </Dialog>
+
+      {canQuote && (
+        <AddToQuotationDialog
+          open={!!addHotel}
+          onClose={() => setAddHotel(null)}
+          hotel={addHotel || {}}
+          searchCtx={searchCtx}
+          customers={customers}
+          defaultCustomerId={customerCtx !== "none" ? customerCtx : ""}
+          onDone={() => api.get("/customers").then((r) => setCustomers(r.data || [])).catch(() => {})}
+        />
+      )}
     </div>
   );
 }

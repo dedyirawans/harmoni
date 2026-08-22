@@ -1,3 +1,18 @@
+## PHASE HOTEL-3 — Integrasi Hotel ke Sales & Customer (2026-08) — DONE ✅ (backend pytest 13/13 + frontend 100%)
+- **Add hotel ke Quotation**: dari hasil Hotel Search, tombol "+ Quotation" → `AddToQuotationDialog` (pilih customer existing / buat baru dedup by WA+nama, pilih quotation DRAFT/SENT existing ATAU buat baru, jumlah kamar). Endpoint `POST /api/hotel/add-to-quotation`.
+- **Snapshot harga beku**: `_hotel_item_snapshot` menyimpan nights = checkout−checkin, total = dailyRate×nights×rooms, `agoda_daily_rate` (TERPISAH dari HPP), source `AGODA_API`, landingURL/imageURL, dll. Quotation lama tak tergantung data API live. Contoh terverifikasi: 1.5jt × 3 malam × 2 kamar = **9jt**.
+- **Total terpisah**: `hotel_items[]`, `hotel_total`, `grand_total_with_hotel` disimpan di quotation. **Total paket inti (base/diskon/pajak/total) TIDAK diubah** → konversi ke Booking/Accounting/Tax tetap sama, hotel TIDAK ikut ke booking (sesuai spec item 12). QuotationCreate + create/update_quotation menyertakan hotel_items (update mempertahankan hotel lama bila body kosong).
+- **Quotation baru "hotel-only"** diizinkan tanpa paket (package_name `(Hotel Only)`). Bisa juga append ke quotation existing.
+- **Provider abstraction**: `HotelProvider` → `AgodaProvider` (registry `HOTEL_PROVIDERS`) untuk ekstensi provider masa depan tanpa merombak Customer/Quotation/Booking.
+- **Customer & timeline**: pemilih "Untuk Customer" di Hotel Search; search dengan customer_id mencatat "Hotel Search" ke timeline; add-to-quotation mencatat `sales_activities` ("Hotel Added to Quotation", source AGODA_API) + aktivitas `hotel` di Customer-360.
+- **PDF Quotation**: bagian **HOTEL** (tabel hotel/kamar/tanggal/malam/kamar/rate/total) + baris **TOTAL ESTIMASI (termasuk hotel)**. Kredensial tak pernah muncul.
+- **Reporting**: `GET /api/hotel/stats` {hotel_searches, hotel_quotations, hotel_revenue} + strip di modul Hotel (bukan merombak Sales Dashboard/Reports). Scoped per sales.
+- **RBAC/Keamanan**: add-to-quotation butuh `quotation.manage` → Sales 200, **Accounting 403**. `/api/hotel/stats` di-gate `quotation.manage` (Accounting 403) agar revenue hotel tak bocor; strip stats hanya render utk super_admin/sales. Sales tetap tak akses HPP. Kredensial Agoda tetap terenkripsi & tak terekspos.
+- **Frontend**: `AddToQuotationDialog.jsx`, `HotelSearch.jsx` (customer ctx + triggers), `HotelWorkspace.jsx` (stats strip gated), `Quotations.jsx` (badge "Hotel (n)" + dialog rincian + "+ Hotel"/"Estimasi").
+- **TIDAK dibuat** (di luar dok Agoda): booking confirmation/reservasi/cancel/refund. Booking Agoda hanya via redirect landingURL.
+- **CATATAN**: Tanpa API Key Agoda live, Hotel Search real return 401 → alur "+Quotation" dari kartu hasil belum bisa diuji E2E via UI (backend add-to-quotation sudah diverifikasi API). Tests: `/app/backend/tests/test_hotel3_addquotation.py`, `/app/test_reports/iteration_58.json`.
+
+
 ## PHASE HOTEL-2 — Hotel Search & Availability (2026-08) — DONE ✅ (backend curl + testing_agent frontend 11/11)
 - **2 tipe pencarian**: **City Search** (cityId) & **Hotel List Search** (hotelId[] multi, dipisah koma). Toggle tab di form.
 - **Form modern**: Destinasi/City ID (dengan datalist COMMON_CITIES: Jakarta 9395, Makkah 16901, Madinah 17047, dst), Check-in/out (date, min hari ini), Dewasa, Anak + **Children Ages dinamis** (jumlah input usia = jumlah anak, auto-sinkron), Mata Uang (13: IDR/USD/SGD/MYR/THB/JPY/KRW/EUR/GBP/SAR/AED/AUD/CHF), Bahasa (8 kode Agoda: id-id/en-us/ja-jp/ko-kr/zh-cn/th-th/ms-my/ar-ae).

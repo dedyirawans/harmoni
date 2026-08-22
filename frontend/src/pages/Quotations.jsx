@@ -2,7 +2,7 @@ import { PageHeader } from "@/components/PageHeader";
 import { useEffect, useState } from "react";
 import api, { API, formatApiErrorDetail } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
-import { fmtIDR, fmtDate } from "@/config/crm";
+import { fmtIDR } from "@/config/crm";
 import { QUOT_STATUS_COLORS, DISCOUNT_STATUS_COLORS, P4_ROOM_TYPES } from "@/config/phase4";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -12,7 +12,7 @@ import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogTrigger } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Plus, Loader2, FileText, Check, X, ArrowRightCircle, Trash2, Pencil } from "lucide-react";
+import { Plus, Loader2, FileText, Check, X, ArrowRightCircle, Trash2, Pencil, Hotel, ExternalLink } from "lucide-react";
 import { toast } from "sonner";
 
 const HEAD = "bg-blue-600 text-white font-semibold text-xs uppercase tracking-wide border-r border-blue-500/40 last:border-r-0";
@@ -30,6 +30,7 @@ export default function Quotations() {
   const [open, setOpen] = useState(false);
   const [editId, setEditId] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [hotelView, setHotelView] = useState(null);
   const empty = { customer_id: "", package_id: "", pax: 1, room_type: "QUAD", discount_type: "PERCENT", discount_value: 0, addons: [], departure_id: null, notes: "", terms: "" };
   const [form, setForm] = useState(empty);
 
@@ -127,8 +128,21 @@ export default function Quotations() {
                   <TableRow key={q._id} className={ROW} data-testid={`quotation-row-${q._id}`}>
                     <TableCell className={`${CELL} font-mono text-xs`}>{q.quotation_number}</TableCell>
                     <TableCell className={`${CELL} font-medium text-slate-900`}>{q.customer_name}</TableCell>
-                    <TableCell className={`${CELL} text-slate-500`}>{q.package_name}<span className="block text-xs text-slate-400">{q.pax} pax</span></TableCell>
-                    <TableCell className={`${CELL} text-right font-semibold`}>{fmtIDR(q.total)}<span className="block text-xs text-slate-400 font-normal">diskon {q.discount_type === "AMOUNT" ? fmtIDR(q.discount_amount) : `${q.discount_percent}%`}</span></TableCell>
+                    <TableCell className={`${CELL} text-slate-500`}>
+                      {q.package_name}<span className="block text-xs text-slate-400">{q.pax} pax</span>
+                      {q.hotel_items?.length > 0 && (
+                        <button onClick={() => setHotelView(q)} className="mt-1 inline-flex" data-testid={`quot-hotel-badge-${q._id}`}>
+                          <Badge variant="outline" className="rounded-full bg-blue-50 text-blue-700 border-blue-200 cursor-pointer"><Hotel className="h-3 w-3 mr-1" />Hotel ({q.hotel_items.length})</Badge>
+                        </button>
+                      )}
+                    </TableCell>
+                    <TableCell className={`${CELL} text-right font-semibold`}>
+                      {fmtIDR(q.total)}
+                      <span className="block text-xs text-slate-400 font-normal">diskon {q.discount_type === "AMOUNT" ? fmtIDR(q.discount_amount) : `${q.discount_percent}%`}</span>
+                      {q.hotel_total > 0 && (
+                        <span className="block text-xs text-blue-600 font-normal mt-0.5" data-testid={`quot-hotel-total-${q._id}`}>+ Hotel {fmtIDR(q.hotel_total)}<span className="block text-slate-500">Estimasi {fmtIDR(q.grand_total_with_hotel ?? (Number(q.total || 0) + Number(q.hotel_total || 0)))}</span></span>
+                      )}
+                    </TableCell>
                     <TableCell className={CELL}><Badge variant="outline" className={QUOT_STATUS_COLORS[q.status]}>{q.status}</Badge>{(() => { try { const d = new Date(q.created_at); d.setDate(d.getDate() + 7); return (d < new Date() && !q.converted_booking_id && !["ACCEPTED", "EXPIRED", "REJECTED"].includes(String(q.status || "").toUpperCase())); } catch { return false; } })() && <Badge variant="outline" className="ml-1 rounded-full bg-red-50 text-red-700 border-red-200" data-testid={`quot-expired-${q._id}`}>Kedaluwarsa</Badge>}</TableCell>
                     <TableCell className={CELL}><Badge variant="outline" className={DISCOUNT_STATUS_COLORS[q.discount_status]} data-testid={`quot-discount-status-${q._id}`}>{q.discount_status}</Badge></TableCell>
                     <TableCell className={`${CELL} text-right`}>
@@ -157,6 +171,36 @@ export default function Quotations() {
             </Table>
           </Card>
         )}
+
+      <Dialog open={!!hotelView} onOpenChange={(o) => !o && setHotelView(null)}>
+        <DialogContent className="bg-white max-w-2xl" data-testid="quot-hotel-dialog">
+          <DialogHeader><DialogTitle className="flex items-center gap-2"><Hotel className="h-4 w-4 text-blue-600" />Hotel di {hotelView?.quotation_number}</DialogTitle></DialogHeader>
+          <div className="space-y-3">
+            {(hotelView?.hotel_items || []).map((hi, i) => (
+              <div key={i} className="rounded-lg border border-slate-200 p-3 flex items-center justify-between gap-3" data-testid={`quot-hotel-item-${i}`}>
+                <div className="text-sm">
+                  <p className="font-semibold text-slate-800">{hi.hotelName}</p>
+                  {hi.roomtypeName && <p className="text-xs text-slate-500">{hi.roomtypeName}</p>}
+                  <p className="text-xs text-slate-500">{hi.checkInDate} → {hi.checkOutDate} · {hi.nights} malam × {hi.numberOfRooms} kamar · {hi.numberOfAdults}D/{hi.numberOfChildren}A</p>
+                  <p className="text-xs text-slate-400">Sumber: {hi.source || "AGODA_API"} · Rate {fmtIDR(hi.agoda_daily_rate)}/malam</p>
+                </div>
+                <div className="text-right shrink-0">
+                  <p className="font-bold text-blue-700">{fmtIDR(hi.total)}</p>
+                  {hi.landingURL && <a href={hi.landingURL} target="_blank" rel="noreferrer"><Button size="sm" variant="outline" className="mt-1"><ExternalLink className="h-3.5 w-3.5 mr-1" />Agoda</Button></a>}
+                </div>
+              </div>
+            ))}
+            <div className="flex items-center justify-between border-t border-slate-200 pt-3 text-sm">
+              <span className="font-semibold">Total Hotel</span>
+              <span className="font-bold text-blue-700">{fmtIDR(hotelView?.hotel_total)}</span>
+            </div>
+            <div className="flex items-center justify-between text-sm">
+              <span className="font-semibold">Total Estimasi (termasuk hotel)</span>
+              <span className="font-bold text-slate-900">{fmtIDR(hotelView?.grand_total_with_hotel ?? (Number(hotelView?.total || 0) + Number(hotelView?.hotel_total || 0)))}</span>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

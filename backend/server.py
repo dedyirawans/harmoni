@@ -457,6 +457,54 @@ def _normalize_hotel(r):
             "includeBreakfast": r.get("includeBreakfast"), "freeWifi": r.get("freeWifi")}
 
 
+# --- Hotel provider abstraction (future: add other providers without rebuilding CRM) ---
+class HotelProvider:
+    name = "generic"
+
+    async def search(self, criteria, user, search_type, log_meta):
+        raise NotImplementedError
+
+
+class AgodaProvider(HotelProvider):
+    name = "AGODA_API"
+
+    async def search(self, criteria, user, search_type, log_meta):
+        return await _agoda_call(criteria, user, search_type=search_type, log_meta=log_meta)
+
+
+HOTEL_PROVIDERS = {"AGODA_API": AgodaProvider()}
+
+
+def get_hotel_provider(name="AGODA_API"):
+    return HOTEL_PROVIDERS.get(name, HOTEL_PROVIDERS["AGODA_API"])
+
+
+def _nights_between(ci, co):
+    from datetime import datetime as _dt
+    try:
+        return max((_dt.strptime(str(co), "%Y-%m-%d") - _dt.strptime(str(ci), "%Y-%m-%d")).days, 0)
+    except Exception:
+        return 0
+
+
+def _hotel_item_snapshot(it: dict):
+    """Freeze the hotel figures at quotation time so old quotations never depend on live API data."""
+    it = it or {}
+    ci, co = str(it.get("checkInDate") or ""), str(it.get("checkOutDate") or "")
+    nights = _nights_between(ci, co)
+    rooms = int(it.get("numberOfRooms") or 1)
+    rate = float(it.get("dailyRate") or it.get("agoda_daily_rate") or 0)
+    return {"hotelId": it.get("hotelId"), "hotelName": it.get("hotelName") or "Hotel",
+            "roomtypeName": it.get("roomtypeName") or "", "checkInDate": ci, "checkOutDate": co,
+            "nights": nights, "numberOfRooms": rooms,
+            "numberOfAdults": int(it.get("numberOfAdults") or 1), "numberOfChildren": int(it.get("numberOfChildren") or 0),
+            "currency": it.get("currency") or "IDR", "agoda_daily_rate": rate,
+            "crossedOutRate": it.get("crossedOutRate"), "discountPercentage": it.get("discountPercentage"),
+            "total": round(rate * nights * rooms), "landingURL": it.get("landingURL") or "",
+            "imageURL": it.get("imageURL") or "", "includeBreakfast": it.get("includeBreakfast"),
+            "freeWifi": it.get("freeWifi"), "source": it.get("source") or "AGODA_API", "added_at": now_iso()}
+
+
 async def _hotel_log(user, req_type, search_type, params, status, ms, count, err_code=None, err_msg=None):
     safe = {k: v for k, v in (params or {}).items() if k not in ("api_key", "authorization", "site_id")}
     await db.hotel_api_logs.insert_one({
@@ -499,6 +547,7 @@ class HotelSearchRequest(BaseModel):
     numberOfAdult: int = 2
     numberOfChildren: int = 0
     childrenAges: Optional[List[int]] = None
+    customer_id: Optional[str] = None  # optional: log a "Hotel Search" activity to this customer's timeline
 
 
 def _valid_ymd(d):
@@ -667,6 +716,10 @@ async def hotel_search(req: HotelSearchRequest, user: dict = Depends(get_current
         return {**cached, "cached": True}
     res = await _agoda_call(criteria, user, search_type=search_type, log_meta=log_meta, req_type="SEARCH")
     status = res["status"]
+    if req.customer_id and ObjectId.is_valid(req.customer_id):
+        dest = f"City {criteria.get('cityId')}" if search_type == "city" else f"Hotel {criteria.get('hotelId')}"
+        await log_activity(req.customer_id, None, "hotel", f"Hotel Search — {dest}",
+                           f"{req.checkInDate} → {req.checkOutDate} · {res['count']} hasil", user)
     out = {"results": res["results"], "count": res["count"], "status": status, "cached": False,
            "searchType": search_type, "error": False, "partial": False, "message": None}
     if status in (200, 206) and res["count"] > 0:
@@ -703,6 +756,110 @@ async def hotel_search_history(user: dict = Depends(get_current_user)):
                     "result_count": d.get("result_count"), "response_status": d.get("response_status"),
                     "by": d.get("by")})
     return out
+
+
+class HotelAddToQuotation(BaseModel):
+    customer_id: Optional[str] = None
+    new_customer: Optional[dict] = None   # {full_name, whatsapp, email} — create if no existing match
+    quotation_id: Optional[str] = None    # append to this existing quotation
+    package_id: Optional[str] = None      # optional package for a NEW quotation (else hotel-only)
+    sales_pic_id: Optional[str] = None
+    hotel: dict                           # hotel snapshot input (from search result + rooms)
+
+
+async def _resolve_or_create_customer(body: "HotelAddToQuotation", user):
+    cid = body.customer_id
+    if cid and ObjectId.is_valid(cid):
+        cust = await db.customers.find_one({"_id": ObjectId(cid)})
+        if cust:
+            return str(cust["_id"]), cust
+    nc = body.new_customer or {}
+    wa = str(nc.get("whatsapp") or "").strip()
+    name = str(nc.get("full_name") or "").strip()
+    # avoid duplicates: match on whatsapp, then exact name
+    match = None
+    if wa:
+        match = await db.customers.find_one({"whatsapp": wa, "is_deleted": {"$ne": True}})
+    if not match and name:
+        match = await db.customers.find_one({"full_name": name, "is_deleted": {"$ne": True}})
+    if match:
+        return str(match["_id"]), match
+    if not name:
+        raise HTTPException(status_code=400, detail="Customer wajib dipilih atau isi nama customer baru.")
+    pic_id, pic_name, branch = await resolve_pic(user, body.sales_pic_id)
+    doc = {"full_name": name, "whatsapp": wa, "email": str(nc.get("email") or ""),
+           "customer_type": "Prospect", "sales_pic_id": pic_id, "sales_pic_name": pic_name, "branch": branch,
+           "is_deleted": False, "created_at": now_iso(), "created_by": user["name"]}
+    r = await db.customers.insert_one(doc)
+    return str(r.inserted_id), await db.customers.find_one({"_id": r.inserted_id})
+
+
+@api_router.post("/hotel/add-to-quotation")
+async def hotel_add_to_quotation(body: HotelAddToQuotation, request: Request,
+                                 user: dict = Depends(require_permission("quotation.manage"))):
+    cid, cust = await _resolve_or_create_customer(body, user)
+    snap = _hotel_item_snapshot(body.hotel or {})
+    if not snap.get("hotelName") or snap.get("nights", 0) <= 0:
+        raise HTTPException(status_code=400, detail="Data hotel tidak lengkap (nama & tanggal check-in/out valid diperlukan).")
+    if body.quotation_id and ObjectId.is_valid(body.quotation_id):
+        q = await db.quotations.find_one({"_id": ObjectId(body.quotation_id)})
+        if not q:
+            raise HTTPException(status_code=404, detail="Quotation tidak ditemukan.")
+        if not can_access_record(user, q):
+            raise HTTPException(status_code=403, detail="403 Forbidden")
+        items = (q.get("hotel_items") or []) + [snap]
+        htotal = sum(float(x.get("total") or 0) for x in items)
+        await db.quotations.update_one({"_id": q["_id"]}, {"$set": {
+            "hotel_items": items, "hotel_total": htotal,
+            "grand_total_with_hotel": float(q.get("total") or 0) + htotal}})
+        qid, qnum = str(q["_id"]), q.get("quotation_number")
+    else:
+        settings = await get_settings_dict()
+        pic_id, pic_name, branch = await resolve_pic(user, body.sales_pic_id)
+        number = await next_number((settings.get("numbering") or {}).get("quotation_prefix", "QT"), db.quotations, "quotation_number")
+        pax = snap["numberOfAdults"] + snap["numberOfChildren"]
+        amt = {"per_pax_price": 0, "base_price": 0, "gross": 0, "addon_total": 0, "subtotal": 0,
+               "discount_type": "PERCENT", "discount_value": 0, "discount_percent": 0, "discount_amount": 0,
+               "tax_percent": 0, "tax_amount": 0, "total": 0}
+        pkg_name, pkg_id = "(Hotel Only)", None
+        if body.package_id and ObjectId.is_valid(body.package_id):
+            pkg = await db.packages.find_one({"_id": ObjectId(body.package_id)})
+            if pkg:
+                amt = await _compute_quotation_amounts(pkg, max(pax, 1), [], "PERCENT", 0, settings)
+                pkg_name, pkg_id = pkg["package_name"], body.package_id
+        htotal = snap["total"]
+        doc = {"quotation_number": number, "customer_id": cid, "customer_name": cust["full_name"],
+               "package_id": pkg_id, "package_name": pkg_name, "package_version": 1, "departure_id": None,
+               "lead_id": None, "pax": max(pax, 1), "room_type": "", "addons": [], **amt,
+               "discount_status": "APPROVED", "discount_level": None, "status": "DRAFT", "notes": "", "terms": "",
+               "hotel_items": [snap], "hotel_total": htotal, "grand_total_with_hotel": float(amt["total"]) + htotal,
+               "sales_pic_id": pic_id, "sales_pic_name": pic_name, "branch": branch,
+               "converted_booking_id": None, "created_at": now_iso(), "created_by": user["name"]}
+        res = await db.quotations.insert_one(doc)
+        qid, qnum = str(res.inserted_id), number
+    await db.sales_activities.insert_one({
+        "activity_type": "Hotel Added to Quotation", "customer_id": cid, "customer_name": cust.get("full_name", ""),
+        "lead_id": None, "notes": f"{snap['hotelName']} · {snap['checkInDate']}→{snap['checkOutDate']} · {snap['nights']} malam × {snap['numberOfRooms']} kamar · Total {snap['total']} · Quotation {qnum}",
+        "sales_pic_id": (user["_id"] if user["role"] == "sales" else cust.get("sales_pic_id")), "sales_pic_name": user["name"],
+        "branch": user.get("branch"), "hotel": snap, "quotation_id": qid, "source": "AGODA_API", "timestamp": now_iso()})
+    await log_activity(cid, None, "hotel", f"Hotel added to Quotation {qnum}",
+                       f"{snap['hotelName']} — {snap['nights']} malam × {snap['numberOfRooms']} kamar (Total {snap['total']})", user)
+    await log_audit(user, "hotel", "add_to_quotation", request, record_id=qid,
+                    new={"quotation": qnum, "hotel": snap.get("hotelName")})
+    return {"quotation_id": qid, "quotation_number": qnum, "customer_id": cid,
+            "hotel_total": snap["total"], "grand_total_with_hotel": None}
+
+
+@api_router.get("/hotel/stats")
+async def hotel_stats(user: dict = Depends(require_permission("quotation.manage"))):
+    log_q = {"request_type": "SEARCH"}
+    if user["role"] == "sales":
+        log_q["by"] = user["name"]
+    searches = await db.hotel_api_logs.count_documents(log_q)
+    q_scope = {**owner_filter(user), "hotel_items.0": {"$exists": True}}
+    qs = await db.quotations.find(q_scope).to_list(5000)
+    revenue = sum(float(q.get("hotel_total") or 0) for q in qs)
+    return {"hotel_searches": searches, "hotel_quotations": len(qs), "hotel_revenue": round(revenue)}
 
 
 # ----------------------------------------------------------------------------
@@ -4794,6 +4951,33 @@ def build_document_pdf(kind: str, data: dict, company: dict, itineraries=None, t
     ts.setStyle(TableStyle([("ALIGN", (0, 0), (-1, -1), "RIGHT"), ("FONTSIZE", (0, 0), (-1, -1), 10), ("FONTNAME", (0, 0), (-1, -1), base_font),
                             ("LINEABOVE", (0, -1), (-1, -1), 0.6, primary), ("FONTNAME", (0, -1), (-1, -1), bold_font)]))
     el.append(ts)
+    if kind == "QUOTATION" and data.get("hotel_items"):
+        el.append(Spacer(1, 6 * mm))
+        el.append(Paragraph("<b>HOTEL</b>", boldn))
+        hrows = [["Hotel / Kamar", "Check-in", "Check-out", "Mlm", "Kmr", "Rate", "Total"]]
+        for hi in data.get("hotel_items"):
+            nm = hi.get("hotelName", "")
+            if hi.get("roomtypeName"):
+                nm += f"<br/><font size=7 color='#64748b'>{hi.get('roomtypeName')}</font>"
+            hrows.append([Paragraph(nm, small), hi.get("checkInDate", ""), hi.get("checkOutDate", ""),
+                          str(hi.get("nights", 0)), str(hi.get("numberOfRooms", 1)),
+                          _money(hi.get("agoda_daily_rate")), _money(hi.get("total"))])
+        htbl = Table(hrows, colWidths=[52 * mm, 22 * mm, 22 * mm, 12 * mm, 12 * mm, 24 * mm, 24 * mm])
+        htbl.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, 0), primary), ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                                  ("FONTNAME", (0, 0), (-1, 0), bold_font), ("FONTNAME", (0, 1), (-1, -1), base_font),
+                                  ("FONTSIZE", (0, 0), (-1, -1), 8), ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#cbd5e1")),
+                                  ("ALIGN", (1, 0), (-1, -1), "RIGHT"), ("VALIGN", (0, 0), (-1, -1), "MIDDLE")]))
+        el.append(htbl)
+        el.append(Spacer(1, 2 * mm))
+        _gt = data.get("grand_total_with_hotel")
+        if _gt is None:
+            _gt = float(data.get("total") or 0) + float(data.get("hotel_total") or 0)
+        gtbl = Table([["Total Hotel", _money(data.get("hotel_total"))],
+                      ["TOTAL ESTIMASI (termasuk hotel)", _money(_gt)]], colWidths=[140 * mm, 30 * mm])
+        gtbl.setStyle(TableStyle([("ALIGN", (0, 0), (-1, -1), "RIGHT"), ("FONTSIZE", (0, 0), (-1, -1), 10),
+                                  ("FONTNAME", (0, 0), (-1, -1), base_font), ("FONTNAME", (0, -1), (-1, -1), bold_font),
+                                  ("LINEABOVE", (0, -1), (-1, -1), 0.6, primary)]))
+        el.append(gtbl)
     if kind == "INVOICE" and data.get("outstanding") is not None and float(data.get("outstanding") or 0) > 0:
         extra = [["Sudah Dibayar", _money(data.get("paid_amount"))],
                  ["Kekurangan Pembayaran", _money(data.get("outstanding"))]]
@@ -5061,6 +5245,7 @@ class QuotationCreate(BaseModel):
     notes: Optional[str] = ""
     terms: Optional[str] = ""
     sales_pic_id: Optional[str] = None
+    hotel_items: Optional[List[dict]] = []
 
 
 async def _compute_quotation_amounts(pkg, pax, addons, discount_type, discount_value, settings):
@@ -5120,6 +5305,11 @@ async def create_quotation(body: QuotationCreate, request: Request, user: dict =
            "status": "DRAFT", "notes": body.notes, "terms": body.terms or pkg.get("terms", ""),
            "sales_pic_id": pic_id, "sales_pic_name": pic_name, "branch": branch,
            "converted_booking_id": None, "created_at": now_iso(), "created_by": user["name"]}
+    _h_items = [_hotel_item_snapshot(h) for h in (body.hotel_items or [])]
+    _h_total = sum(x["total"] for x in _h_items)
+    doc["hotel_items"] = _h_items
+    doc["hotel_total"] = _h_total
+    doc["grand_total_with_hotel"] = float(amt["total"]) + _h_total
     res = await db.quotations.insert_one(doc)
     new = serialize(await db.quotations.find_one({"_id": res.inserted_id}))
     await log_audit(user, "quotation", "create_quotation", request, record_id=new["_id"], new={"number": number})
@@ -5157,6 +5347,12 @@ async def update_quotation(qid: str, body: QuotationCreate, request: Request, us
     updates = {"package_id": body.package_id, "package_name": pkg["package_name"], "departure_id": body.departure_id,
                "pax": body.pax, "room_type": body.room_type, "addons": body.addons or [], **amt,
                "discount_status": dstatus, "discount_level": dlevel, "notes": body.notes, "terms": body.terms}
+    _hi_in = body.hotel_items or []
+    _h_items = [_hotel_item_snapshot(h) for h in _hi_in] if _hi_in else (q.get("hotel_items") or [])
+    _h_total = sum(float(x.get("total") or 0) for x in _h_items)
+    updates["hotel_items"] = _h_items
+    updates["hotel_total"] = _h_total
+    updates["grand_total_with_hotel"] = float(amt["total"]) + _h_total
     await db.quotations.update_one({"_id": ObjectId(qid)}, {"$set": updates})
     await log_audit(user, "quotation", "update_quotation", request, record_id=qid)
     return serialize(await db.quotations.find_one({"_id": ObjectId(qid)}))
