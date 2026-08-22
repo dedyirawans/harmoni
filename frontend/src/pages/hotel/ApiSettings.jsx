@@ -9,6 +9,7 @@ import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Loader2, Save, PlugZap, ShieldCheck, KeyRound } from "lucide-react";
+import CityManager from "@/pages/hotel/CityManager";
 
 const DEFAULT_ENDPOINT = "http://affiliateapi7643.agoda.com/affiliateservice/lt_v1";
 
@@ -185,6 +186,7 @@ export default function ApiSettings() {
           )}
         </CardContent>
       </Card>
+      <CityManager />
     </div>
   );
 }

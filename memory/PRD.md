@@ -1,3 +1,12 @@
+## HOTEL — Aktivasi Kredensial Agoda + Autocomplete Kota (2026-08) — DONE ✅
+- **Kredensial Agoda AKTIF**: Site ID `1973232`, API Key `75c1...3e00` (dienkripsi Fernet at-rest). Test Koneksi = **200 sukses** (~142ms). CATATAN: input user berformat `SiteID:Key`, disimpan hanya bagian Key (backend menyusun header `SiteID:Key`).
+- **Rate limit Agoda**: pencarian tunggal normal = 200; probe cepat berturut-turut memicu **403** (batas laju sisi Agoda), bukan bug. Live City Search 9395 sempat 200 count 0 (tergantung ketersediaan tanggal).
+- **Autocomplete Kota by nama** (Agoda tak punya lookup nama→ID publik → admin-managed):
+  - Backend: koleksi `hotel_cities` + `GET /api/hotel/cities` (semua staff, auto-seed 14 kota umum), `POST /api/hotel/cities` & `DELETE /api/hotel/cities/{id}` (super_admin). Diverifikasi: sales GET 200, sales POST 403.
+  - Frontend: `CityCombobox.jsx` (Command+Popover, cari kota by nama, fallback ketik City ID manual) menggantikan input City ID di Hotel Search; `CityManager.jsx` (kelola nama↔cityId) di API Settings (super_admin).
+  - Seed kota (best-effort, EDITABLE oleh admin): Jakarta 9395, Makkah 16901, Madinah 17047, Jeddah 16480, Bali 17193, Bandung 16057, Surabaya 18054, Yogyakarta 16063, Singapore 4064, KL 13170, Bangkok 3216, Tokyo 14690, Dubai 2758, Istanbul 12060. ⚠️ City ID selain 9395 belum terverifikasi live (kena rate-limit saat probe) — admin sebaiknya verifikasi via uji pencarian & koreksi bila hasil tak sesuai.
+
+
 ## PHASE HOTEL-3 — Integrasi Hotel ke Sales & Customer (2026-08) — DONE ✅ (backend pytest 13/13 + frontend 100%)
 - **Add hotel ke Quotation**: dari hasil Hotel Search, tombol "+ Quotation" → `AddToQuotationDialog` (pilih customer existing / buat baru dedup by WA+nama, pilih quotation DRAFT/SENT existing ATAU buat baru, jumlah kamar). Endpoint `POST /api/hotel/add-to-quotation`.
 - **Snapshot harga beku**: `_hotel_item_snapshot` menyimpan nights = checkout−checkin, total = dailyRate×nights×rooms, `agoda_daily_rate` (TERPISAH dari HPP), source `AGODA_API`, landingURL/imageURL, dll. Quotation lama tak tergantung data API live. Contoh terverifikasi: 1.5jt × 3 malam × 2 kamar = **9jt**.

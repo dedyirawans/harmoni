@@ -13,8 +13,9 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Star, Wifi, Coffee, ExternalLink, Loader2, SearchX, SlidersHorizontal, Info, FilePlus2 } from "lucide-react";
-import { CURRENCIES, LANGUAGES, SORT_OPTIONS, COMMON_CITIES } from "@/pages/hotel/hotelConstants";
+import { CURRENCIES, LANGUAGES, SORT_OPTIONS } from "@/pages/hotel/hotelConstants";
 import AddToQuotationDialog from "@/pages/hotel/AddToQuotationDialog";
+import CityCombobox from "@/pages/hotel/CityCombobox";
 
 const todayPlus = (d) => { const t = new Date(); t.setDate(t.getDate() + d); return t.toISOString().slice(0, 10); };
 const today = () => new Date().toISOString().slice(0, 10);
@@ -182,13 +183,9 @@ export default function HotelSearch() {
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             {searchType === "city" ? (
               <div className="space-y-1 lg:col-span-2">
-                <Label>Destinasi (City ID Agoda)</Label>
-                <Input type="number" list="hotel-cities" value={city.cityId} data-testid="hotel-search-cityid"
-                  onChange={(e) => setCt("cityId", e.target.value)} placeholder="mis. 9395 (Jakarta)" />
-                <datalist id="hotel-cities">
-                  {COMMON_CITIES.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-                </datalist>
-                <p className="text-[11px] text-slate-400">Contoh: {COMMON_CITIES.slice(0, 4).map((c) => `${c.name}=${c.id}`).join(" · ")}</p>
+                <Label>Destinasi (Kota)</Label>
+                <CityCombobox value={city.cityId} onChange={(v) => setCt("cityId", v)} />
+                <p className="text-[11px] text-slate-400">Cari kota berdasarkan nama, atau ketik City ID Agoda manual.</p>
               </div>
             ) : (
               <div className="space-y-1 lg:col-span-2">
