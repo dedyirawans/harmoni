@@ -1,3 +1,13 @@
+## PHASE HOTEL-1 — Modul Hotel & Fondasi Integrasi Agoda API (2026-06) — DONE ✅ (testing_agent: backend 10/10, frontend ~95%)
+- **Navigasi**: 1 menu "Hotel" (icon Hotel) di sidebar super_admin/sales/accounting → route `/hotel` (nav.js `ROUTE_PERMS['/hotel']=null`, App.js `/hotel`→HotelWorkspace). Pola tab seperti "AI & WhatsApp".
+- **HotelWorkspace.jsx**: 4 tab — Hotel Search & Search History (semua staff); API Settings & API Logs (super_admin only, tab digate via `user.role`).
+- **API Settings (super_admin)** `ApiSettings.jsx`: form Provider(Agoda), Site ID, API Key (password), Endpoint (default `http://affiliateapi7643.agoda.com/affiliateservice/lt_v1`), Bahasa (id-id), Currency (IDR), Status Aktif. Tombol Simpan + Test Koneksi.
+- **KEAMANAN**: API Key dienkripsi at-rest dgn **Fernet** (`_enc/_dec`, `ENCRYPTION_KEY` di backend/.env) → disimpan sebagai `api_key_enc`, TIDAK pernah plaintext (diverifikasi di DB). Response ke frontend hanya `api_key_masked` + `api_key_set` (tidak pernah key penuh). `_hotel_log` membuang api_key/authorization/site_id dari log. PUT settings hanya menimpa key bila field diisi (partial update aman).
+- **Backend endpoints** (server.py): GET/PUT `/api/hotel/settings` (super_admin), POST `/api/hotel/test-connection` (super_admin), POST `/api/hotel/search` (semua staff, via `_agoda_call`+`AgodaHotelService`), GET `/api/hotel/logs` (super_admin), GET `/api/hotel/search-history` (semua staff). Model hasil ternormalisasi (hotelId, hotelName, starRating, dailyRate, dst).
+- **Verified**: RBAC 403 utk Sales di settings/logs; masking benar; test-connection & search gagal anggun (401 dgn kredensial dummy — EXPECTED, belum ada key asli); log tanpa secret. Tests: `/app/backend/tests/test_hotel_module.py`, report `/app/test_reports/iteration_56.json`.
+- **CATATAN**: Kredensial Agoda asli belum diisi user; saat key valid tersedia, ulangi Hotel Search → hasil akan muncul.
+
+
 ## Enhancement — Gallery Editor + Lightbox + Include/Exclude Paket (2026-06) — DONE ✅ (curl + UI verified)
 - **Gallery Manager (ProductDetail overview)**: komponen `GalleryManager` — tambah banyak foto (multi-upload base64), hapus per foto, "Jadikan Cover", preview besar (lightbox klik gambar). Simpan via PUT /packages/{pid} (kirim full pkg + patch, `model_dump()` menyimpan). Cover juga bisa diklik untuk lightbox.
 - **Include/Exclude**: field `include`, `exclude` di `PackageModel` (auto-persist create+update). Ditampilkan di Overview detail (Include hijau / Exclude merah). Input textarea di dialog New Package (`new-include`/`new-exclude`) & Edit Package (`edit-include`/`edit-exclude`).

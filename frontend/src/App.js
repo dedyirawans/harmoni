@@ -45,6 +45,7 @@ import AITools from "@/pages/AITools";
 import AIMonitoring from "@/pages/AIMonitoring";
 import AutoFollowUp from "@/pages/AutoFollowUp";
 import AIWorkspace from "@/pages/AIWorkspace";
+import HotelWorkspace from "@/pages/hotel/HotelWorkspace";
 import Tasks from "@/pages/Tasks";
 import ApprovalCenter from "@/pages/ApprovalCenter";
 
@@ -73,6 +74,7 @@ const PAGES = {
   "/forecast": Forecast,
   "/documents": FileDownload,
   "/ai-hub": AIWorkspace,
+  "/hotel": HotelWorkspace,
   "/whatsapp": WhatsAppIntegration,
   "/knowledge-base": KnowledgeBase,
   "/communication-style": CommunicationStyle,

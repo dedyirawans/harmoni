@@ -410,6 +410,165 @@ async def update_my_profile(body: MyProfileUpdate, request: Request, user: dict 
 
 
 # ----------------------------------------------------------------------------
+# HOTEL MODULE — Agoda Affiliate Long Tail Search (foundation)
+# ----------------------------------------------------------------------------
+class HotelSettings(BaseModel):
+    provider: str = "Agoda"
+    site_id: Optional[str] = ""
+    api_key: Optional[str] = ""
+    endpoint: Optional[str] = "http://affiliateapi7643.agoda.com/affiliateservice/lt_v1"
+    language: Optional[str] = "id-id"
+    currency: Optional[str] = "IDR"
+    active: bool = True
+
+
+async def _hotel_settings_raw():
+    doc = await db.company_settings.find_one({"key": "hotel_agoda"})
+    return (doc or {}).get("settings", {}) if doc else {}
+
+
+def _mask_key(k):
+    if not k:
+        return ""
+    return ("•" * max(len(k) - 4, 0)) + k[-4:] if len(k) > 4 else "••••"
+
+
+def _hotel_api_key(s):
+    # Prefer encrypted-at-rest key; fall back to legacy plaintext for backward compat.
+    if s.get("api_key_enc"):
+        return _dec(s.get("api_key_enc"))
+    return s.get("api_key", "")
+
+
+def _hotel_settings_public(s):
+    _k = _hotel_api_key(s)
+    return {"provider": s.get("provider", "Agoda"), "site_id": s.get("site_id", ""),
+            "api_key_masked": _mask_key(_k), "api_key_set": bool(_k),
+            "endpoint": s.get("endpoint") or "http://affiliateapi7643.agoda.com/affiliateservice/lt_v1",
+            "language": s.get("language", "id-id"), "currency": s.get("currency", "IDR"),
+            "active": s.get("active", True)}
+
+
+def _normalize_hotel(r):
+    return {"hotelId": r.get("hotelId"), "hotelName": r.get("hotelName"), "roomtypeName": r.get("roomtypeName"),
+            "starRating": r.get("starRating"), "reviewScore": r.get("reviewScore"), "reviewCount": r.get("reviewCount"),
+            "currency": r.get("currency"), "dailyRate": r.get("dailyRate"), "crossedOutRate": r.get("crossedOutRate"),
+            "discountPercentage": r.get("discountPercentage"), "imageURL": r.get("imageURL"), "landingURL": r.get("landingURL"),
+            "includeBreakfast": r.get("includeBreakfast"), "freeWifi": r.get("freeWifi")}
+
+
+async def _hotel_log(user, req_type, search_type, params, status, ms, count, err_code=None, err_msg=None):
+    safe = {k: v for k, v in (params or {}).items() if k not in ("api_key", "authorization", "site_id")}
+    await db.hotel_api_logs.insert_one({
+        "timestamp": now_iso(), "request_type": req_type, "search_type": search_type, "params": safe,
+        "response_status": status, "response_time_ms": ms, "result_count": count,
+        "error_code": err_code, "error_message": err_msg, "by": user.get("name") if user else None})
+
+
+async def _agoda_call(criteria, user, req_type="SEARCH"):
+    s = await _hotel_settings_raw()
+    _api_key = _hotel_api_key(s)
+    if not s.get("site_id") or not _api_key:
+        raise HTTPException(status_code=400, detail="Kredensial Agoda belum diisi di API Settings.")
+    if not s.get("active", True):
+        raise HTTPException(status_code=400, detail="Hotel API status non-aktif.")
+    endpoint = s.get("endpoint") or "http://affiliateapi7643.agoda.com/affiliateservice/lt_v1"
+    body = {"criteria": {**criteria}}
+    body["criteria"].setdefault("additional", {})
+    body["criteria"]["additional"].setdefault("currency", s.get("currency", "IDR"))
+    body["criteria"]["additional"].setdefault("language", s.get("language", "id-id"))
+    headers = {"Authorization": f"{s['site_id']}:{_api_key}", "Accept-Encoding": "gzip,deflate",
+               "Content-Type": "application/json"}
+    import time as _t
+    t0 = _t.time()
+    status_code, count, results, err_code, err_msg = 0, 0, [], None, None
+    try:
+        resp = _requests.post(endpoint, json=body, headers=headers, timeout=20)
+        status_code = resp.status_code
+        if status_code in (200, 206):
+            data = resp.json()
+            raw = data.get("results") or data.get("Results") or []
+            results = [_normalize_hotel(r) for r in raw]
+            count = len(results)
+        elif status_code in (202, 204):
+            err_msg = "Tidak ada hasil / sedang diproses."
+        else:
+            err_code = str(status_code)
+            err_msg = {401: "Unauthorized", 403: "Forbidden / quota or terms issue",
+                       404: "Not Found", 410: "Gone", 400: "Bad Request",
+                       500: "Internal Server Error", 503: "Service Unavailable", 506: "Not Acceptable"}.get(status_code, "Error")
+    except Exception as e:
+        err_code = "EXC"
+        err_msg = str(e)[:200]
+    ms = int((_t.time() - t0) * 1000)
+    await _hotel_log(user, req_type, criteria.get("_search_type", "LongTail"),
+                     {"criteria": {k: v for k, v in criteria.items() if k != "additional"}},
+                     status_code, ms, count, err_code, err_msg)
+    return {"status": status_code, "count": count, "results": results, "error_code": err_code,
+            "error_message": err_msg, "response_time_ms": ms}
+
+
+@api_router.get("/hotel/settings")
+async def hotel_get_settings(user: dict = Depends(require_role("super_admin"))):
+    return _hotel_settings_public(await _hotel_settings_raw())
+
+
+@api_router.put("/hotel/settings")
+async def hotel_put_settings(body: HotelSettings, request: Request, user: dict = Depends(require_role("super_admin"))):
+    cur = await _hotel_settings_raw()
+    new = {**cur, "provider": body.provider, "site_id": (body.site_id or "").strip(),
+           "endpoint": (body.endpoint or "").strip(), "language": body.language, "currency": body.currency,
+           "active": body.active}
+    if body.api_key:  # only overwrite when a new key is provided (encrypted at rest)
+        new["api_key_enc"] = _enc(body.api_key.strip())
+        new.pop("api_key", None)
+    await db.company_settings.update_one({"key": "hotel_agoda"}, {"$set": {"settings": new}}, upsert=True)
+    await log_audit(user, "hotel", "update_settings", request, new={"site_id": new.get("site_id"), "active": new.get("active")})
+    return _hotel_settings_public(new)
+
+
+@api_router.post("/hotel/test-connection")
+async def hotel_test_connection(user: dict = Depends(require_role("super_admin"))):
+    from datetime import date, timedelta as _td
+    ci = (date.today() + _td(days=14)).isoformat()
+    co = (date.today() + _td(days=15)).isoformat()
+    criteria = {"_search_type": "TestConnection", "checkIn": ci, "checkOut": co, "cityId": 9395,
+                "occupancy": {"numberOfAdult": 2, "numberOfChildren": 0}, "maxResult": 1}
+    try:
+        res = await _agoda_call(criteria, user, req_type="TEST")
+    except HTTPException as e:
+        return {"success": False, "message": "Agoda API connection failed.", "detail": e.detail}
+    ok = res["status"] in (200, 202, 204, 206)
+    return {"success": ok, "message": "Agoda API connection successful." if ok else "Agoda API connection failed.",
+            "detail": {"status": res["status"], "error_code": res["error_code"], "error_message": res["error_message"],
+                       "response_time_ms": res["response_time_ms"]}}
+
+
+@api_router.post("/hotel/search")
+async def hotel_search(body: dict, user: dict = Depends(get_current_user)):
+    criteria = dict(body or {})
+    criteria["_search_type"] = criteria.get("_search_type", "LongTail")
+    res = await _agoda_call(criteria, user, req_type="SEARCH")
+    if res["status"] not in (200, 202, 204, 206) and not res["results"]:
+        return {"results": [], "count": 0, "message": "Pencarian gagal atau tidak ada hasil.",
+                "status": res["status"]}
+    return {"results": res["results"], "count": res["count"], "status": res["status"]}
+
+
+@api_router.get("/hotel/logs")
+async def hotel_logs(user: dict = Depends(require_role("super_admin"))):
+    return [serialize(d) for d in await db.hotel_api_logs.find({}).sort("timestamp", -1).to_list(200)]
+
+
+@api_router.get("/hotel/search-history")
+async def hotel_search_history(user: dict = Depends(get_current_user)):
+    q = {"request_type": "SEARCH"}
+    docs = await db.hotel_api_logs.find(q).sort("timestamp", -1).to_list(100)
+    return [{"timestamp": d.get("timestamp"), "params": d.get("params"), "result_count": d.get("result_count"),
+             "response_status": d.get("response_status")} for d in [serialize(x) for x in docs]]
+
+
+# ----------------------------------------------------------------------------
 # USER MANAGEMENT (super admin)
 # ----------------------------------------------------------------------------
 @api_router.get("/users")

@@ -1,7 +1,7 @@
 import {
   LayoutDashboard, Users2, Briefcase, Package, CalendarCheck, Calculator,
   Receipt, Percent, FileBarChart, Plug, UserCog, Settings, ScrollText,
-  Plane, PlaneTakeoff, Bell, Wallet, TrendingUp, ListChecks, FileText, ShieldCheck, CheckSquare, Building2, Activity, Bot, MessageCircle, BrainCircuit, MessageSquareHeart, Wrench, Gauge, FolderDown,
+  Plane, PlaneTakeoff, Bell, Wallet, TrendingUp, ListChecks, FileText, ShieldCheck, CheckSquare, Building2, Activity, Bot, MessageCircle, BrainCircuit, MessageSquareHeart, Wrench, Gauge, FolderDown, Hotel,
 } from "lucide-react";
 
 // Route -> permission required (mirrors backend). null = any authenticated user.
@@ -21,6 +21,7 @@ export const ROUTE_PERMS = {
   "/reports": null,
   "/forecast": "super_admin",
   "/ai-hub": "super_admin",
+  "/hotel": null,
   "/users": "users.view",
   "/settings": "settings.view",
   "/audit": "audit.view",
@@ -46,6 +47,7 @@ export const MENUS = {
     { label: "Follow Ups", path: "/follow-ups", icon: ListChecks },
     { label: "My Tasks", path: "/tasks", icon: CheckSquare },
     { label: "Product Management", path: "/products", icon: Package },
+    { label: "Hotel", path: "/hotel", icon: Hotel },
     { label: "Accounting", path: "/accounting", icon: Calculator },
     { label: "Booking", path: "/booking", icon: CalendarCheck },
     { label: "Operations", path: "/operations", icon: PlaneTakeoff },
@@ -71,6 +73,7 @@ export const MENUS = {
     { label: "Quotations", path: "/quotations", icon: FileText },
     { label: "Bookings", path: "/booking", icon: CalendarCheck },
     { label: "Packages", path: "/packages", icon: Plane },
+    { label: "Hotel", path: "/hotel", icon: Hotel },
     { label: "Departures", path: "/departures", icon: PlaneTakeoff },
     { label: "My Commission", path: "/commission", icon: Wallet },
     { label: "Documents", path: "/documents", icon: FolderDown },
@@ -84,6 +87,7 @@ export const MENUS = {
     { label: "Invoices & AR", path: "/accounting", icon: Calculator },
     { label: "Operations", path: "/operations", icon: PlaneTakeoff },
     { label: "Suppliers", path: "/suppliers", icon: Building2 },
+    { label: "Hotel", path: "/hotel", icon: Hotel },
     { label: "My Tasks", path: "/tasks", icon: CheckSquare },
     { label: "Approval", path: "/approval-center", icon: ShieldCheck },
     { label: "Transactions", path: "/transactions", icon: Receipt },
