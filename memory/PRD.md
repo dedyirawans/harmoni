@@ -1,3 +1,11 @@
+## HOTEL — Master Hotel Agoda (1,35 juta) + Pencarian Hotel by-Nama (2026-08) — DONE ✅ (live terbukti)
+- **Impor master hotel** dari CSV Agoda → koleksi `agoda_hotels`: **1.354.615 hotel** (hotelId, name, cityId, city, country, starRating, lat/lng, photo, url, reviewCount, ratingAverage, currency, type). Index: name_lower, (cityId, reviewCount), hotelId, reviewCount. Waktu impor ~132 detik.
+- **Endpoint** `GET /api/hotel/hotels/search?q=&cityId=&limit=` (semua staff): prefix match nama (index-backed, cepat), opsional filter cityId, sort by jumlah ulasan; q kosong tanpa cityId → [] (hindari dump).
+- **Frontend `HotelPicker.jsx`**: di Hotel List Search, ganti input Hotel ID mentah → cari hotel **by nama** (typeahead) dari database Agoda, pilih jadi chip (nama + #id), + fallback ketik Hotel ID manual. Hasil pilihan otomatis mengisi `hotelId[]` untuk live search.
+- **VERIFIED LIVE**: cari "hilton" → Hilton Kuala Lumpur (#6961,5★,14861 ulasan) dll; pilih Millennium Hotel Sirih (#48666) → Live Hotel List Search 200, Rp600.000. Kota juga versi **search nama** (52k kota, `GET /api/hotel/cities?q=`) sesuai permintaan.
+- File CSV mentah 1,3GB di /tmp dihapus setelah impor selesai (cities + hotels sudah di Mongo).
+
+
 ## HOTEL — Master Data Kota Agoda (2026-08) — DONE ✅ (live search terbukti jalan)
 - **Impor master kota resmi Agoda** dari file data hotel (`E342B777...EN.csv`, 1.35GB, 1.354.617 hotel). Diambil **52.051 kota unik** (city_id ↔ nama ↔ negara ↔ jumlah hotel) → koleksi `agoda_cities` (index name_lower, count, cityId).
 - **PENTING — City ID seed lama SALAH & sudah diganti**: Jakarta = **8691** (bukan 9395), Bangkok = 9395, Kuala Lumpur = 14524, Tokyo = 5085, Mecca = **78591**, Medina = **23028**, Bali = 17193.

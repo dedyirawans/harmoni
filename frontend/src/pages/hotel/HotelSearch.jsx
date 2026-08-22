@@ -16,6 +16,7 @@ import { Star, Wifi, Coffee, ExternalLink, Loader2, SearchX, SlidersHorizontal, 
 import { CURRENCIES, LANGUAGES, SORT_OPTIONS } from "@/pages/hotel/hotelConstants";
 import AddToQuotationDialog from "@/pages/hotel/AddToQuotationDialog";
 import CityCombobox from "@/pages/hotel/CityCombobox";
+import HotelPicker from "@/pages/hotel/HotelPicker";
 
 const todayPlus = (d) => { const t = new Date(); t.setDate(t.getDate() + d); return t.toISOString().slice(0, 10); };
 const today = () => new Date().toISOString().slice(0, 10);
@@ -189,9 +190,9 @@ export default function HotelSearch() {
               </div>
             ) : (
               <div className="space-y-1 lg:col-span-2">
-                <Label>Hotel ID (pisahkan dengan koma)</Label>
-                <Input value={hotelIds} data-testid="hotel-search-hotelids"
-                  onChange={(e) => setHotelIds(e.target.value)} placeholder="mis. 2, 6, 4213" />
+                <Label>Hotel (cari by nama)</Label>
+                <HotelPicker onChange={(ids) => setHotelIds(ids.join(", "))} />
+                <p className="text-[11px] text-slate-400">Cari hotel berdasarkan nama dari database Agoda, atau ketik Hotel ID manual.</p>
               </div>
             )}
             <div className="space-y-1">

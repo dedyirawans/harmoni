@@ -878,6 +878,22 @@ async def hotel_cities_list(q: Optional[str] = None, limit: int = 30, user: dict
     return [serialize(d) for d in await cur.to_list(limit)]
 
 
+@api_router.get("/hotel/hotels/search")
+async def hotel_hotels_search(q: Optional[str] = None, cityId: Optional[int] = None, limit: int = 20,
+                              user: dict = Depends(get_current_user)):
+    """Cari hotel by nama dari master data Agoda (agoda_hotels). Prefix match (index-backed)."""
+    limit = max(1, min(int(limit or 20), 30))
+    query = {}
+    if cityId:
+        query["cityId"] = int(cityId)
+    if q and q.strip():
+        query["name_lower"] = {"$regex": "^" + re.escape(q.strip().lower())}
+    elif not cityId:
+        return []
+    cur = db.agoda_hotels.find(query).sort("reviewCount", -1).limit(limit)
+    return [serialize(d) for d in await cur.to_list(limit)]
+
+
 # ----------------------------------------------------------------------------
 # USER MANAGEMENT (super admin)
 # ----------------------------------------------------------------------------
