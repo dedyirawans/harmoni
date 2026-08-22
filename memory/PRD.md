@@ -1,3 +1,12 @@
+## HOTEL — Master Data Kota Agoda (2026-08) — DONE ✅ (live search terbukti jalan)
+- **Impor master kota resmi Agoda** dari file data hotel (`E342B777...EN.csv`, 1.35GB, 1.354.617 hotel). Diambil **52.051 kota unik** (city_id ↔ nama ↔ negara ↔ jumlah hotel) → koleksi `agoda_cities` (index name_lower, count, cityId).
+- **PENTING — City ID seed lama SALAH & sudah diganti**: Jakarta = **8691** (bukan 9395), Bangkok = 9395, Kuala Lumpur = 14524, Tokyo = 5085, Mecca = **78591**, Medina = **23028**, Bali = 17193.
+- **Endpoint** `GET /api/hotel/cities?q=&limit=` (semua staff): tanpa q → kota terpopuler (by jumlah hotel); dengan q → cari nama (regex, sort by popularitas). **Alias Indonesia→Inggris**: makkah/mekah/mekkah→mecca, madinah/madina→medina (Agoda pakai nama Inggris).
+- **Frontend**: `CityCombobox.jsx` sekarang mencari server-side (debounce 250ms) dari master + fallback ketik City ID manual. Endpoint & UI `hotel_cities` manual lama (POST/DELETE, CityManager) dihapus (master sudah komprehensif). `CityManager.jsx` menjadi file yatim (tak diimpor).
+- **VERIFIED LIVE**: `POST /api/hotel/search` cityId 8691 (Jakarta), 28-30 Sep 2026 → status 200, **3 hotel nyata** (Millennium Hotel Sirih Rp600.000/4★, Holiday Inn Express, ANA Hotel). Kredensial Agoda aktif. (Catatan: 403 sebelumnya = rate-limit + City ID salah.)
+- CSV mentah 1.35GB ada di `/tmp/agoda_data/` (untuk potensi impor master HOTEL by-name berikutnya bila diminta).
+
+
 ## HOTEL — Aktivasi Kredensial Agoda + Autocomplete Kota (2026-08) — DONE ✅
 - **Kredensial Agoda AKTIF**: Site ID `1973232`, API Key `75c1...3e00` (dienkripsi Fernet at-rest). Test Koneksi = **200 sukses** (~142ms). CATATAN: input user berformat `SiteID:Key`, disimpan hanya bagian Key (backend menyusun header `SiteID:Key`).
 - **Rate limit Agoda**: pencarian tunggal normal = 200; probe cepat berturut-turut memicu **403** (batas laju sisi Agoda), bukan bug. Live City Search 9395 sempat 200 count 0 (tergantung ketersediaan tanggal).

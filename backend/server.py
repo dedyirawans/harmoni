@@ -862,49 +862,20 @@ async def hotel_stats(user: dict = Depends(require_permission("quotation.manage"
     return {"hotel_searches": searches, "hotel_quotations": len(qs), "hotel_revenue": round(revenue)}
 
 
-class HotelCityIn(BaseModel):
-    name: str
-    cityId: int
-    country: Optional[str] = ""
-
-
-HOTEL_CITY_SEED = [
-    {"name": "Jakarta", "cityId": 9395, "country": "Indonesia"},
-    {"name": "Makkah", "cityId": 16901, "country": "Arab Saudi"},
-    {"name": "Madinah", "cityId": 17047, "country": "Arab Saudi"},
-    {"name": "Jeddah", "cityId": 16480, "country": "Arab Saudi"},
-    {"name": "Bali (Denpasar)", "cityId": 17193, "country": "Indonesia"},
-    {"name": "Bandung", "cityId": 16057, "country": "Indonesia"},
-    {"name": "Surabaya", "cityId": 18054, "country": "Indonesia"},
-    {"name": "Yogyakarta", "cityId": 16063, "country": "Indonesia"},
-    {"name": "Singapore", "cityId": 4064, "country": "Singapura"},
-    {"name": "Kuala Lumpur", "cityId": 13170, "country": "Malaysia"},
-    {"name": "Bangkok", "cityId": 3216, "country": "Thailand"},
-    {"name": "Tokyo", "cityId": 14690, "country": "Jepang"},
-    {"name": "Dubai", "cityId": 2758, "country": "Uni Emirat Arab"},
-    {"name": "Istanbul", "cityId": 12060, "country": "Turki"},
-]
-
-
 @api_router.get("/hotel/cities")
-async def hotel_cities_list(user: dict = Depends(get_current_user)):
-    if await db.hotel_cities.count_documents({}) == 0:
-        await db.hotel_cities.insert_many([{**c, "created_at": now_iso()} for c in HOTEL_CITY_SEED])
-    return [serialize(d) for d in await db.hotel_cities.find({}).sort("name", 1).to_list(1000)]
-
-
-@api_router.post("/hotel/cities")
-async def hotel_city_add(body: HotelCityIn, user: dict = Depends(require_role("super_admin"))):
-    doc = {"name": body.name.strip(), "cityId": int(body.cityId), "country": (body.country or "").strip(), "created_at": now_iso()}
-    await db.hotel_cities.update_one({"cityId": doc["cityId"]}, {"$set": doc}, upsert=True)
-    return serialize(await db.hotel_cities.find_one({"cityId": doc["cityId"]}))
-
-
-@api_router.delete("/hotel/cities/{cid}")
-async def hotel_city_del(cid: str, user: dict = Depends(require_role("super_admin"))):
-    if ObjectId.is_valid(cid):
-        await db.hotel_cities.delete_one({"_id": ObjectId(cid)})
-    return {"ok": True}
+async def hotel_cities_list(q: Optional[str] = None, limit: int = 30, user: dict = Depends(get_current_user)):
+    """Autocomplete kota dari master data resmi Agoda (agoda_cities)."""
+    limit = max(1, min(int(limit or 30), 50))
+    if q and q.strip():
+        term = q.strip().lower()
+        _aliases = {"makkah": "mecca", "mekah": "mecca", "mekkah": "mecca", "makkatul": "mecca",
+                    "madinah": "medina", "madina": "medina", "madinatul": "medina"}
+        term = _aliases.get(term, term)
+        term = re.escape(term)
+        cur = db.agoda_cities.find({"name_lower": {"$regex": term}}).sort("count", -1).limit(limit)
+    else:
+        cur = db.agoda_cities.find({}).sort("count", -1).limit(limit)
+    return [serialize(d) for d in await cur.to_list(limit)]
 
 
 # ----------------------------------------------------------------------------
