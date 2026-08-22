@@ -1,3 +1,4 @@
+import { PageHeader } from "@/components/PageHeader";
 import { useEffect, useState } from "react";
 import api, { formatApiErrorDetail } from "@/lib/api";
 import { Card } from "@/components/ui/card";
@@ -21,8 +22,7 @@ export default function Suppliers() {
   return (
     <div className="space-y-6" data-testid="suppliers-page">
       <div>
-        <h1 className="font-display text-3xl font-bold text-slate-900">Supplier Management</h1>
-        <p className="text-slate-500 mt-1">Kelola supplier, biaya per paket, dan pembayaran (aging). Data biaya bersifat sensitif — hanya Super Admin & Accounting.</p>
+        <PageHeader title="Supplier Management" subtitle="Kelola supplier, biaya per paket, dan pembayaran (aging). Data biaya bersifat sensitif — hanya Super Admin & Accounting." />
       </div>
       <Tabs defaultValue="suppliers">
         <TabsList>

@@ -93,7 +93,15 @@ export default function Products() {
                 <F label="Single Supplement"><Input type="number" value={form.single_supplement} onChange={(e) => set("single_supplement")(e.target.value)} /></F>
                 <F label="Min Pax"><Input type="number" value={form.min_pax} onChange={(e) => set("min_pax")(e.target.value)} /></F>
                 <F label="Max Pax"><Input type="number" value={form.max_pax} onChange={(e) => set("max_pax")(e.target.value)} /></F>
-                <F label="Cover Image URL" full><Input value={form.cover_image} onChange={(e) => set("cover_image")(e.target.value)} /></F>
+                <F label="Cover Image (upload / ganti / hapus)" full>
+                  <div className="flex items-center gap-3">
+                    {form.cover_image ? <img src={form.cover_image} alt="cover" className="h-16 w-28 rounded object-cover border border-slate-200" data-testid="new-cover-preview" /> : <div className="h-16 w-28 rounded bg-slate-100 flex items-center justify-center text-[10px] text-slate-400">COVER</div>}
+                    <div className="flex-1 space-y-1">
+                      <input type="file" accept="image/*" data-testid="new-cover-upload" onChange={(e) => { const fl = e.target.files?.[0]; if (!fl) return; if (fl.size > 5 * 1024 * 1024) { toast.error("Gambar maksimal 5MB"); return; } const rd = new FileReader(); rd.onload = () => set("cover_image")(rd.result); rd.readAsDataURL(fl); }} />
+                      {form.cover_image && <Button type="button" variant="ghost" size="sm" className="text-red-600 h-7" onClick={() => set("cover_image")("")} data-testid="new-cover-clear">Hapus cover</Button>}
+                    </div>
+                  </div>
+                </F>
                 <F label="Description" full><Textarea value={form.description} onChange={(e) => set("description")(e.target.value)} /></F>
                 <F label="Promo Text" full><Input value={form.promo_text} onChange={(e) => set("promo_text")(e.target.value)} /></F>
                 {form.product_type === "UMROH" && (

@@ -1,3 +1,4 @@
+import { PageHeader } from "@/components/PageHeader";
 import { useEffect, useState, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import api, { API, formatApiErrorDetail } from "@/lib/api";
@@ -64,8 +65,7 @@ export default function Accounting() {
   return (
     <div className="space-y-6" data-testid="accounting-page">
       <div>
-        <h1 className="font-display text-3xl font-bold text-slate-900">Accounting Workspace</h1>
-        <p className="text-slate-500 mt-1">Revenue, invoice, receivable, expense, refund, HPP, pajak & laporan.</p>
+        <PageHeader title="Accounting Workspace" subtitle="Revenue, invoice, receivable, expense, refund, HPP, pajak & laporan." />
       </div>
       <Tabs defaultValue="dashboard">
         <TabsList className="flex-wrap h-auto">

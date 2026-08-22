@@ -1,3 +1,9 @@
+## Enhancement — PageHeader ke 4 halaman + Cover Upload New Package (2026-06) — DONE ✅ (UI verified)
+- **PageHeader** diterapkan ke Quotations, Accounting, Suppliers, Reports (import + ganti blok judul lama). Konsisten dengan Dashboard/Bookings/Products.
+- **New Package cover**: field "Cover Image URL" teks diganti kontrol upload gambar (file→base64) dengan preview + tombol Hapus (ganti/edit dengan upload ulang). testid: new-cover-upload / new-cover-preview / new-cover-clear.
+- **Verified**: 4 halaman page-header=1; dialog New Package menampilkan kontrol upload cover.
+- **BELUM**: editor galeri per-gambar di halaman DETAIL product (preview/tambah/hapus/set-cover) — masih read-only; jadi item berikutnya.
+
 ## Enhancement — Header Halaman Konsisten + company_name di Customer 360 (2026-06) — DONE ✅ (UI verified)
 - **PageHeader** komponen baru (`components/PageHeader.jsx`): judul (font-display 3xl) + subjudul + slot actions + garis pemisah bawah. Diterapkan di Bookings, Products, SuperAdminDashboard, SalesDashboard, AccountingDashboard untuk tampilan seragam.
 - **company_name di Customer 360**: ditampilkan di header profil (`c360-company`) DAN baris "Nama Perusahaan" di tab Overview. `/360` mengembalikan company_name. Verified tampil "PT Uji Edit Perusahaan".

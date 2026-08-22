@@ -1,3 +1,4 @@
+import { PageHeader } from "@/components/PageHeader";
 import { useEffect, useMemo, useState } from "react";
 import { useAuth } from "@/context/AuthContext";
 import api from "@/lib/api";
@@ -98,8 +99,7 @@ export default function Reports() {
   return (
     <div className="space-y-5" data-testid="reports-page">
       <div>
-        <h1 className="font-display text-3xl font-bold text-slate-900">Reports</h1>
-        <p className="text-slate-500 mt-0.5">Laporan finansial &amp; manajemen dari data transaksi aktual.</p>
+        <PageHeader title="Reports" subtitle="Laporan finansial & manajemen dari data transaksi aktual." />
       </div>
       <div className="flex flex-wrap gap-2" data-testid="report-tabs">
         {list.map((r) => (

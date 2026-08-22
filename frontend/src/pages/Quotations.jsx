@@ -1,3 +1,4 @@
+import { PageHeader } from "@/components/PageHeader";
 import { useEffect, useState } from "react";
 import api, { API, formatApiErrorDetail } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
@@ -79,8 +80,7 @@ export default function Quotations() {
     <div className="space-y-6" data-testid="quotations-page">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h1 className="font-display text-3xl font-bold text-slate-900">Quotations</h1>
-          <p className="text-slate-500 mt-1">Buat penawaran, kelola approval diskon, dan konversi ke booking.</p>
+          <PageHeader title="Quotations" subtitle="Buat penawaran, kelola approval diskon, dan konversi ke booking." />
         </div>
         {canManage && (
           <Dialog open={open} onOpenChange={onDialogChange}>
