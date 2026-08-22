@@ -1,3 +1,4 @@
+import { PageHeader } from "@/components/PageHeader";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import api from "@/lib/api";
@@ -66,16 +67,11 @@ export default function SuperAdminDashboard() {
 
   return (
     <div className="space-y-5" data-testid="executive-dashboard">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h1 className="font-display text-3xl font-bold text-slate-900">Executive Dashboard</h1>
-          <p className="text-slate-500 mt-0.5">Ringkasan Sales, Keuangan, Profitabilitas &amp; Pajak lintas modul</p>
-        </div>
-        <div className="flex items-center gap-2">
-          <label className="text-xs text-slate-500">Periode</label>
-          <Input type="month" value={month} onChange={(e) => setMonth(e.target.value)} className="w-40 h-9" data-testid="exec-period-filter" />
-        </div>
-      </div>
+      <PageHeader
+        title="Executive Dashboard"
+        subtitle="Ringkasan Sales, Keuangan, Profitabilitas & Pajak lintas modul"
+        actions={<><label className="text-xs text-slate-500">Periode</label><Input type="month" value={month} onChange={(e) => setMonth(e.target.value)} className="w-40 h-9" data-testid="exec-period-filter" /></>}
+      />
 
       {d === null ? (
         <div className="p-12 flex justify-center"><Loader2 className="h-6 w-6 animate-spin text-blue-600" /></div>

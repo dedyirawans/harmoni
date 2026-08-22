@@ -1,3 +1,4 @@
+import { PageHeader } from "@/components/PageHeader";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import api from "@/lib/api";
@@ -46,10 +47,7 @@ export default function AccountingDashboard() {
 
   return (
     <div className="space-y-5" data-testid="accounting-dashboard">
-      <div>
-        <h1 className="font-display text-3xl font-bold text-slate-900">Accounting Dashboard</h1>
-        <p className="text-slate-500 mt-0.5">Uang masuk, uang keluar &amp; outstanding · periode {d.period}</p>
-      </div>
+      <PageHeader title="Accounting Dashboard" subtitle={`Uang masuk, uang keluar & outstanding · periode ${d.period}`} />
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <Group icon={ArrowDownCircle} title="Money In" color="text-emerald-600">

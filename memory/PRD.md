@@ -1,3 +1,7 @@
+## Enhancement — Header Halaman Konsisten + company_name di Customer 360 (2026-06) — DONE ✅ (UI verified)
+- **PageHeader** komponen baru (`components/PageHeader.jsx`): judul (font-display 3xl) + subjudul + slot actions + garis pemisah bawah. Diterapkan di Bookings, Products, SuperAdminDashboard, SalesDashboard, AccountingDashboard untuk tampilan seragam.
+- **company_name di Customer 360**: ditampilkan di header profil (`c360-company`) DAN baris "Nama Perusahaan" di tab Overview. `/360` mengembalikan company_name. Verified tampil "PT Uji Edit Perusahaan".
+
 ## Enhancement — Auto-Expire Quotation + Polish Dialog/Border (2026-06) — DONE ✅ (curl + UI verified)
 - **Auto-Expire Quotation**: `GET /api/quotations` kini otomatis set status quotation DRAFT/SENT (belum converted) menjadi **EXPIRED** bila usia > 7 hari (via `update_many`, `timedelta`). Verified: quotation di-backdate → jadi EXPIRED, lalu dipulihkan.
 - **Polish Dialog**: overlay pakai backdrop-blur + `bg-slate-900/40`, konten `rounded-xl` + `shadow-xl` + border slate. Berlaku ke semua dialog.

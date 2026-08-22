@@ -1,3 +1,4 @@
+import { PageHeader } from "@/components/PageHeader";
 import { useEffect, useState, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import api from "@/lib/api";
@@ -39,10 +40,7 @@ export default function Bookings() {
 
   return (
     <div className="space-y-6" data-testid="bookings-page">
-      <div>
-        <h1 className="font-display text-3xl font-bold text-slate-900">Booking</h1>
-        <p className="text-slate-500 mt-1">Kelola booking, peserta, dokumen, invoice, dan pembayaran.</p>
-      </div>
+      <PageHeader title="Booking" subtitle="Kelola booking, peserta, dokumen, invoice, dan pembayaran." />
 
       {/* Search + Filter bar */}
       <div className="flex flex-col sm:flex-row gap-3">

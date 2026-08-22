@@ -1,3 +1,4 @@
+import { PageHeader } from "@/components/PageHeader";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
@@ -47,10 +48,7 @@ export default function SalesDashboard() {
 
   return (
     <div className="space-y-5" data-testid="sales-dashboard">
-      <div>
-        <h1 className="font-display text-3xl font-bold text-slate-900">Sales Dashboard</h1>
-        <p className="text-slate-500 mt-0.5">Performa &amp; follow up milik {user.name} · periode {d.period}</p>
-      </div>
+      <PageHeader title="Sales Dashboard" subtitle={`Performa & follow up milik ${user.name} · periode ${d.period}`} />
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <Group icon={Users2} title="Lead" color="text-blue-600">

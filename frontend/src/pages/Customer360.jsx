@@ -133,6 +133,7 @@ export default function Customer360() {
 
             <TabsContent value="overview">
               <Card className="border-slate-200 shadow-sm"><CardContent className="p-5 grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm" data-testid="c360-overview">
+                <Info label="Nama Perusahaan" value={c.company_name || "—"} />
                 <Info label="Assigned Sales" value={c.sales_pic_name} />
                 <Info label="Customer Since" value={fmtDate(c.created_at)} />
                 <Info label="Last Activity" value={lastActivity ? fmtDateTime(lastActivity) : "—"} />

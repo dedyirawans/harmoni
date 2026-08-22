@@ -1,3 +1,4 @@
+import { PageHeader } from "@/components/PageHeader";
 import { useEffect, useState } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import api, { formatApiErrorDetail } from "@/lib/api";
@@ -68,17 +69,14 @@ export default function Products() {
 
   return (
     <div className="space-y-6" data-testid="products-page">
-      <div className="flex items-center justify-between flex-wrap gap-3">
-        <div>
-          <h1 className="font-display text-3xl font-bold text-slate-900">{canManage ? "Product Management" : "Packages"}</h1>
-          <p className="text-slate-500 mt-1">{canManage ? "Manage tour & umrah packages, pricing, itinerary and departures." : "Browse active packages available to sell."}</p>
-        </div>
-        {canManage && (
+      <PageHeader
+        title={canManage ? "Product Management" : "Packages"}
+        subtitle={canManage ? "Manage tour & umrah packages, pricing, itinerary and departures." : "Browse active packages available to sell."}
+        actions={canManage && (
           <Dialog open={open} onOpenChange={setOpen}>
             <DialogTrigger asChild><Button className="bg-blue-600 hover:bg-blue-700" data-testid="add-package-button"><Plus className="h-4 w-4 mr-2" aria-hidden="true" />New Package</Button></DialogTrigger>
             <DialogContent className="bg-white max-w-2xl max-h-[90vh] overflow-y-auto" data-testid="package-dialog">
-              <DialogHeader><DialogTitle className="font-display">New Package</DialogTitle><DialogDescription>Create a tour or umrah package.</DialogDescription></DialogHeader>
-              <div className="grid grid-cols-2 gap-4 py-2">
+              <DialogHeader><DialogTitle className="font-display">New Package</DialogTitle><DialogDescription>Create a tour or umrah package.</DialogDescription></DialogHeader>              <div className="grid grid-cols-2 gap-4 py-2">
                 <F label="Package Name *" full><Input value={form.package_name} onChange={(e) => set("package_name")(e.target.value)} data-testid="package-name-input" /></F>
                 <F label="Product Type"><Select value={form.product_type} onValueChange={set("product_type")}><SelectTrigger data-testid="package-type-select"><SelectValue /></SelectTrigger><SelectContent className="bg-white">{PRODUCT_TYPES.map((t) => <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>)}</SelectContent></Select></F>
                 <F label="Category"><Input value={form.category} onChange={(e) => set("category")(e.target.value)} placeholder="e.g. Umrah VIP / Japan" /></F>
@@ -115,7 +113,7 @@ export default function Products() {
             </DialogContent>
           </Dialog>
         )}
-      </div>
+      />
 
       <div className="flex items-center gap-3 flex-wrap">
         <div className="relative flex-1 min-w-[220px]">
