@@ -465,45 +465,160 @@ async def _hotel_log(user, req_type, search_type, params, status, ms, count, err
         "error_code": err_code, "error_message": err_msg, "by": user.get("name") if user else None})
 
 
-async def _agoda_call(criteria, user, req_type="SEARCH"):
+DEFAULT_HOTEL_ENDPOINT = "http://affiliateapi7643.agoda.com/affiliateservice/lt_v1"
+
+
+def _hotel_user_msg(status, code=None):
+    if code == "TIMEOUT":
+        return "Pencarian hotel memakan waktu terlalu lama. Silakan coba lagi."
+    return {400: "Permintaan pencarian tidak valid.",
+            401: "Autentikasi layanan hotel gagal. Silakan hubungi administrator.",
+            403: "Batas permintaan atau pembatasan akses layanan hotel.",
+            404: "Data tidak ditemukan.",
+            410: "Sumber daya sudah tidak tersedia lagi.",
+            500: "Layanan hotel mengalami gangguan. Silakan coba lagi nanti.",
+            503: "Layanan hotel sementara tidak tersedia. Silakan coba lagi nanti.",
+            506: "Konfigurasi layanan hotel bermasalah."}.get(status, "Terjadi kesalahan pada layanan hotel.")
+
+
+class HotelSearchRequest(BaseModel):
+    searchType: str = "city"  # "city" | "hotel"
+    cityId: Optional[int] = None
+    hotelId: Optional[List[int]] = None
+    checkInDate: str
+    checkOutDate: str
+    language: Optional[str] = None
+    currency: Optional[str] = None
+    sortBy: Optional[str] = None
+    maxResult: Optional[int] = 30
+    discountOnly: Optional[bool] = False
+    minimumStarRating: Optional[float] = None
+    minimumReviewScore: Optional[float] = None
+    dailyRateMin: Optional[float] = None
+    dailyRateMax: Optional[float] = None
+    numberOfAdult: int = 2
+    numberOfChildren: int = 0
+    childrenAges: Optional[List[int]] = None
+
+
+def _valid_ymd(d):
+    from datetime import datetime as _dt
+    try:
+        _dt.strptime(d, "%Y-%m-%d")
+        return True
+    except Exception:
+        return False
+
+
+def _build_agoda_criteria(req: "HotelSearchRequest"):
+    from datetime import date as _date
+    if not _valid_ymd(req.checkInDate) or not _valid_ymd(req.checkOutDate):
+        raise HTTPException(status_code=400, detail="Format tanggal harus YYYY-MM-DD.")
+    if req.checkOutDate <= req.checkInDate:
+        raise HTTPException(status_code=400, detail="Check-out harus setelah check-in.")
+    if req.checkInDate < _date.today().isoformat():
+        raise HTTPException(status_code=400, detail="Tanggal check-in tidak boleh di masa lalu.")
+    ages = [int(a) for a in (req.childrenAges or [])]
+    if int(req.numberOfChildren) != len(ages):
+        raise HTTPException(status_code=400,
+                            detail=f"Jumlah 'Children Ages' ({len(ages)}) harus sama dengan jumlah anak ({req.numberOfChildren}).")
+    occ = {"numberOfAdult": max(int(req.numberOfAdult), 1), "numberOfChildren": int(req.numberOfChildren)}
+    if ages:
+        occ["childrenAges"] = ages
+    additional = {"currency": req.currency or "IDR", "language": req.language or "id-id",
+                  "maxResult": int(req.maxResult or 30), "discountOnly": bool(req.discountOnly),
+                  "occupancy": occ}
+    criteria = {"checkInDate": req.checkInDate, "checkOutDate": req.checkOutDate, "additional": additional}
+    st = (req.searchType or "city").lower()
+    if st == "hotel":
+        ids = [int(h) for h in (req.hotelId or []) if str(h).strip() != ""]
+        if not ids:
+            raise HTTPException(status_code=400, detail="Minimal satu Hotel ID diperlukan untuk Hotel List Search.")
+        criteria["hotelId"] = ids
+        search_type = "hotel"
+    else:
+        if not req.cityId:
+            raise HTTPException(status_code=400, detail="City ID diperlukan untuk City Search.")
+        criteria["cityId"] = int(req.cityId)
+        if req.sortBy:
+            additional["sortBy"] = req.sortBy
+        if req.minimumStarRating is not None:
+            additional["minimumStarRating"] = float(req.minimumStarRating)
+        if req.minimumReviewScore is not None:
+            additional["minimumReviewScore"] = float(req.minimumReviewScore)
+        dr = {}
+        if req.dailyRateMin is not None:
+            dr["minimum"] = float(req.dailyRateMin)
+        if req.dailyRateMax is not None:
+            dr["maximum"] = float(req.dailyRateMax)
+        if dr:
+            additional["dailyRate"] = dr
+        search_type = "city"
+    log_meta = {"searchType": search_type, "cityId": criteria.get("cityId"), "hotelId": criteria.get("hotelId"),
+                "checkInDate": req.checkInDate, "checkOutDate": req.checkOutDate,
+                "numberOfAdult": occ["numberOfAdult"], "numberOfChildren": occ["numberOfChildren"],
+                "currency": additional["currency"], "language": additional["language"],
+                "sortBy": additional.get("sortBy"), "discountOnly": additional["discountOnly"]}
+    import json as _hj
+    import hashlib as _hh
+    cache_key = _hh.sha256(_hj.dumps({"c": criteria, "st": search_type}, sort_keys=True, default=str).encode()).hexdigest()
+    return criteria, search_type, log_meta, cache_key
+
+
+async def _hotel_cache_get(key):
+    import time as _t
+    doc = await db.hotel_search_cache.find_one({"key": key})
+    if not doc:
+        return None
+    if _t.time() - float(doc.get("ts", 0)) > 600:  # 10-minute TTL
+        return None
+    return doc.get("payload")
+
+
+async def _hotel_cache_set(key, payload):
+    import time as _t
+    await db.hotel_search_cache.update_one({"key": key},
+                                           {"$set": {"key": key, "ts": _t.time(), "payload": payload}}, upsert=True)
+
+
+async def _agoda_call(criteria, user, search_type="city", log_meta=None, req_type="SEARCH"):
     s = await _hotel_settings_raw()
     _api_key = _hotel_api_key(s)
     if not s.get("site_id") or not _api_key:
         raise HTTPException(status_code=400, detail="Kredensial Agoda belum diisi di API Settings.")
     if not s.get("active", True):
         raise HTTPException(status_code=400, detail="Hotel API status non-aktif.")
-    endpoint = s.get("endpoint") or "http://affiliateapi7643.agoda.com/affiliateservice/lt_v1"
-    body = {"criteria": {**criteria}}
-    body["criteria"].setdefault("additional", {})
-    body["criteria"]["additional"].setdefault("currency", s.get("currency", "IDR"))
-    body["criteria"]["additional"].setdefault("language", s.get("language", "id-id"))
+    endpoint = s.get("endpoint") or DEFAULT_HOTEL_ENDPOINT
+    body = {"criteria": criteria}
     headers = {"Authorization": f"{s['site_id']}:{_api_key}", "Accept-Encoding": "gzip,deflate",
                "Content-Type": "application/json"}
     import time as _t
     t0 = _t.time()
     status_code, count, results, err_code, err_msg = 0, 0, [], None, None
     try:
-        resp = _requests.post(endpoint, json=body, headers=headers, timeout=20)
+        resp = _requests.post(endpoint, json=body, headers=headers, timeout=25)
         status_code = resp.status_code
         if status_code in (200, 206):
-            data = resp.json()
+            try:
+                data = resp.json()
+            except Exception:
+                data = {}
             raw = data.get("results") or data.get("Results") or []
             results = [_normalize_hotel(r) for r in raw]
             count = len(results)
-        elif status_code in (202, 204):
-            err_msg = "Tidak ada hasil / sedang diproses."
+        elif status_code == 204:
+            err_msg = "No content"
         else:
             err_code = str(status_code)
-            err_msg = {401: "Unauthorized", 403: "Forbidden / quota or terms issue",
-                       404: "Not Found", 410: "Gone", 400: "Bad Request",
-                       500: "Internal Server Error", 503: "Service Unavailable", 506: "Not Acceptable"}.get(status_code, "Error")
+            err_msg = _hotel_user_msg(status_code)
+    except _requests.exceptions.Timeout:
+        err_code = "TIMEOUT"
+        err_msg = "Request timed out"
     except Exception as e:
         err_code = "EXC"
         err_msg = str(e)[:200]
     ms = int((_t.time() - t0) * 1000)
-    await _hotel_log(user, req_type, criteria.get("_search_type", "LongTail"),
-                     {"criteria": {k: v for k, v in criteria.items() if k != "additional"}},
-                     status_code, ms, count, err_code, err_msg)
+    await _hotel_log(user, req_type, search_type, log_meta or {}, status_code, ms, count, err_code, err_msg)
     return {"status": status_code, "count": count, "results": results, "error_code": err_code,
             "error_message": err_msg, "response_time_ms": ms}
 
@@ -532,10 +647,10 @@ async def hotel_test_connection(user: dict = Depends(require_role("super_admin")
     from datetime import date, timedelta as _td
     ci = (date.today() + _td(days=14)).isoformat()
     co = (date.today() + _td(days=15)).isoformat()
-    criteria = {"_search_type": "TestConnection", "checkIn": ci, "checkOut": co, "cityId": 9395,
-                "occupancy": {"numberOfAdult": 2, "numberOfChildren": 0}, "maxResult": 1}
+    req = HotelSearchRequest(searchType="city", cityId=9395, checkInDate=ci, checkOutDate=co, maxResult=1)
     try:
-        res = await _agoda_call(criteria, user, req_type="TEST")
+        criteria, st, meta, _ = _build_agoda_criteria(req)
+        res = await _agoda_call(criteria, user, search_type=st, log_meta=meta, req_type="TEST")
     except HTTPException as e:
         return {"success": False, "message": "Agoda API connection failed.", "detail": e.detail}
     ok = res["status"] in (200, 202, 204, 206)
@@ -545,14 +660,28 @@ async def hotel_test_connection(user: dict = Depends(require_role("super_admin")
 
 
 @api_router.post("/hotel/search")
-async def hotel_search(body: dict, user: dict = Depends(get_current_user)):
-    criteria = dict(body or {})
-    criteria["_search_type"] = criteria.get("_search_type", "LongTail")
-    res = await _agoda_call(criteria, user, req_type="SEARCH")
-    if res["status"] not in (200, 202, 204, 206) and not res["results"]:
-        return {"results": [], "count": 0, "message": "Pencarian gagal atau tidak ada hasil.",
-                "status": res["status"]}
-    return {"results": res["results"], "count": res["count"], "status": res["status"]}
+async def hotel_search(req: HotelSearchRequest, user: dict = Depends(get_current_user)):
+    criteria, search_type, log_meta, cache_key = _build_agoda_criteria(req)
+    cached = await _hotel_cache_get(cache_key)
+    if cached is not None:
+        return {**cached, "cached": True}
+    res = await _agoda_call(criteria, user, search_type=search_type, log_meta=log_meta, req_type="SEARCH")
+    status = res["status"]
+    out = {"results": res["results"], "count": res["count"], "status": status, "cached": False,
+           "searchType": search_type, "error": False, "partial": False, "message": None}
+    if status in (200, 206) and res["count"] > 0:
+        if status == 206:
+            out["partial"] = True
+            out["message"] = "Sebagian hasil mungkin belum lengkap."
+        await _hotel_cache_set(cache_key, out)
+        return out
+    if status in (200, 206, 204):
+        out["message"] = "Tidak ada hotel untuk kriteria yang dipilih."
+        return out
+    # error path — return graceful 200 with user-friendly message; details live in API Logs
+    out["error"] = True
+    out["message"] = _hotel_user_msg(status, res["error_code"])
+    return out
 
 
 @api_router.get("/hotel/logs")
@@ -562,10 +691,18 @@ async def hotel_logs(user: dict = Depends(require_role("super_admin"))):
 
 @api_router.get("/hotel/search-history")
 async def hotel_search_history(user: dict = Depends(get_current_user)):
-    q = {"request_type": "SEARCH"}
-    docs = await db.hotel_api_logs.find(q).sort("timestamp", -1).to_list(100)
-    return [{"timestamp": d.get("timestamp"), "params": d.get("params"), "result_count": d.get("result_count"),
-             "response_status": d.get("response_status")} for d in [serialize(x) for x in docs]]
+    docs = await db.hotel_api_logs.find({"request_type": "SEARCH"}).sort("timestamp", -1).to_list(100)
+    out = []
+    for d in [serialize(x) for x in docs]:
+        p = d.get("params") or {}
+        out.append({"timestamp": d.get("timestamp"), "searchType": p.get("searchType"),
+                    "cityId": p.get("cityId"), "hotelId": p.get("hotelId"),
+                    "checkInDate": p.get("checkInDate"), "checkOutDate": p.get("checkOutDate"),
+                    "numberOfAdult": p.get("numberOfAdult"), "numberOfChildren": p.get("numberOfChildren"),
+                    "currency": p.get("currency"), "language": p.get("language"),
+                    "result_count": d.get("result_count"), "response_status": d.get("response_status"),
+                    "by": d.get("by")})
+    return out
 
 
 # ----------------------------------------------------------------------------

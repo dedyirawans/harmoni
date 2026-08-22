@@ -12,14 +12,6 @@ const fmt = (iso) => {
   catch { return iso; }
 };
 
-const summarize = (p) => {
-  const c = (p && p.criteria) || p || {};
-  const parts = [];
-  if (c.cityId) parts.push(`City ${c.cityId}`);
-  if (c.checkIn) parts.push(`${c.checkIn}${c.checkOut ? " → " + c.checkOut : ""}`);
-  return parts.join(" · ") || "-";
-};
-
 export default function SearchHistory() {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -42,7 +34,7 @@ export default function SearchHistory() {
     <Card className="border-slate-200 shadow-sm" data-testid="hotel-history">
       <CardContent className="p-5 space-y-4">
         <div className="flex items-center justify-between">
-          <p className="text-sm text-slate-500">Riwayat pencarian hotel Anda (tanpa data kredensial).</p>
+          <p className="text-sm text-slate-500">Riwayat pencarian hotel (tanpa data kredensial).</p>
           <Button size="sm" variant="outline" onClick={load} data-testid="hotel-history-refresh">
             <RefreshCw className="h-3.5 w-3.5 mr-1" />Muat Ulang
           </Button>
@@ -55,30 +47,42 @@ export default function SearchHistory() {
             <p className="text-sm">Belum ada riwayat pencarian.</p>
           </div>
         ) : (
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Waktu</TableHead>
-                <TableHead>Kriteria</TableHead>
-                <TableHead className="text-center">Hasil</TableHead>
-                <TableHead className="text-center">Status</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {rows.map((r, i) => (
-                <TableRow key={i} data-testid={`hotel-history-row-${i}`}>
-                  <TableCell className="text-sm">{fmt(r.timestamp)}</TableCell>
-                  <TableCell className="text-sm text-slate-600">{summarize(r.params)}</TableCell>
-                  <TableCell className="text-center text-sm">{r.result_count ?? 0}</TableCell>
-                  <TableCell className="text-center">
-                    <Badge variant={[200, 206].includes(r.response_status) ? "default" : "secondary"}>
-                      {r.response_status || "-"}
-                    </Badge>
-                  </TableCell>
+          <div className="overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Waktu</TableHead>
+                  <TableHead>Tipe</TableHead>
+                  <TableHead>Tujuan</TableHead>
+                  <TableHead>Tanggal</TableHead>
+                  <TableHead className="text-center">Tamu</TableHead>
+                  <TableHead className="text-center">Mata Uang</TableHead>
+                  <TableHead className="text-center">Hasil</TableHead>
+                  <TableHead className="text-center">Status</TableHead>
+                  <TableHead>Oleh</TableHead>
                 </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+              </TableHeader>
+              <TableBody>
+                {rows.map((r, i) => (
+                  <TableRow key={i} data-testid={`hotel-history-row-${i}`}>
+                    <TableCell className="text-sm whitespace-nowrap">{fmt(r.timestamp)}</TableCell>
+                    <TableCell><Badge variant="outline">{r.searchType === "hotel" ? "Hotel List" : "City"}</Badge></TableCell>
+                    <TableCell className="text-sm text-slate-600">
+                      {r.searchType === "hotel" ? `Hotel: ${(r.hotelId || []).join(", ") || "-"}` : `City ${r.cityId ?? "-"}`}
+                    </TableCell>
+                    <TableCell className="text-sm text-slate-600 whitespace-nowrap">{r.checkInDate || "-"} → {r.checkOutDate || "-"}</TableCell>
+                    <TableCell className="text-center text-sm">{(r.numberOfAdult ?? "-")}D / {(r.numberOfChildren ?? 0)}A</TableCell>
+                    <TableCell className="text-center text-sm">{r.currency || "-"}</TableCell>
+                    <TableCell className="text-center text-sm">{r.result_count ?? 0}</TableCell>
+                    <TableCell className="text-center">
+                      <Badge variant={[200, 206].includes(r.response_status) ? "default" : "secondary"}>{r.response_status || "-"}</Badge>
+                    </TableCell>
+                    <TableCell className="text-sm text-slate-500">{r.by || "-"}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
         )}
       </CardContent>
     </Card>

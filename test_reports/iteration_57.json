@@ -1,0 +1,24 @@
+{
+  "summary": "PHASE HOTEL-2 frontend testing completed end-to-end. Verified as Super Admin at /hotel: all 4 tabs render (Hotel Search, Search History, API Settings, API Logs). Hotel Search form contains ALL required data-testids (hotel-search, hotel-searchtype-tabs, hotel-searchtype-city, hotel-searchtype-hotel, hotel-search-cityid, hotel-search-checkin, hotel-search-checkout, hotel-search-adults, hotel-search-children, hotel-search-currency, hotel-search-language, hotel-search-sortby, hotel-search-minstar, hotel-search-minreview, hotel-search-ratemin, hotel-search-ratemax, hotel-search-discountonly, hotel-search-submit). Occupancy dynamic: setting Anak=2 renders hotel-search-children-ages with hotel-search-childage-0 and hotel-search-childage-1; setting Anak=0 removes them. Hotel List tab replaces cityId with hotel-search-hotelids and hides city-only filters (sortby=0). Client-side validation: check-out before check-in fires Indonesian toast 'Check-out harus setelah check-in.'; empty cityId fires 'City ID wajib diisi untuk City Search.' Valid City Search shows hotel-search-loading with submit disabled during flight, then displays hotel-search-error with 'Autentikasi layanan hotel gagal. Silakan hubungi administrator.' (expected — no live Agoda key); submit re-enabled afterwards, no crash. Search History tab renders hotel-history table (not empty) and body contains NO api_key/bearer/authorization leaks. RBAC: Sales has Hotel sidebar link and /hotel shows ONLY Hotel Search + Search History tabs (API Settings/Logs hidden). Accounting sidebar has NO Hotel entry. Regression: Dashboard, CRM, Quotations load without errors for Super Admin.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "HotelSearch.jsx is ~406 lines — still manageable but approaching the point where extracting the results card + detail dialog into separate components would improve readability.",
+    "validate() correctly enforces childrenAges length == numberOfChildren via setChildren truncation; buildPayload maps to backend contract cleanly.",
+    "inFlight ref + loading state prevents duplicate submits (verified: submit disabled during in-flight)."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "N/A (frontend-only per request)", "frontend": "100% — all 11 acceptance criteria pass"},
+  "test_credentials": "Super Admin dedyirawan18@gmail.com/Admin@123, Sales sales@safarcrm.com/Sales@123, Accounting accounting@safarcrm.com/Account@123 — all working.",
+  "seed_data_creation": "None",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Hotel-2 UI, validation, RBAC and graceful-error surfaces all working. Real Agoda 200 response (hotel result cards, hotel-detail-dialog, Book on Agoda button, hotel-client-filters, hotel-partial-badge, hotel-cached-badge) CANNOT be exercised without a live Agoda API key — code paths inspected in HotelSearch.jsx and appear correct. When a real key is configured, re-run a valid city search and expect hotel-search-results to populate.",
+  "rca of the issue": "N/A — no bugs found."
+}

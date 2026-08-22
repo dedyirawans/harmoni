@@ -87,7 +87,6 @@ export const MENUS = {
     { label: "Invoices & AR", path: "/accounting", icon: Calculator },
     { label: "Operations", path: "/operations", icon: PlaneTakeoff },
     { label: "Suppliers", path: "/suppliers", icon: Building2 },
-    { label: "Hotel", path: "/hotel", icon: Hotel },
     { label: "My Tasks", path: "/tasks", icon: CheckSquare },
     { label: "Approval", path: "/approval-center", icon: ShieldCheck },
     { label: "Transactions", path: "/transactions", icon: Receipt },

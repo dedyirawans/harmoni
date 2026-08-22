@@ -1,3 +1,19 @@
+## PHASE HOTEL-2 — Hotel Search & Availability (2026-08) — DONE ✅ (backend curl + testing_agent frontend 11/11)
+- **2 tipe pencarian**: **City Search** (cityId) & **Hotel List Search** (hotelId[] multi, dipisah koma). Toggle tab di form.
+- **Form modern**: Destinasi/City ID (dengan datalist COMMON_CITIES: Jakarta 9395, Makkah 16901, Madinah 17047, dst), Check-in/out (date, min hari ini), Dewasa, Anak + **Children Ages dinamis** (jumlah input usia = jumlah anak, auto-sinkron), Mata Uang (13: IDR/USD/SGD/MYR/THB/JPY/KRW/EUR/GBP/SAR/AED/AUD/CHF), Bahasa (8 kode Agoda: id-id/en-us/ja-jp/ko-kr/zh-cn/th-th/ms-my/ar-ae).
+- **Filter server (City only)**: sortBy (12 opsi Agoda: Recommended, PriceAsc/Desc, StarRating Asc/Desc, 7 ReviewScore), minimumStarRating, minimumReviewScore, dailyRate min/max, discountOnly.
+- **Backend** (`server.py`): `HotelSearchRequest` + `_build_agoda_criteria` (validasi: format YYYY-MM-DD, checkout>checkin, checkin≥hari ini, len(childrenAges)==numberOfChildren, city butuh cityId / hotel butuh hotelId[]). Payload Agoda LT benar: `criteria.additional.{currency,language,maxResult,discountOnly,occupancy{numberOfAdult,numberOfChildren,childrenAges},sortBy,minimumStarRating,minimumReviewScore,dailyRate{min,max}}` + `cityId`/`hotelId`.
+- **`_agoda_call`**: timeout 25s (handle `requests.Timeout`→pesan khusus), mapping status 400/401/403/404/410/500/503/506 ke pesan Indonesia ramah via `_hotel_user_msg`. POST `/api/hotel/search` mengembalikan **200 anggun** `{results,count,status,error,partial,message,cached}` (error Agoda TIDAK dilempar sebagai 4xx/5xx agar UI tak crash; detail teknis hanya di API Logs).
+- **Cache**: koleksi `hotel_search_cache`, TTL 10 menit, key = sha256(criteria+searchType). Hanya cache hasil sukses (>0). Badge "Dari cache" & "Sebagian hasil" (206) di UI.
+- **Result mapping** (`_normalize_hotel`): hotelId, hotelName, roomtypeName, starRating, reviewScore, reviewCount, currency, dailyRate, crossedOutRate, discountPercentage, imageURL, landingURL, includeBreakfast, freeWifi → kartu hotel modern (badge diskon %, harga coret, bintang, ulasan, sarapan/wifi) + **dialog detail** dengan tombol **Book on Agoda** (buka `landingURL` apa adanya, tidak dikonstruksi manual).
+- **Filter klien** (tidak mengubah hasil Agoda): min bintang/skor, harga min/maks, sarapan, wifi, diskon.
+- **State UX**: loading "Mencari…" + tombol disabled (cegah duplikat via `inFlight` ref), empty (204/0 hasil), error, partial (206).
+- **Search History** diperkaya: tipe, tujuan (cityId/hotelIds), tanggal, tamu, currency, hasil, status, oleh — tanpa kredensial.
+- **RBAC**: Hotel Search & History = semua staff; API Settings & Logs = super_admin. **Hotel dihapus dari menu Accounting** sesuai spec. Diverifikasi: Sales 403 di /hotel/logs, 200 di /hotel/search.
+- **TIDAK diimplementasikan** (di luar dokumentasi PDF): booking confirmation, reservasi kamar, cancellation, refund. Ruang lingkup: Search → Availability → Info Hotel → Redirect ke landingURL Agoda.
+- **CATATAN**: API Key Agoda asli belum diisi → semua pencarian nyata mengembalikan 401 (EXPECTED). Setelah key valid diisi di API Settings, kartu hasil & dialog detail akan tampil. Tests: `/app/test_reports/iteration_57.json`.
+
+
 ## PHASE HOTEL-1 — Modul Hotel & Fondasi Integrasi Agoda API (2026-06) — DONE ✅ (testing_agent: backend 10/10, frontend ~95%)
 - **Navigasi**: 1 menu "Hotel" (icon Hotel) di sidebar super_admin/sales/accounting → route `/hotel` (nav.js `ROUTE_PERMS['/hotel']=null`, App.js `/hotel`→HotelWorkspace). Pola tab seperti "AI & WhatsApp".
 - **HotelWorkspace.jsx**: 4 tab — Hotel Search & Search History (semua staff); API Settings & API Logs (super_admin only, tab digate via `user.role`).
