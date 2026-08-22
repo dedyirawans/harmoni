@@ -84,3 +84,12 @@ h1, h2, h3, h4, h5, .font-display {
 }
 .print-only { display: none; }
 @media print { .print-only { display: block !important; } }
+
+/* UI polish (design system) — professional, tidy */
+::selection { background: hsl(221 83% 53% / 0.18); }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: hsl(215 20% 80%); border-radius: 9999px; border: 2px solid transparent; background-clip: content-box; }
+::-webkit-scrollbar-thumb:hover { background: hsl(215 16% 65%); }
+table thead th { letter-spacing: 0.02em; }
+[data-radix-popper-content-wrapper] { z-index: 60; }

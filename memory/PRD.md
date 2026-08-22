@@ -1,3 +1,11 @@
+## Fitur — Badge Kedaluwarsa, Nama Perusahaan di Detail, Setting Domain, Polish UI (2026-06) — DONE ✅ (curl + UI verified)
+1. **Badge "Kedaluwarsa"**: di daftar Quotations (terbit + 7 hari, kecuali ACCEPTED/EXPIRED/REJECTED/converted) dan Invoices (terbit + 3 hari, hanya yang outstanding>0 & belum PAID). Inline expiry check di Quotations.jsx & Accounting.jsx (tab Invoice).
+2. **Nama Perusahaan (company_name)**: tampil di header profil Customer 360 (+testid c360-company), dapat diinput saat Add Customer (Customers.jsx) dan Edit Customer (Customer360 EditCustomerButton). Backend `CustomerCreate` + list search sudah mendukung.
+3. **Setting Domain**: field "Domain / URL Aplikasi" (`app_domain`) di Settings > Company; model `CompanySettingsUpdate` + PUT /company-settings menyimpannya. Verified tersimpan.
+4. **(item 4 satukan semua setting) DITUNDA** atas permintaan user.
+5. **Polish UI (seluruh app)** sesuai `/app/design_guidelines.json` (pertahankan warna biru/slate): Card (border-slate-200 shadow-sm), Button (active:scale), Badge (rounded-full pill), index.css (scrollbar halus, selection, popper z-index). Diterapkan via komponen shadcn global sehingga berdampak ke seluruh halaman.
+- **Verified**: badge Kedaluwarsa muncul di Quotation (QT-00005) & Invoice overdue; company_name persist di detail & edit; app_domain tersimpan; UI tampil rapi & profesional (screenshot). Data backdate uji sudah dipulihkan.
+
 ## Fitur — Masa Berlaku, Kontak/Alamat Customer di PDF, Nama Perusahaan, Integrasi Conversation AI→CRM (2026-06) — DONE ✅ (curl + PDF-render verified)
 1. **Masa berlaku**: Invoice = tanggal terbit + 3 hari; Quotation = + 7 hari (`_valid_until_label`).
 2. **Tampil di PDF**: baris "Masa Berlaku s/d: DD Bulan YYYY" di invoice & quotation.

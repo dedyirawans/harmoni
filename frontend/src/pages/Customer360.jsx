@@ -70,6 +70,7 @@ export default function Customer360() {
               </div>
               <div>
                 <h2 className="font-display text-xl font-bold text-slate-900">{c.full_name}</h2>
+                {c.company_name && <p className="text-sm font-medium text-slate-500" data-testid="c360-company">{c.company_name}</p>}
                 <p className="text-xs font-mono text-slate-400">{c.customer_code}</p>
               </div>
             </div>
@@ -342,6 +343,7 @@ function EditCustomerButton({ customer, onDone }) {
       address: customer.address || "", city: customer.city || "", province: customer.province || "",
       postal_code: customer.postal_code || "", country: customer.country || "",
       customer_type: customer.customer_type || "", customer_source: customer.customer_source || "", notes: customer.notes || "",
+      company_name: customer.company_name || "",
     });
     setOpen(true);
   };
@@ -380,6 +382,7 @@ function EditCustomerButton({ customer, onDone }) {
           </DialogHeader>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 py-2">
             <div className="sm:col-span-2"><Field k="full_name" label="Nama Lengkap" /></div>
+            <div className="sm:col-span-2"><Field k="company_name" label="Nama Perusahaan" /></div>
             <Field k="whatsapp" label="WhatsApp" />
             <Field k="phone" label="No. HP" />
             <Field k="email" label="Email" type="email" />

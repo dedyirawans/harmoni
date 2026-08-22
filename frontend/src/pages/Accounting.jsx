@@ -105,7 +105,7 @@ export default function Accounting() {
                   <TableCell className={CELL}>{inv.due_date || "—"}</TableCell>
                   <TableCell className={`${CELL} text-right font-semibold`}>{fmtIDR(inv.total)}</TableCell>
                   <TableCell className={`${CELL} text-right text-red-600`}>{fmtIDR(inv.outstanding)}</TableCell>
-                  <TableCell className={CELL}><Badge variant="outline" className={INVOICE_STATUS_COLORS[inv.status]}>{inv.status}</Badge></TableCell>
+                  <TableCell className={CELL}><Badge variant="outline" className={INVOICE_STATUS_COLORS[inv.status]}>{inv.status}</Badge>{(() => { try { const d = new Date(inv.created_at); d.setDate(d.getDate() + 3); return (d < new Date() && Number(inv.outstanding || 0) > 0 && !["PAID", "LUNAS"].includes(String(inv.status || "").toUpperCase())); } catch { return false; } })() && <Badge variant="outline" className="ml-1 rounded-full bg-red-50 text-red-700 border-red-200" data-testid={`inv-expired-${inv._id}`}>Kedaluwarsa</Badge>}</TableCell>
                   <TableCell className={`${CELL} text-right whitespace-nowrap`}>
                     <Button size="sm" variant="outline" className="mr-1" onClick={() => openPdf(inv._id)}><FileText className="h-4 w-4" /></Button>
                     <Button size="sm" variant="outline" onClick={() => navigate(`/booking/${inv.booking_id}`)}>Booking</Button>

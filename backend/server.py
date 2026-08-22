@@ -281,6 +281,7 @@ class CompanySettingsUpdate(BaseModel):
     npwp: Optional[str] = None
     nib: Optional[str] = None
     bank_account: Optional[str] = None
+    app_domain: Optional[str] = None
 
 
 class SystemSettingsUpdate(BaseModel):

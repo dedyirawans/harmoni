@@ -86,6 +86,11 @@ export default function Settings() {
                 </div>
               ))}
               <div className="space-y-2 sm:col-span-2">
+                <Label>Domain / URL Aplikasi</Label>
+                <p className="text-xs text-slate-400">Alamat domain tempat CRM ini diakses. Ubah di sini bila domain berganti.</p>
+                <Input value={company.app_domain || ""} disabled={!canManage} onChange={(e) => setCompany({ ...company, app_domain: e.target.value })} placeholder="https://crm.perusahaananda.com" data-testid="company-app-domain-input" />
+              </div>
+              <div className="space-y-2 sm:col-span-2">
                 <Label>Company Logo</Label>
                 <p className="text-xs text-slate-400">Shown in the sidebar and login screen. The Company Name is also used as the browser tab title.</p>
                 <div className="flex items-center gap-4 pt-1">

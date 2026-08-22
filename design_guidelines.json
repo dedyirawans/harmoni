@@ -1,122 +1,75 @@
 {
-  "project_type": "hybrid_fullstack",
-  "app_context": "B2B SaaS CRM Dashboard for Tour & Travel + Umrah",
-  "theme": "Light mode by default (crisp data visibility) with Dark mode support.",
-  "typography": {
-    "strategy": "The 'Old Money Tech' variant for SaaS/CRM - highly legible but with character.",
-    "headings": {
-      "font_family": "Outfit",
-      "import_url": "@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&display=swap');",
-      "classes": "font-['Outfit'] tracking-tight text-slate-900 dark:text-white",
-      "hierarchy": {
-        "h1": "text-3xl sm:text-4xl font-bold tracking-tight",
-        "h2": "text-2xl sm:text-3xl font-semibold tracking-tight",
-        "h3": "text-xl sm:text-2xl font-medium tracking-tight",
-        "h4": "text-lg font-medium"
-      }
+  "theme": "Professional, tidy, high-trust CRM dashboard for Tour, Travel & Umrah.",
+  "colors": {
+    "primary": "Maintain existing blue (e.g., bg-blue-600, hover:bg-blue-700).",
+    "background": "bg-slate-50 for application background to ensure white surfaces pop.",
+    "surface": "bg-white for sidebars, cards, and dialogs.",
+    "border": "border-slate-200 for soft but clear separation.",
+    "text": {
+      "heading": "text-slate-900",
+      "body": "text-slate-600",
+      "muted": "text-slate-500"
     },
-    "body": {
-      "font_family": "IBM Plex Sans",
-      "import_url": "@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&display=swap');",
-      "classes": "font-['IBM_Plex_Sans'] text-slate-600 dark:text-slate-300 leading-relaxed",
-      "sizes": {
-        "base": "text-base",
-        "small": "text-sm",
-        "tiny": "text-xs tracking-[0.02em] uppercase font-semibold"
-      }
+    "status": {
+      "success": "bg-emerald-50 text-emerald-700 border border-emerald-200",
+      "warning": "bg-amber-50 text-amber-700 border border-amber-200",
+      "error": "bg-red-50 text-red-700 border border-red-200",
+      "info": "bg-blue-50 text-blue-700 border border-blue-200"
     }
   },
-  "colors": {
-    "archetype": "SWISS & HIGH-CONTRAST + LUXURY (Professional & Trustworthy)",
-    "description": "Crisp white/gray data surfaces framed by deep midnight blue structural elements. Warm sand/gold accents for the Umrah travel connection.",
-    "palette": {
-      "primary": "bg-amber-600 hover:bg-amber-700 text-white (Hex: #D97706)",
-      "secondary": "bg-slate-900 hover:bg-slate-800 text-white (Hex: #0F172A)",
-      "background_light": "bg-slate-50",
-      "surface_light": "bg-white",
-      "sidebar_dark": "bg-slate-900 text-slate-300",
-      "border": "border-slate-200 dark:border-slate-800",
-      "success": "bg-emerald-50 text-emerald-700 border-emerald-200",
-      "warning": "bg-amber-50 text-amber-700 border-amber-200",
-      "destructive": "bg-red-50 text-red-700 border-red-200"
-    },
-    "rules": [
-      "NO Teal green or teal blue (#1B93A4) for dashboard.",
-      "NEVER use pure #000000 or #808080. Tint grays with blue (slate).",
-      "Active sidebar items must use white text with bg-white/10 on the dark sidebar."
-    ]
+  "typography": {
+    "headings": "Keep existing font-display. Ensure tight tracking for large sizes (tracking-tight).",
+    "body": "Use standard sans (Inter/system-ui).",
+    "scale": {
+      "h1": "text-2xl font-semibold text-slate-900 tracking-tight",
+      "h2": "text-xl font-medium text-slate-800",
+      "card_title": "text-sm font-semibold text-slate-900",
+      "body_text": "text-sm text-slate-600 leading-relaxed",
+      "table_header": "text-xs font-medium text-slate-500 uppercase tracking-wider"
+    }
   },
-  "visual_enhancers": {
-    "surfaces": {
-      "cards": "Flat solid background (`bg-white`), crisp 1px border (`border-slate-200`), slight ambient shadow (`shadow-sm`). Max border-radius: 8px (`rounded-md`).",
-      "headers": "Solid background (`bg-white`) or heavy Glassmorphism (`backdrop-blur-xl bg-white/90`). CRITICAL: NO full transparent background on headers or dropdowns over scrolling content.",
-      "modals_dropdowns": "Solid background (`bg-white`), heavy shadow (`shadow-xl`), 1px border. MUST not be transparent."
-    },
-    "borders": "Use Grid Borders style for data-heavy sections (e.g., `border-collapse`, `border-b border-r border-slate-200`)."
+  "spacing_and_layout": {
+    "dashboard_grid": "Mode B: grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-6. Tight and scanned optimized.",
+    "card_padding": "p-5 or p-6 to provide breathing room.",
+    "container": "max-w-7xl mx-auto w-full",
+    "optical_alignment": "Left-align text/labels; right-align numbers/metrics in tables."
   },
-  "component_name": {
-    "buttons": "Shadcn Button (customized with rounded-md and amber primary color)",
-    "inputs": "Shadcn Input, Select, Checkbox (with focus-visible:ring-2 focus-visible:ring-amber-500)",
-    "tables": "Shadcn Table (dense variant for CRM, alternating row colors)",
-    "modals": "Shadcn Dialog/Sheet (solid white background, shadow-xl)",
-    "toast": "Sonner (for all notifications)",
-    "icons": "lucide-react"
-  },
-  "grids": {
-    "dashboard_bento": "High Density Grid. Base: `grid-cols-1 md:grid-cols-3 lg:grid-cols-4`. Tight gaps: `gap-4` or `gap-6`.",
-    "kpi_cards": "`col-span-1`. Contains single metric + trend indicator.",
-    "charts": "`col-span-2 row-span-2` for main operational visualizations."
-  },
-  "layouts": {
-    "auth_page": "Split-screen layout (`grid-cols-1 md:grid-cols-2`). Left side: immersive image of Mecca/Umrah. Right side: Login form, centered vertically.",
-    "dashboard": "Persistent left sidebar (`w-64`, fixed), top header (`h-16`, sticky, solid/glass bg), main content area with generous padding (`p-6 md:p-8`).",
-    "responsiveness": "Sidebar collapses to a hamburger menu on mobile (opens in a Shadcn Sheet). Main content goes to 1 column."
+  "components": {
+    "buttons": "Rounded-md (max 6px radius). Primary: bg-blue-600 text-white shadow-sm hover:bg-blue-700. Secondary: bg-white border border-slate-300 text-slate-700 hover:bg-slate-50.",
+    "cards": "bg-white rounded-xl border border-slate-200 shadow-sm (avoid heavy shadows).",
+    "tables": "Remove outer borders if inside a card to avoid double borders. Header: bg-slate-50 border-b border-slate-200. Rows: border-b border-slate-100 hover:bg-slate-50/50.",
+    "badges": "Pill-shaped (rounded-full) px-2.5 py-0.5 text-xs font-medium. Use soft background + dark text.",
+    "dialogs": "Backdrop blur (backdrop-blur-sm bg-slate-900/30). Dialog box bg-white rounded-xl shadow-xl border border-slate-200.",
+    "sidebar": "Clean separation with border-r border-slate-200. Active item: bg-blue-50 text-blue-700 font-medium. Inactive: text-slate-600 hover:bg-slate-50.",
+    "topbar": "Must have solid or semi-solid background. bg-white/95 backdrop-blur-md z-40 border-b border-slate-200."
   },
   "motion": {
-    "transitions": "Specific transitions only. E.g., `transition-colors duration-200`, `transition-transform duration-200`. NEVER use `transition-all`.",
-    "hover_states": "Buttons and list items must have distinct, fast hover states (`hover:bg-slate-100`). Rows in tables should subtly highlight on hover.",
-    "loading": "Use skeleton loaders for dashboard widgets instead of generic spinners."
+    "interactions": "Buttons: active:scale-[0.98] transition-all. Table rows: hover transition-colors duration-150.",
+    "dialogs": "animate-in fade-in zoom-in-95 duration-200"
   },
-  "accessibility": {
-    "contrast": "Ensure all text meets at least 4.5:1 ratio (APCA). Amber buttons must have white text. Gray text must be at least `text-slate-600`.",
-    "focus": "All interactive elements must have visible focus rings (`focus-visible:ring-2 focus-visible:ring-amber-500 focus-visible:outline-none`).",
-    "data_testid": "CRITICAL: All buttons, links, form inputs, and key UI elements MUST have a `data-testid` attribute (e.g., `data-testid='login-submit-button'`, `data-testid='sidebar-crm-link'`).",
-    "aria": "Use `aria-hidden='true'` on decorative icons."
+  "testing": {
+    "data_testid": "All interactive and key informational elements MUST include a data-testid attribute. Example: data-testid='submit-quotation-btn'"
   },
-  "media": {
-    "image_urls": [
-      {
-        "url": "https://images.unsplash.com/photo-1720549973451-018d3623b55a?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2NzV8MHwxfHNlYXJjaHwxfHxtZWNjYSUyMHVtcmFoJTIwYXJjaGl0ZWN0dXJlfGVufDB8fHx8MTc4NjQxMjMyOHww&ixlib=rb-4.1.0&q=85",
-        "category": "Authentication Background",
-        "description": "High-quality image of Mecca architecture for the split-screen login and forgot password pages to establish context."
-      }
-    ],
-    "icons": "lucide-react"
-  },
-  "3d_libraries_and_steps": {
-    "decision": "Not required",
-    "reasoning": "This is a heavy B2B CRM dashboard focused on data density, rapid interactions, and analytics. 3D libraries would impede performance and offer no functional value. Use pure 2D charting (echarts/recharts) instead."
-  },
-  "instructions_to_main_agent": [
-    "Phase 1 execution ONLY: Focus on Authentication (login, reset, forgot), User Management (CRUD), Role-Based Access Control (RBAC), Role-specific sidebar, Audit Log, Company Settings, Global Settings, 403 Forbidden.",
-    "Ensure all components are `.jsx` or `.js`, NOT `.tsx`.",
-    "Implement the role-based sidebar so it reads the user's role from state/context and maps the allowed modules correctly. Super Admin = all, Sales = limited, Accounting = limited.",
-    "Set up dummy data for users, audit logs, and settings to make the UI look 'production-ready'.",
-    "Strictly follow the color palette (no teal). Apply Amber/Gold as the primary interactive accent.",
-    "Do NOT use HTML `<select>` or `<input type='date'>`. Use Shadcn Select, Dialog, Calendar, Form, and Table components.",
-    "Data ownership for Sales (own/branch/all) and HPP access restriction should be represented in the UI (e.g., disabled toggles or hidden columns) based on mock role.",
-    "Add a global 403 Forbidden page and set up mock routing so unauthorized access to an admin route by 'Sales' redirects there."
+  "general_ui_ux_guidelines": [
+    "Optical alignment over geometrical alignment. Add padding where visual weight requires it.",
+    "Information hierarchy: Use font weights (semibold vs regular) and color (slate-900 vs slate-500) to separate data from labels.",
+    "Frictionless interactions: Clearly define hover and active states for all clickable elements.",
+    "Negative Space: Value empty areas, do not stretch tables/cards just to fill space unnecessarily."
   ],
-  "UNIVERSAL_GUIDELINES_FOR_MAIN_AGENT": [
-    "Avoid the generic 'AI slop' aesthetic. DO NOT center align the entire app container.",
-    "Create depth through subtle borders and layered shadow hierarchy (z-index).",
-    "Use glass-morphism (blur 12-24px) for sticky headers, but strictly with a semi-opaque background color to avoid unreadable text.",
-    "Do NOT apply universal transition (`transition: all`). Only animate specific properties.",
-    "Always use modern button styles (e.g., sharp or slightly rounded with interaction animations).",
-    "NEVER use Emoji characters as UI icons. Use lucide-react instead.",
-    "Every interaction needs micro-animations (hover states, focus rings).",
-    "Use 2-3x more spacing for layouts. Cramped designs look cheap.",
-    "Use `sonner` for toast notifications.",
-    "Include `data-testid` attributes on every interactive element for QA."
+  "instructions_to_main_agent": [
+    "Step 1: Check tailwind.config.js and globals.css/index.css to ensure base styling aligns with slate + blue palette.",
+    "Step 2: Refactor DashboardLayout (.js) to implement the crisp sidebar and topbar rules.",
+    "Step 3: Polish Shadcn UI components (.js files in /app/frontend/src/components/ui/) - particularly Card, Button, Table, Badge, Dialog.",
+    "Step 4: Refactor Customer 360, Quotations, and Dashboard views to use the new consistent spacing (gap-6, p-6) and subtle borders."
+  ],
+  "UNIVERSAL GUIDELINES FOR MAIN AGENT": [
+    "Keep existing colors (Blue/Slate) as requested by user. Do not change functionality.",
+    "DO NOT use complete transparent background in header, overlays, any surface that has content under it.",
+    "You have .js files not .tsx file, so use standard JSX and JS conventions.",
+    "Avoid generic centered layouts; use structured left-aligned or grid-based flows.",
+    "Create depth using layered z-index hierarchy (shadow-sm for cards, shadow-xl for dropdowns/dialogs).",
+    "DO NOT apply universal transition (transition: all). Use specific transitions (e.g., transition-colors, transition-transform).",
+    "DO NOT center align the app container (.App { text-align: center; }).",
+    "All interactive elements MUST include data-testid attribute."
   ]
 }

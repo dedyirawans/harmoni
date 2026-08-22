@@ -129,7 +129,7 @@ export default function Quotations() {
                     <TableCell className={`${CELL} font-medium text-slate-900`}>{q.customer_name}</TableCell>
                     <TableCell className={`${CELL} text-slate-500`}>{q.package_name}<span className="block text-xs text-slate-400">{q.pax} pax</span></TableCell>
                     <TableCell className={`${CELL} text-right font-semibold`}>{fmtIDR(q.total)}<span className="block text-xs text-slate-400 font-normal">diskon {q.discount_type === "AMOUNT" ? fmtIDR(q.discount_amount) : `${q.discount_percent}%`}</span></TableCell>
-                    <TableCell className={CELL}><Badge variant="outline" className={QUOT_STATUS_COLORS[q.status]}>{q.status}</Badge></TableCell>
+                    <TableCell className={CELL}><Badge variant="outline" className={QUOT_STATUS_COLORS[q.status]}>{q.status}</Badge>{(() => { try { const d = new Date(q.created_at); d.setDate(d.getDate() + 7); return (d < new Date() && !q.converted_booking_id && !["ACCEPTED", "EXPIRED", "REJECTED"].includes(String(q.status || "").toUpperCase())); } catch { return false; } })() && <Badge variant="outline" className="ml-1 rounded-full bg-red-50 text-red-700 border-red-200" data-testid={`quot-expired-${q._id}`}>Kedaluwarsa</Badge>}</TableCell>
                     <TableCell className={CELL}><Badge variant="outline" className={DISCOUNT_STATUS_COLORS[q.discount_status]} data-testid={`quot-discount-status-${q._id}`}>{q.discount_status}</Badge></TableCell>
                     <TableCell className={`${CELL} text-right`}>
                       <div className="flex items-center gap-1 justify-end flex-wrap">
