@@ -19,7 +19,7 @@ import { toast } from "sonner";
 
 const EMPTY = {
   package_name: "", product_type: "TOUR", category: "", destination: "", country: "", duration: "",
-  description: "", cover_image: "", min_pax: 1, max_pax: 40, selling_price: 0, child_price: 0,
+  description: "", cover_image: "", include: "", exclude: "", min_pax: 1, max_pax: 40, selling_price: 0, child_price: 0,
   infant_price: 0, single_supplement: 0, currency: "IDR", tax_treatment: "Non-PPN",
   commission_eligibility: true, max_discount_type: "PERCENT", max_discount_value: 0, status: "DRAFT", promo_text: "", terms: "", umrah: {},
 };
@@ -93,6 +93,8 @@ export default function Products() {
                 <F label="Single Supplement"><Input type="number" value={form.single_supplement} onChange={(e) => set("single_supplement")(e.target.value)} /></F>
                 <F label="Min Pax"><Input type="number" value={form.min_pax} onChange={(e) => set("min_pax")(e.target.value)} /></F>
                 <F label="Max Pax"><Input type="number" value={form.max_pax} onChange={(e) => set("max_pax")(e.target.value)} /></F>
+                <F label="Include (Harga Sudah Termasuk — satu per baris)" full><textarea value={form.include} onChange={(e) => set("include")(e.target.value)} rows={3} className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm" data-testid="new-include" /></F>
+                <F label="Exclude (Tidak Termasuk — satu per baris)" full><textarea value={form.exclude} onChange={(e) => set("exclude")(e.target.value)} rows={3} className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm" data-testid="new-exclude" /></F>
                 <F label="Cover Image (upload / ganti / hapus)" full>
                   <div className="flex items-center gap-3">
                     {form.cover_image ? <img src={form.cover_image} alt="cover" className="h-16 w-28 rounded object-cover border border-slate-200" data-testid="new-cover-preview" /> : <div className="h-16 w-28 rounded bg-slate-100 flex items-center justify-center text-[10px] text-slate-400">COVER</div>}

@@ -2924,6 +2924,8 @@ class PackageModel(BaseModel):
     description: Optional[str] = ""
     cover_image: Optional[str] = ""
     gallery: Optional[List[str]] = []
+    include: Optional[str] = ""
+    exclude: Optional[str] = ""
     min_pax: Optional[int] = 1
     max_pax: Optional[int] = 40
     selling_price: Optional[float] = 0

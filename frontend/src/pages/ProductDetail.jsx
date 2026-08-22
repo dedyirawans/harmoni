@@ -85,29 +85,14 @@ export default function ProductDetail() {
         </TabsList>
 
         <TabsContent value="overview">
-          {(p.cover_image || (p.gallery || []).length > 0) && (
-            <div className="mb-4" data-testid="detail-cover-wrap">
-              {p.cover_image && (
-                <div className="aspect-video max-h-72 w-full overflow-hidden rounded-lg bg-slate-100 border border-slate-200">
-                  <img src={p.cover_image} alt={p.package_name} className="h-full w-full object-cover" data-testid="detail-cover-img" />
-                </div>
-              )}
-              {(p.gallery || []).filter((g) => g && g !== p.cover_image).length > 0 && (
-                <div className="mt-3 grid grid-cols-3 sm:grid-cols-4 gap-2" data-testid="detail-gallery">
-                  {(p.gallery || []).filter((g) => g && g !== p.cover_image).slice(0, 8).map((g, i) => (
-                    <div key={i} className="aspect-video overflow-hidden rounded-md bg-slate-100 border border-slate-200">
-                      <img src={g} alt={`galeri ${i + 1}`} className="h-full w-full object-cover" data-testid={`detail-gallery-img-${i}`} />
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
+          <GalleryManager pkg={p} canManage={canManage} onChange={load} />
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
             <Card className="border-slate-200 lg:col-span-2"><CardContent className="p-6">
               <p className="text-slate-600 leading-relaxed">{p.description || "No description."}</p>
               {p.promo_text && <p className="mt-3 text-sm text-blue-700 bg-blue-50 border border-blue-200 rounded-md px-3 py-2">Promo: {p.promo_text}</p>}
               {p.terms && <div className="mt-4"><p className="text-xs font-semibold uppercase text-slate-500 mb-1">Terms & Conditions</p><p className="text-sm text-slate-600">{p.terms}</p></div>}
+              {p.include && <div className="mt-4"><p className="text-xs font-semibold uppercase text-emerald-600 mb-1">Include (Harga Sudah Termasuk)</p><p className="text-sm text-slate-600 whitespace-pre-line" data-testid="detail-include">{p.include}</p></div>}
+              {p.exclude && <div className="mt-4"><p className="text-xs font-semibold uppercase text-rose-600 mb-1">Exclude (Tidak Termasuk)</p><p className="text-sm text-slate-600 whitespace-pre-line" data-testid="detail-exclude">{p.exclude}</p></div>}
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mt-5 text-sm">
                 <Info label="Country" v={p.country} /><Info label="Duration" v={p.duration} /><Info label="Category" v={p.category} />
                 <Info label="Sub Category" v={subLabel(p.product_type, p.sub_category)} />
@@ -328,6 +313,59 @@ function CostingTab({ pkgId, sellingPrice, costing, canManage, onChange }) {
   );
 }
 
+function GalleryManager({ pkg, canManage, onChange }) {
+  const [box, setBox] = useState(null);
+  const gallery = pkg.gallery || [];
+  const put = async (patch) => {
+    try { await api.put(`/packages/${pkg._id}`, { ...pkg, umrah: pkg.umrah || {}, ...patch }); onChange && onChange(); }
+    catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); }
+  };
+  const addFiles = (files) => {
+    const arr = Array.from(files || []); if (!arr.length) return;
+    const reads = arr.map((f) => new Promise((res) => {
+      if (f.size > 5 * 1024 * 1024) { toast.error(`${f.name} > 5MB`); return res(null); }
+      const r = new FileReader(); r.onload = () => res(r.result); r.readAsDataURL(f);
+    }));
+    Promise.all(reads).then((urls) => { const clean = urls.filter(Boolean); if (clean.length) { put({ gallery: [...gallery, ...clean] }).then(() => toast.success("Foto ditambahkan")); } });
+  };
+  return (
+    <div className="mb-4" data-testid="detail-cover-wrap">
+      {pkg.cover_image && (
+        <div className="aspect-video max-h-72 w-full overflow-hidden rounded-lg bg-slate-100 border border-slate-200">
+          <img src={pkg.cover_image} alt={pkg.package_name} onClick={() => setBox(pkg.cover_image)} className="h-full w-full object-cover cursor-zoom-in" data-testid="detail-cover-img" />
+        </div>
+      )}
+      <div className="mt-3 flex items-center justify-between">
+        <p className="text-xs font-semibold uppercase text-slate-500">Galeri Foto</p>
+        {canManage && (
+          <label className="text-xs text-blue-700 cursor-pointer hover:underline" data-testid="gallery-add">
+            <input type="file" accept="image/*" multiple className="hidden" onChange={(e) => addFiles(e.target.files)} />+ Tambah Foto
+          </label>
+        )}
+      </div>
+      <div className="mt-2 grid grid-cols-3 sm:grid-cols-4 gap-2" data-testid="detail-gallery">
+        {gallery.filter(Boolean).map((g, i) => (
+          <div key={i} className="relative group aspect-video overflow-hidden rounded-md bg-slate-100 border border-slate-200">
+            <img src={g} alt={`galeri ${i + 1}`} onClick={() => setBox(g)} className="h-full w-full object-cover cursor-zoom-in" data-testid={`detail-gallery-img-${i}`} />
+            {canManage && (
+              <div className="absolute inset-x-0 bottom-0 flex justify-between bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity px-1.5 py-1">
+                <button onClick={() => put({ cover_image: g })} className="text-[10px] font-medium text-white hover:underline" data-testid={`gallery-setcover-${i}`}>Jadikan Cover</button>
+                <button onClick={() => put({ gallery: gallery.filter((_, k) => k !== i) })} className="text-[10px] font-medium text-red-200 hover:underline" data-testid={`gallery-del-${i}`}>Hapus</button>
+              </div>
+            )}
+          </div>
+        ))}
+        {gallery.filter(Boolean).length === 0 && <p className="text-xs text-slate-400 col-span-full">Belum ada foto galeri.</p>}
+      </div>
+      {box && (
+        <div className="fixed inset-0 z-[80] bg-black/80 flex items-center justify-center p-6 cursor-zoom-out" onClick={() => setBox(null)} data-testid="gallery-lightbox">
+          <img src={box} alt="preview" className="max-h-[90vh] max-w-[90vw] rounded-lg object-contain shadow-2xl" />
+        </div>
+      )}
+    </div>
+  );
+}
+
 function PackageEditDialog({ pkg, onClose, onSaved }) {
   const [f, setF] = useState({ ...pkg, umrah: pkg.umrah || {} });
   const [saving, setSaving] = useState(false);
@@ -344,7 +382,7 @@ function PackageEditDialog({ pkg, onClose, onSaved }) {
         pricing_tiers: (f.pricing_tiers || []).map((t) => ({ min_pax: Number(t.min_pax || 0), max_pax: Number(t.max_pax || 0), price: Number(t.price || 0) })),
         tax_treatment: f.tax_treatment, commission_eligibility: f.commission_eligibility, status: f.status,
         max_discount_type: f.max_discount_type || "PERCENT", max_discount_value: Number(f.max_discount_value || 0),
-        promo_text: f.promo_text, terms: f.terms, umrah: f.umrah };
+        promo_text: f.promo_text, terms: f.terms, include: f.include, exclude: f.exclude, umrah: f.umrah };
       await api.put(`/packages/${pkg._id}`, body); toast.success("Package updated"); onSaved();
     } catch (e) { toast.error(formatApiErrorDetail(e.response?.data?.detail)); }
     finally { setSaving(false); }
@@ -355,6 +393,8 @@ function PackageEditDialog({ pkg, onClose, onSaved }) {
         <DialogHeader><DialogTitle className="font-display">Edit Package</DialogTitle><DialogDescription>Changing the selling price creates a new version automatically.</DialogDescription></DialogHeader>
         <div className="grid grid-cols-2 gap-4 py-2">
           <EF label="Package Name" full><Input value={f.package_name} onChange={(e) => set("package_name")(e.target.value)} data-testid="edit-name-input" /></EF>
+          <EF label="Include (Harga Sudah Termasuk — satu per baris)" full><textarea value={f.include || ""} onChange={(e) => set("include")(e.target.value)} rows={3} className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm" data-testid="edit-include" /></EF>
+          <EF label="Exclude (Tidak Termasuk — satu per baris)" full><textarea value={f.exclude || ""} onChange={(e) => set("exclude")(e.target.value)} rows={3} className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm" data-testid="edit-exclude" /></EF>
           <EF label="Destination"><Input value={f.destination} onChange={(e) => set("destination")(e.target.value)} /></EF>
           <EF label="Duration"><Input value={f.duration} onChange={(e) => set("duration")(e.target.value)} /></EF>
           <EF label="Selling Price"><Input type="number" value={f.selling_price} onChange={(e) => set("selling_price")(e.target.value)} data-testid="edit-price-input" /></EF>

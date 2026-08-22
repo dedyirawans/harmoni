@@ -1,3 +1,9 @@
+## Enhancement — Gallery Editor + Lightbox + Include/Exclude Paket (2026-06) — DONE ✅ (curl + UI verified)
+- **Gallery Manager (ProductDetail overview)**: komponen `GalleryManager` — tambah banyak foto (multi-upload base64), hapus per foto, "Jadikan Cover", preview besar (lightbox klik gambar). Simpan via PUT /packages/{pid} (kirim full pkg + patch, `model_dump()` menyimpan). Cover juga bisa diklik untuk lightbox.
+- **Include/Exclude**: field `include`, `exclude` di `PackageModel` (auto-persist create+update). Ditampilkan di Overview detail (Include hijau / Exclude merah). Input textarea di dialog New Package (`new-include`/`new-exclude`) & Edit Package (`edit-include`/`edit-exclude`).
+- **Verified**: PUT package → include/exclude tersimpan, gallery bertambah; screenshot menampilkan galeri + lightbox + Include list.
+- **BELUM**: PageHeader untuk Users/Documents/WhatsApp/AI/Knowledge Base (ditunda; menyusul).
+
 ## Enhancement — PageHeader ke 4 halaman + Cover Upload New Package (2026-06) — DONE ✅ (UI verified)
 - **PageHeader** diterapkan ke Quotations, Accounting, Suppliers, Reports (import + ganti blok judul lama). Konsisten dengan Dashboard/Bookings/Products.
 - **New Package cover**: field "Cover Image URL" teks diganti kontrol upload gambar (file→base64) dengan preview + tombol Hapus (ganti/edit dengan upload ulang). testid: new-cover-upload / new-cover-preview / new-cover-clear.
