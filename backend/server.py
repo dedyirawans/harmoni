@@ -4789,6 +4789,12 @@ async def _compute_quotation_amounts(pkg, pax, addons, discount_type, discount_v
 
 @api_router.get("/quotations")
 async def list_quotations(status: Optional[str] = None, user: dict = Depends(require_permission("quotation.view"))):
+    # Auto-expire: quotations older than 7 days that are still open become EXPIRED.
+    _cutoff = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+    await db.quotations.update_many(
+        {"status": {"$in": ["DRAFT", "SENT"]}, "created_at": {"$lt": _cutoff},
+         "converted_booking_id": {"$in": [None, ""]}},
+        {"$set": {"status": "EXPIRED"}})
     query = owner_filter(user)
     if status and status != "all":
         query = {**query, "status": status}

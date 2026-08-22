@@ -93,3 +93,16 @@ h1, h2, h3, h4, h5, .font-display {
 ::-webkit-scrollbar-thumb:hover { background: hsl(215 16% 65%); }
 table thead th { letter-spacing: 0.02em; }
 [data-radix-popper-content-wrapper] { z-index: 60; }
+
+/* Clearer, bolder separators for a tidier look */
+:root { --line: 214 25% 84%; }
+.rounded-xl.border, .rounded-lg.border, [class*="border-slate-200"] { border-color: hsl(var(--line)); }
+table { border-collapse: separate; border-spacing: 0; }
+table thead tr { border-bottom: 2px solid hsl(214 25% 80%); }
+table tbody tr { border-bottom: 1.5px solid hsl(var(--line)); }
+table tbody tr:last-child { border-bottom: 0; }
+/* section dividers */
+.border-t { border-top-width: 1.5px; border-top-color: hsl(var(--line)); }
+.border-b { border-bottom-width: 1.5px; border-bottom-color: hsl(var(--line)); }
+.border-r { border-right-color: hsl(var(--line)); }
+[role="tablist"] { border-bottom: 1.5px solid hsl(var(--line)); }

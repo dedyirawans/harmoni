@@ -1,3 +1,9 @@
+## Enhancement — Auto-Expire Quotation + Polish Dialog/Border (2026-06) — DONE ✅ (curl + UI verified)
+- **Auto-Expire Quotation**: `GET /api/quotations` kini otomatis set status quotation DRAFT/SENT (belum converted) menjadi **EXPIRED** bila usia > 7 hari (via `update_many`, `timedelta`). Verified: quotation di-backdate → jadi EXPIRED, lalu dipulihkan.
+- **Polish Dialog**: overlay pakai backdrop-blur + `bg-slate-900/40`, konten `rounded-xl` + `shadow-xl` + border slate. Berlaku ke semua dialog.
+- **Garis lebih jelas & tebal**: `index.css` — header tabel 2px, baris tabel 1.5px, border-t/border-b 1.5px, tablist underline, warna garis konsisten `--line`. Membuat batas kolom/baris/section lebih rapi di seluruh app.
+- **Verified (screenshot)**: tabel Customers batas baris lebih tegas & rapi, dialog New Customer bersih dengan blur; nama perusahaan tampil di daftar.
+
 ## Fitur — Badge Kedaluwarsa, Nama Perusahaan di Detail, Setting Domain, Polish UI (2026-06) — DONE ✅ (curl + UI verified)
 1. **Badge "Kedaluwarsa"**: di daftar Quotations (terbit + 7 hari, kecuali ACCEPTED/EXPIRED/REJECTED/converted) dan Invoices (terbit + 3 hari, hanya yang outstanding>0 & belum PAID). Inline expiry check di Quotations.jsx & Accounting.jsx (tab Invoice).
 2. **Nama Perusahaan (company_name)**: tampil di header profil Customer 360 (+testid c360-company), dapat diinput saat Add Customer (Customers.jsx) dan Edit Customer (Customer360 EditCustomerButton). Backend `CustomerCreate` + list search sudah mendukung.
