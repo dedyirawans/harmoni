@@ -1,3 +1,12 @@
+## Fitur — Masa Berlaku, Kontak/Alamat Customer di PDF, Nama Perusahaan, Integrasi Conversation AI→CRM (2026-06) — DONE ✅ (curl + PDF-render verified)
+1. **Masa berlaku**: Invoice = tanggal terbit + 3 hari; Quotation = + 7 hari (`_valid_until_label`).
+2. **Tampil di PDF**: baris "Masa Berlaku s/d: DD Bulan YYYY" di invoice & quotation.
+3. **Kontak customer di PDF**: No. HP + Email customer ditambahkan di blok Customer (invoice, quotation, kwitansi) via `_customer_contact` (lookup by customer_id/booking).
+4. **Alamat customer di PDF**: alamat (address, kota, provinsi, kodepos, negara) tampil bila ada; dikosongkan bila tidak ada.
+5. **Nama Perusahaan customer**: field `company_name` di `CustomerCreate`, form Add/Edit Customers, kolom daftar, dan **pencarian** CRM (ditambah ke `$or` list_customers + placeholder search).
+6. **Integrasi Conversation AI→CRM**: helper `_mirror_crm_conversation` mencerminkan chat WhatsApp masuk (INBOUND) dan balasan AI/outbound (`_wa_enqueue_outbound`) ke koleksi `conversations` dengan `customer_id`, sehingga muncul di submenu Conversation CRM + Customer 360 dan bisa dianalisa AI.
+- **Verified**: PDF invoice (Masa Berlaku 22 Agustus) & quotation (26 Agustus) menampilkan HP/email/alamat + masa berlaku; create+search company_name OK; webhook WA inbound → 1 conversation ter-mirror ke customer (INBOUND/CUSTOMER). Data uji dibersihkan.
+
 ## Enhancement — Tanggal & Tempat TTD + Opsi Ukuran/Posisi Stempel (2026-06) — DONE ✅ (PDF-render verified)
 - **Baris tempat & tanggal**: field baru `signer_place` (Settings). Blok tanda tangan kini menampilkan baris "Kota, DD Bulan YYYY" (mis. "Jakarta, 19 Agustus 2026") di atas "Hormat kami," — tanggal mengikuti tanggal dokumen (Indonesia). Helper `_id_dateline(tpl, iso_date)`.
 - **Opsi stempel**: field `stamp_scale` (0.4–2.0), `stamp_offset_x`, `stamp_offset_y` (Settings, slider). `_compose_sign_stamp` memakai skala & offset, dan `paste` clip-safe (stempel besar tidak error). Layout live dari Settings (tanda tangan tetap beku per dokumen).

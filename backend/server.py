@@ -1705,6 +1705,7 @@ class CustomerCreate(BaseModel):
     sales_pic_id: Optional[str] = None
     tags: Optional[List[str]] = []
     notes: Optional[str] = ""
+    company_name: Optional[str] = ""
 
 
 class CustomerUpdate(BaseModel):
@@ -1817,7 +1818,9 @@ async def list_customers(q: Optional[str] = None, customer_type: Optional[str] =
     if q:
         query["$or"] = [
             {"full_name": {"$regex": q, "$options": "i"}},
+            {"company_name": {"$regex": q, "$options": "i"}},
             {"whatsapp": {"$regex": q, "$options": "i"}},
+            {"phone": {"$regex": q, "$options": "i"}},
             {"email": {"$regex": q, "$options": "i"}},
             {"customer_code": {"$regex": q, "$options": "i"}},
         ]
@@ -4458,10 +4461,20 @@ def build_document_pdf(kind: str, data: dict, company: dict, itineraries=None, t
             right += [Spacer(1, 2 * mm), qr, Paragraph("Scan untuk PDF", ParagraphStyle("qs", parent=small, fontSize=7))]
     el.append(Table([[header_left, right]], colWidths=[100 * mm, 70 * mm], style=TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP")])))
     el.append(Spacer(1, 8 * mm))
-    el.append(Table([[Paragraph(f"<b>Customer</b><br/>{data.get('customer_name', '')}", small),
+    _cust_html = f"<b>Customer</b><br/>{data.get('customer_name', '')}"
+    if data.get("cust_phone"):
+        _cust_html += f"<br/>{data.get('cust_phone')}"
+    if data.get("cust_email"):
+        _cust_html += f"<br/>{data.get('cust_email')}"
+    if data.get("cust_address"):
+        _cust_html += f"<br/>{data.get('cust_address')}"
+    el.append(Table([[Paragraph(_cust_html, small),
                       Paragraph(f"<b>Sales PIC</b><br/>{data.get('sales_pic_name', '')}", small),
                       Paragraph(f"<b>Package</b><br/>{data.get('package_name', '')} (v{data.get('package_version', 1)})", small)]],
                      colWidths=[56 * mm, 56 * mm, 58 * mm]))
+    if data.get("valid_until_label"):
+        el.append(Spacer(1, 2 * mm))
+        el.append(Paragraph(f"<b>Masa Berlaku s/d:</b> {data.get('valid_until_label')}", small))
     el.append(Spacer(1, 6 * mm))
     rows = [["Deskripsi", "Qty", "Harga", "Jumlah"]]
     rows.append([f"{data.get('package_name', '')} — {data.get('room_type', '') or 'Standard'}", str(data.get("pax", 1)), _money(data.get("per_pax_price")), _money(data.get("gross"))])
@@ -4580,6 +4593,33 @@ async def _freeze_signer(kind, doc, tpl, collection):
     return snap
 
 
+async def _customer_contact(customer_id=None, booking_id=None, whatsapp="", email=""):
+    phone, mail, addr = (whatsapp or ""), (email or ""), ""
+    cust = None
+    if customer_id and ObjectId.is_valid(str(customer_id)):
+        cust = await db.customers.find_one({"_id": ObjectId(str(customer_id))})
+    if not cust and booking_id and ObjectId.is_valid(str(booking_id)):
+        bk = await db.bookings.find_one({"_id": ObjectId(str(booking_id))})
+        if bk and bk.get("customer_id") and ObjectId.is_valid(str(bk["customer_id"])):
+            cust = await db.customers.find_one({"_id": ObjectId(str(bk["customer_id"]))})
+    if cust:
+        phone = phone or cust.get("whatsapp") or cust.get("phone") or ""
+        mail = mail or cust.get("email") or ""
+        parts = [cust.get("address"), cust.get("city"), cust.get("province"), cust.get("postal_code"), cust.get("country")]
+        addr = ", ".join([str(p).strip() for p in parts if p and str(p).strip()])
+    return {"phone": phone, "email": mail, "address": addr}
+
+
+def _valid_until_label(created_at, days):
+    s = str(created_at or "")[:10]
+    try:
+        from datetime import datetime as _dt, timedelta
+        d = _dt.strptime(s, "%Y-%m-%d") + timedelta(days=days)
+        return f"{d.day} {_ID_MONTHS[d.month]} {d.year}"
+    except Exception:
+        return ""
+
+
 async def _render_invoice_pdf(inv):
     tpl = await _get_doc_template()
     company = await db.company_settings.find_one({"key": "company"}) or {}
@@ -4592,6 +4632,9 @@ async def _render_invoice_pdf(inv):
     data["outstanding"] = _out
     data["paid_amount"] = max(_tot - _out, 0)
     data["terms"] = tpl.get("invoice_terms") or inv.get("terms") or ""
+    _ct = await _customer_contact(inv.get("customer_id"), inv.get("booking_id"), inv.get("whatsapp"), inv.get("email"))
+    data["cust_phone"], data["cust_email"], data["cust_address"] = _ct["phone"], _ct["email"], _ct["address"]
+    data["valid_until_label"] = _valid_until_label(inv.get("created_at"), 3)
     qr = _public_pdf_url(tpl, "invoice", iid)
     signer = await _freeze_signer("invoice", inv, tpl, "invoices")
     return build_document_pdf("INVOICE", data, company, tpl=tpl, qr_url=qr, paid=paid, signer=signer), inv.get("invoice_number")
@@ -4603,6 +4646,9 @@ async def _render_quotation_pdf(q):
     itins = await db.package_itineraries.find({"package_id": q.get("package_id")}).sort("day", 1).to_list(200)
     data = {**q, "number": q.get("quotation_number")}
     data["terms"] = tpl.get("quotation_terms") or q.get("terms") or ""
+    _ct = await _customer_contact(q.get("customer_id"), q.get("booking_id"), q.get("whatsapp"), q.get("email"))
+    data["cust_phone"], data["cust_email"], data["cust_address"] = _ct["phone"], _ct["email"], _ct["address"]
+    data["valid_until_label"] = _valid_until_label(q.get("created_at"), 7)
     qr = _public_pdf_url(tpl, "quotation", str(q.get("_id")))
     wm = tpl.get("quotation_watermark_text", "DRAFT") if str(q.get("status", "")).upper() != "ACCEPTED" else None
     signer = await _freeze_signer("quotation", q, tpl, "quotations")
@@ -4628,6 +4674,17 @@ async def _render_receipt_pdf(r, tpl=None):
             ["Booking", r.get("booking_number", "")], ["Customer", r.get("customer_name", "")],
             ["Termin", f"#{r.get('payment_number')} {r.get('label', '')}"], ["Jumlah Dibayar", rp(r.get("amount"))],
             ["Sisa Termin", rp(r.get("outstanding_after"))], ["Sisa Total Booking", rp(r.get("outstanding_total"))]]
+    _rc_ct = await _customer_contact(r.get("customer_id"), r.get("booking_id"))
+    _rc_extra = []
+    if _rc_ct["phone"]:
+        _rc_extra.append(["No. HP", _rc_ct["phone"]])
+    if _rc_ct["email"]:
+        _rc_extra.append(["Email", _rc_ct["email"]])
+    if _rc_ct["address"]:
+        _rc_extra.append(["Alamat", _rc_ct["address"]])
+    if _rc_extra:
+        _ci = next((k for k, rr in enumerate(rows) if rr and rr[0] == "Customer"), 3) + 1
+        rows[_ci:_ci] = _rc_extra
     t = Table(rows, colWidths=[55 * mm, 110 * mm])
     t.setStyle(TableStyle([("GRID", (0, 0), (-1, -1), 0.5, colors.grey), ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#f1f5f9")),
                            ("FONTNAME", (0, 0), (-1, -1), base_font), ("FONTSIZE", (0, 0), (-1, -1), 10),
@@ -9839,6 +9896,7 @@ async def _apico_process_inbound(event_db_id, parsed):
                "delivery_status": "RECEIVED", "status": "RECEIVED", "read_status": False}
         await db.whatsapp_messages.insert_one(msg)
         await db.whatsapp_conversations.update_one({"_id": conv["_id"]}, {"$set": {"last_message": (parsed["content"] or "")[:200], "last_activity": now_iso()}})
+        await _mirror_crm_conversation(conv, parsed["content"], "INBOUND", "CUSTOMER", parsed.get("type") or "TEXT", parsed.get("media_url"))
         await _wa_log("apico", "WEBHOOK", "IN", parsed["message_id"], True, "", {"from": parsed["phone"], "type": parsed["type"]})
         try:
             svc = await get_wa_provider()
@@ -12270,11 +12328,38 @@ def _wa_debounce_schedule(conv_id, text):
     entry["task"] = asyncio.create_task(_wa_debounce_fire(conv_id))
 
 
+async def _mirror_crm_conversation(conv, content, direction, sender_kind, mtype="TEXT", media_url=""):
+    """Mirror a WhatsApp message into the CRM `conversations` collection (linked by customer_id)
+    so incoming/AI chats appear in the CRM conversation submenu + Customer 360 and can be analysed by AI."""
+    try:
+        cid = conv.get("customer_id")
+        if not cid or not (content or media_url):
+            return
+        direction = (direction or "").upper()
+        if direction == "INBOUND":
+            sender_type, ai_or_human = "CUSTOMER", "CUSTOMER"
+        elif sender_kind == "AI":
+            sender_type, ai_or_human = "AI", "AI"
+        else:
+            sender_type, ai_or_human = "SALES", "HUMAN"
+        await db.conversations.insert_one({
+            "conversation_id": str(_uuid.uuid4()), "wa_conversation_id": str(conv.get("_id")),
+            "customer_id": cid, "whatsapp": conv.get("wa_number", ""),
+            "channel": "whatsapp", "source": "WHATSAPP", "direction": direction,
+            "message": content or "", "message_type": (mtype or "TEXT").upper(), "media_url": media_url or "",
+            "sender_type": sender_type, "ai_or_human": ai_or_human, "status": "SENT",
+            "timestamp": now_iso(), "created_at": now_iso(),
+        })
+    except Exception:
+        pass
+
+
 async def _wa_enqueue_outbound(conv, content, sender="AI"):
     await db.whatsapp_outbound_queue.insert_one({
         "conversation_id": str(conv["_id"]), "wa_number": conv["wa_number"],
         "account_id": conv.get("account_id", "apico"), "content": content, "sender": sender,
         "status": "QUEUED", "attempts": 0, "created_at": now_iso(), "updated_at": now_iso()})
+    await _mirror_crm_conversation(conv, content, "OUTBOUND", sender)
 
 
 def _wa_split_message(text, max_chars, max_messages=3):

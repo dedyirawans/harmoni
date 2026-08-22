@@ -18,7 +18,7 @@ import { toast } from "sonner";
 import { useAuth } from "@/context/AuthContext";
 
 const EMPTY = {
-  full_name: "", whatsapp: "", email: "", gender: "", date_of_birth: "", nik: "",
+  full_name: "", company_name: "", whatsapp: "", email: "", gender: "", date_of_birth: "", nik: "",
   passport_number: "", passport_expiry: "", address: "", city: "", country: "Indonesia",
   customer_type: "Prospect", customer_source: "WhatsApp", tags: "", notes: "",
 };
@@ -105,6 +105,7 @@ export default function Customers() {
             </DialogHeader>
             <div className="grid grid-cols-2 gap-4 py-2">
               <Field label="Full Name *"><Input value={form.full_name} onChange={(e) => set("full_name")(e.target.value)} data-testid="customer-name-input" /></Field>
+              <Field label="Nama Perusahaan"><Input value={form.company_name} onChange={(e) => set("company_name")(e.target.value)} placeholder="mis. PT Berkah Wisata" data-testid="customer-company-input" /></Field>
               <Field label="WhatsApp"><Input value={form.whatsapp} onChange={(e) => set("whatsapp")(e.target.value)} data-testid="customer-whatsapp-input" /></Field>
               <Field label="Email"><Input value={form.email} onChange={(e) => set("email")(e.target.value)} data-testid="customer-email-input" /></Field>
               <Field label="Gender">
@@ -160,7 +161,7 @@ export default function Customers() {
       <div className="flex items-center gap-3 flex-wrap">
         <div className="relative flex-1 min-w-[240px]">
           <Search className="h-4 w-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" aria-hidden="true" />
-          <Input className="pl-9" placeholder="Search name, WhatsApp, email..." value={q}
+          <Input className="pl-9" placeholder="Cari nama, perusahaan, WhatsApp, email..." value={q}
             onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.key === "Enter" && load()} data-testid="customer-search-input" />
         </div>
         <Select value={type} onValueChange={setType}>
@@ -211,7 +212,7 @@ export default function Customers() {
                 <TableRow key={c._id} className="hover:bg-slate-50 cursor-pointer" onClick={() => navigate(`/crm/${c._id}`)} data-testid={`customer-row-${c._id}`}>
                   {isSA && <TableCell onClick={(e) => e.stopPropagation()}><Checkbox checked={selected.includes(c._id)} onCheckedChange={() => toggleSel(c._id)} data-testid={`select-customer-${c._id}`} /></TableCell>}
                   <TableCell className="font-mono text-xs text-slate-500">{c.customer_code}</TableCell>
-                  <TableCell><div className="font-medium text-slate-900 flex items-center gap-2">{c.full_name}{c.is_deleted && <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-200 text-[10px]">ARCHIVED</Badge>}</div>
+                  <TableCell><div className="font-medium text-slate-900 flex items-center gap-2">{c.full_name}{c.is_deleted && <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-200 text-[10px]">ARCHIVED</Badge>}</div>{c.company_name && <div className="text-xs text-slate-400" data-testid="customer-company-cell">{c.company_name}</div>}
                     <div className="flex gap-1 mt-1">{(c.tags || []).map((t) => <Badge key={t} variant="outline" className="text-[10px] bg-blue-50 text-blue-700 border-blue-200">{t}</Badge>)}</div>
                   </TableCell>
                   <TableCell className="text-slate-600 text-sm">
