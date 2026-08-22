@@ -3923,6 +3923,7 @@ DOC_TEMPLATE_DEFAULTS = {
     "show_qr": True, "paid_stamp_text": "PAID", "public_base_url": "", "quotation_watermark_text": "DRAFT",
     "invoice_terms": "", "quotation_terms": "",
     "signer_name": "", "signer_title": "", "signature_url": "", "stamp_url": "",
+    "signer_place": "", "stamp_scale": 1.0, "stamp_offset_x": 0, "stamp_offset_y": 0,
 }
 _FRONTEND_BASE_CACHE = None
 
@@ -3996,6 +3997,10 @@ class DocTemplateUpdate(BaseModel):
     signer_title: Optional[str] = None
     signature_url: Optional[str] = None
     stamp_url: Optional[str] = None
+    signer_place: Optional[str] = None
+    stamp_scale: Optional[float] = None
+    stamp_offset_x: Optional[int] = None
+    stamp_offset_y: Optional[int] = None
     public_base_url: Optional[str] = None
 
 
@@ -4326,8 +4331,9 @@ def _remove_white_bg(img, lo=208, hi=246):
         return img
 
 
-def _compose_sign_stamp(signature_src, stamp_src, w_px=460, h_px=230):
-    """Composite signature (front) + company stamp (behind, semi-transparent) into one PNG."""
+def _compose_sign_stamp(signature_src, stamp_src, w_px=520, h_px=300, stamp_scale=1.0, stamp_dx=0, stamp_dy=0):
+    """Composite signature (front) + company stamp (behind, semi-transparent) into one PNG.
+    stamp_scale/stamp_dx/stamp_dy let Settings tune the stamp size & position."""
     try:
         from PIL import Image
         sign = _load_pil_image(signature_src)
@@ -4338,29 +4344,52 @@ def _compose_sign_stamp(signature_src, stamp_src, w_px=460, h_px=230):
             sign = _remove_white_bg(sign)
         if stamp:
             stamp = _remove_white_bg(stamp)
+        try:
+            sc = max(0.3, min(float(stamp_scale or 1.0), 2.2))
+        except Exception:
+            sc = 1.0
+        dx, dy = int(stamp_dx or 0), int(stamp_dy or 0)
         canvas = Image.new("RGBA", (w_px, h_px), (255, 255, 255, 0))
         if stamp:
             s = stamp.copy()
-            ratio = min(w_px / s.width, h_px / s.height)
+            ratio = min(w_px / s.width, h_px / s.height) * sc
             s = s.resize((max(1, int(s.width * ratio)), max(1, int(s.height * ratio))))
             alpha = s.split()[3].point(lambda p: int(p * 0.8))
             s.putalpha(alpha)
-            canvas.alpha_composite(s, ((w_px - s.width) // 2, (h_px - s.height) // 2))
+            canvas.paste(s, ((w_px - s.width) // 2 + dx, (h_px - s.height) // 2 + dy), s)
         if sign:
             g = sign.copy()
-            ratio = min(w_px / g.width, h_px / g.height)
+            ratio = min(w_px / g.width, (h_px * 0.7) / g.height)
             g = g.resize((max(1, int(g.width * ratio)), max(1, int(g.height * ratio))))
-            canvas.alpha_composite(g, ((w_px - g.width) // 2, (h_px - g.height) // 2))
+            canvas.paste(g, ((w_px - g.width) // 2, (h_px - g.height) // 2), g)
         out = BytesIO()
         canvas.save(out, format="PNG")
         out.seek(0)
         return out
     except Exception:
         return None
+    except Exception:
+        return None
 
 
-def _signature_block(signer, tpl, base_font, bold_font):
-    """Build a right-aligned signature flowable: 'Hormat kami,' + signature/stamp image + name + title."""
+_ID_MONTHS = ["", "Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli",
+              "Agustus", "September", "Oktober", "November", "Desember"]
+
+
+def _id_dateline(tpl, iso_date):
+    place = (tpl.get("signer_place") or "").strip()
+    s = str(iso_date or "")[:10]
+    try:
+        y, m, d = s.split("-")
+        txt = f"{int(d)} {_ID_MONTHS[int(m)]} {int(y)}"
+    except Exception:
+        n = datetime.now(timezone.utc)
+        txt = f"{n.day} {_ID_MONTHS[n.month]} {n.year}"
+    return f"{place}, {txt}" if place else txt
+
+
+def _signature_block(signer, tpl, base_font, bold_font, place_date=""):
+    """Build a right-aligned signature flowable: [place, date] + 'Hormat kami,' + signature/stamp + name + title."""
     if not signer:
         return None
     name = (signer.get("name") or "").strip()
@@ -4373,8 +4402,14 @@ def _signature_block(signer, tpl, base_font, bold_font):
                          alignment=1, textColor=colors.HexColor("#334155"))
     cenb = ParagraphStyle("sigcb", parent=cen, fontName=bold_font, fontSize=9.5,
                           textColor=colors.HexColor("#0f172a"))
-    parts = [Paragraph("Hormat kami,", cen)]
-    img_buf = _compose_sign_stamp(signer.get("signature_url"), stamp_src)
+    parts = []
+    if place_date:
+        parts.append(Paragraph(place_date, cen))
+    parts.append(Paragraph("Hormat kami,", cen))
+    img_buf = _compose_sign_stamp(signer.get("signature_url"), stamp_src,
+                                  stamp_scale=tpl.get("stamp_scale", 1.0),
+                                  stamp_dx=tpl.get("stamp_offset_x", 0),
+                                  stamp_dy=tpl.get("stamp_offset_y", 0))
     if img_buf:
         im = RLImage(img_buf)
         ratio = min(46 * mm / im.imageWidth, 23 * mm / im.imageHeight)
@@ -4471,7 +4506,7 @@ def build_document_pdf(kind: str, data: dict, company: dict, itineraries=None, t
         el.append(Spacer(1, 8 * mm))
         el.append(Paragraph(_clean_terms(tpl.get("footer_text")), ParagraphStyle("f", parent=small, textColor=accent)))
 
-    sig = _signature_block(signer, tpl, base_font, bold_font)
+    sig = _signature_block(signer, tpl, base_font, bold_font, place_date=_id_dateline(tpl, data.get("created_at")))
     if sig:
         el.append(Spacer(1, 10 * mm))
         el.append(sig)
@@ -4608,7 +4643,7 @@ async def _render_receipt_pdf(r, tpl=None):
             el += [Spacer(1, 10), qr, Paragraph("Scan untuk verifikasi kwitansi", ParagraphStyle("qs", parent=styles["Normal"], fontSize=8))]
     el += [Spacer(1, 16), Paragraph(_clean_terms(tpl.get("footer_text")) or "Terima kasih atas pembayaran Anda.", styles["Normal"])]
     _rc_signer = await _freeze_signer("receipt", r, tpl, "schedule_payments")
-    _rc_sig = _signature_block(_rc_signer, tpl, base_font, bold_font)
+    _rc_sig = _signature_block(_rc_signer, tpl, base_font, bold_font, place_date=_id_dateline(tpl, r.get("created_at")))
     if _rc_sig:
         el += [Spacer(1, 10 * mm), _rc_sig]
     paid_full = float(r.get("outstanding_total") or 0) <= 0

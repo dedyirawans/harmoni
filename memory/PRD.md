@@ -1,3 +1,9 @@
+## Enhancement — Tanggal & Tempat TTD + Opsi Ukuran/Posisi Stempel (2026-06) — DONE ✅ (PDF-render verified)
+- **Baris tempat & tanggal**: field baru `signer_place` (Settings). Blok tanda tangan kini menampilkan baris "Kota, DD Bulan YYYY" (mis. "Jakarta, 19 Agustus 2026") di atas "Hormat kami," — tanggal mengikuti tanggal dokumen (Indonesia). Helper `_id_dateline(tpl, iso_date)`.
+- **Opsi stempel**: field `stamp_scale` (0.4–2.0), `stamp_offset_x`, `stamp_offset_y` (Settings, slider). `_compose_sign_stamp` memakai skala & offset, dan `paste` clip-safe (stempel besar tidak error). Layout live dari Settings (tanda tangan tetap beku per dokumen).
+- **UI Settings**: input Kota/Tempat + 3 slider (Ukuran %, Geser ↔, Geser ↕).
+- **Verified**: render invoice dengan place "Jakarta", scale 1.6, offset (40,-10) → baris "Jakarta, 19 Agustus 2026" tampil, stempel membesar & bergeser, latar putih tetap terhapus. Data uji dibersihkan.
+
 ## Enhancement — TTD & Stempel: hapus latar putih otomatis (2026-06) — DONE ✅ (PDF-render verified)
 - Helper `_remove_white_bg(img)` di backend mengubah piksel putih/near-putih menjadi transparan (soft ramp lo=208..hi=246 untuk tepi anti-alias, tetap menghormati transparansi asli). Diterapkan pada tanda tangan DAN stempel di `_compose_sign_stamp` (saat render), jadi berlaku juga untuk PNG yang sudah diunggah.
 - Hasil: stempel di belakang tanda tangan tampak menyatu natural — tidak ada kotak putih. Verified dengan uji PNG berlatar putih (tanda tangan garis biru + stempel lingkaran merah) → keduanya transparan & stempel tembus di belakang tanda tangan.

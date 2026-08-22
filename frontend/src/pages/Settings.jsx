@@ -424,6 +424,13 @@ function DocTemplateTab({ canManage }) {
             </div>
           </div>
         </div>
+        <div className="space-y-2 sm:col-span-2"><Label>Kota / Tempat Tanda Tangan</Label><Input value={t.signer_place || ""} onChange={set("signer_place")} placeholder="mis. Jakarta" data-testid="tpl-signer-place" disabled={!canManage} /><p className="text-xs text-slate-400">Muncul di atas blok tanda tangan, mis. "Jakarta, 19 Agustus 2026". Tanggal mengikuti tanggal dokumen.</p></div>
+        <div className="space-y-2"><Label>Ukuran Stempel: {Math.round((parseFloat(t.stamp_scale ?? 1) || 1) * 100)}%</Label>
+          <input type="range" min="0.4" max="2" step="0.1" value={t.stamp_scale ?? 1} onChange={(e) => setT((o) => ({ ...o, stamp_scale: parseFloat(e.target.value) }))} className="w-full" data-testid="tpl-stamp-scale" disabled={!canManage} /></div>
+        <div className="space-y-2"><Label>Geser Stempel ↔ (Horizontal): {t.stamp_offset_x ?? 0}</Label>
+          <input type="range" min="-90" max="90" step="1" value={t.stamp_offset_x ?? 0} onChange={(e) => setT((o) => ({ ...o, stamp_offset_x: parseInt(e.target.value, 10) }))} className="w-full" data-testid="tpl-stamp-offset-x" disabled={!canManage} /></div>
+        <div className="space-y-2"><Label>Geser Stempel ↕ (Vertikal): {t.stamp_offset_y ?? 0}</Label>
+          <input type="range" min="-90" max="90" step="1" value={t.stamp_offset_y ?? 0} onChange={(e) => setT((o) => ({ ...o, stamp_offset_y: parseInt(e.target.value, 10) }))} className="w-full" data-testid="tpl-stamp-offset-y" disabled={!canManage} /></div>
         <div className="space-y-2 sm:col-span-2"><Label>Teks Footer</Label><Input value={t.footer_text || ""} onChange={set("footer_text")} data-testid="tpl-footer" disabled={!canManage} /></div>
         <div className="space-y-2 sm:col-span-2"><Label>Terms &amp; Conditions — Invoice</Label><RichText value={t.invoice_terms} onChange={(v) => setT((o) => ({ ...o, invoice_terms: v }))} disabled={!canManage} testid="tpl-invoice-terms" /></div>
         <div className="space-y-2 sm:col-span-2"><Label>Terms &amp; Conditions — Quotation</Label><RichText value={t.quotation_terms} onChange={(v) => setT((o) => ({ ...o, quotation_terms: v }))} disabled={!canManage} testid="tpl-quotation-terms" /></div>
