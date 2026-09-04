@@ -121,7 +121,7 @@ export default function AddToQuotationDialog({ open, onClose, hotel, searchCtx, 
           )}
 
           <div className="space-y-1">
-            <Label>Tipe Kamar (dari MMBC)</Label>
+            <Label>Tipe Kamar</Label>
             <Input value={roomType} onChange={(e) => setRoomType(e.target.value)} placeholder="mis. Deluxe Double Room" data-testid="addquote-roomtype" />
           </div>
 

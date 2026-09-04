@@ -223,7 +223,7 @@ export default function HotelSearch() {
           </div>
 
           <div className="flex items-center justify-between pt-2">
-            <p className="text-[11px] text-slate-400 flex items-center gap-1"><Info className="h-3 w-3" />Hasil & harga live dari MMBC. Harga sudah termasuk markup agen.</p>
+            <p className="text-[11px] text-slate-400 flex items-center gap-1"><Info className="h-3 w-3" />Hasil & harga live dari API hotel. Harga sudah termasuk markup agen.</p>
             <Button onClick={search} disabled={loading} className="min-w-[140px]" data-testid="hotel-search-submit">
               {loading ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : null}
               {loading ? "Mencari…" : "Cari Hotel"}

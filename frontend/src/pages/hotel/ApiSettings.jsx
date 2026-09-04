@@ -63,7 +63,7 @@ export default function ApiSettings() {
       const { data } = await api.put("/hotel/settings", payload);
       setMeta({ password_set: !!data.password_set, password_masked: data.password_masked || "" });
       setForm((f) => ({ ...f, password: "" }));
-      toast.success("Pengaturan API MMBC tersimpan.");
+      toast.success("Pengaturan API tersimpan.");
     } catch (e) {
       toast.error(formatApiErrorDetail(e?.response?.data?.detail));
     } finally { setSaving(false); }
@@ -74,8 +74,8 @@ export default function ApiSettings() {
     try {
       const { data } = await api.post("/hotel/test-connection");
       setTestResult(data);
-      if (data.success) { toast.success("Koneksi MMBC berhasil."); loadCountries(); }
-      else toast.error("Koneksi MMBC gagal.");
+      if (data.success) { toast.success("Koneksi API berhasil."); loadCountries(); }
+      else toast.error("Koneksi API gagal.");
     } catch (e) {
       const detail = formatApiErrorDetail(e?.response?.data?.detail);
       setTestResult({ success: false, message: detail });
@@ -112,13 +112,13 @@ export default function ApiSettings() {
         <CardContent className="p-5 space-y-5">
           <div className="flex items-center gap-2 text-slate-700">
             <ShieldCheck className="h-4 w-4 text-emerald-600" />
-            <p className="text-xs text-slate-500">Kredensial MMBC dienkripsi saat disimpan (Fernet) & tidak pernah ditampilkan penuh maupun dicatat di log.</p>
+            <p className="text-xs text-slate-500">Kredensial API dienkripsi saat disimpan (Fernet) & tidak pernah ditampilkan penuh maupun dicatat di log.</p>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-1">
               <Label>Provider</Label>
-              <Input value="MMBC (klikmbc.co.id)" disabled data-testid="hotel-settings-provider" />
+              <Input value="API Hotel" disabled data-testid="hotel-settings-provider" />
             </div>
             <div className="space-y-1">
               <Label>Markup Agen (%)</Label>
@@ -128,7 +128,7 @@ export default function ApiSettings() {
             <div className="space-y-1">
               <Label>Username</Label>
               <Input value={form.username} data-testid="hotel-settings-username"
-                onChange={(e) => set("username", e.target.value)} placeholder="username MMBC" />
+                onChange={(e) => set("username", e.target.value)} placeholder="username API" />
             </div>
             <div className="space-y-1">
               <Label className="flex items-center gap-2">
@@ -141,7 +141,7 @@ export default function ApiSettings() {
               </Label>
               <Input type="password" value={form.password} data-testid="hotel-settings-password"
                 onChange={(e) => set("password", e.target.value)}
-                placeholder={meta.password_set ? "•••• (biarkan kosong untuk mempertahankan)" : "Masukkan password MMBC"} />
+                placeholder={meta.password_set ? "•••• (biarkan kosong untuk mempertahankan)" : "Masukkan password API"} />
             </div>
             <div className="space-y-1 sm:col-span-2">
               <Label>Base URL API</Label>
@@ -196,7 +196,7 @@ export default function ApiSettings() {
             <Database className="h-4 w-4 text-blue-600" />
             <p className="text-sm font-semibold">Master Data Hotel (Negara / Kota / Hotel)</p>
           </div>
-          <p className="text-xs text-slate-500">Sinkronkan daftar hotel & kota dari MMBC agar pencarian by-nama cepat. Proses berjalan di latar belakang.</p>
+          <p className="text-xs text-slate-500">Sinkronkan daftar hotel & kota dari server agar pencarian by-nama cepat. Proses berjalan di latar belakang.</p>
 
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div className="rounded-lg border border-slate-200 p-3 text-center"><p className="text-xs text-slate-500">Negara</p><p className="text-lg font-bold text-slate-800">{counts.countries ?? 0}</p></div>

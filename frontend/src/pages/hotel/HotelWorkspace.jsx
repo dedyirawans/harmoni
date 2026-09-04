@@ -49,7 +49,7 @@ export default function HotelWorkspace() {
 
   return (
     <div className="space-y-6" data-testid="hotel-workspace">
-      <PageHeader title="Hotel" subtitle="Pencarian hotel & booking via API MMBC, terintegrasi ke Sales/Quotation." />
+      <PageHeader title="Hotel" subtitle="Pencarian hotel & booking via API, terintegrasi ke Sales/Quotation." />
 
       {stats && (
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4" data-testid="hotel-stats">

@@ -96,7 +96,7 @@ export default function BookingDialog({ open, onClose, hotel, customers, default
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto" data-testid="hotel-booking-dialog">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2"><CalendarCheck className="h-4 w-4 text-blue-600" />Booking Hotel (MMBC)</DialogTitle>
+          <DialogTitle className="flex items-center gap-2"><CalendarCheck className="h-4 w-4 text-blue-600" />Booking Hotel</DialogTitle>
         </DialogHeader>
         <div className="space-y-4">
           <div className="rounded-lg bg-slate-50 border border-slate-200 p-3 text-sm">
