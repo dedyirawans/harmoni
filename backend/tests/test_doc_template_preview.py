@@ -9,7 +9,7 @@ import os
 import requests
 import pytest
 
-BASE_URL = (os.environ.get("REACT_APP_BACKEND_URL") or "https://crm-access-control-3.preview.emergentagent.com").rstrip("/")
+BASE_URL = (os.environ.get("REACT_APP_BACKEND_URL") or "https://git-continue-5.preview.emergentagent.com").rstrip("/")
 ADMIN_EMAIL = "dedyirawan18@gmail.com"
 ADMIN_PASS = "Admin@123"
 

@@ -4,7 +4,7 @@ import time
 import pytest
 import requests
 
-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://crm-access-control-3.preview.emergentagent.com").rstrip("/")
+BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://git-continue-5.preview.emergentagent.com").rstrip("/")
 API = f"{BASE_URL}/api"
 
 SUPER_ADMIN = {"email": "dedyirawan18@gmail.com", "password": "Admin@123"}

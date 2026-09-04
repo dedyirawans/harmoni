@@ -190,15 +190,17 @@ export default function HotelSearch() {
                 <p className="text-[11px] text-slate-400">Cari kota berdasarkan nama, atau ketik City ID Agoda manual.</p>
               </div>
             ) : (
-              <div className="space-y-1 lg:col-span-2">
-                <Label>Kota (untuk memfilter hotel)</Label>
-                <CityCombobox value={city.cityId} onChange={(v) => setCt("cityId", v)} />
-              </div>
-              <div className="space-y-1 lg:col-span-2">
-                <Label>Hotel (cari by nama)</Label>
-                <HotelPicker cityId={Number(city.cityId) || undefined} onChange={(ids) => setHotelIds(ids.join(", "))} />
-                <p className="text-[11px] text-slate-400">Hasil dibatasi ke kota terpilih. Ketik nama hotel, atau Hotel ID manual.</p>
-              </div>
+              <>
+                <div className="space-y-1 lg:col-span-2">
+                  <Label>Kota (untuk memfilter hotel)</Label>
+                  <CityCombobox value={city.cityId} onChange={(v) => setCt("cityId", v)} />
+                </div>
+                <div className="space-y-1 lg:col-span-2">
+                  <Label>Hotel (cari by nama)</Label>
+                  <HotelPicker cityId={Number(city.cityId) || undefined} onChange={(ids) => setHotelIds(ids.join(", "))} />
+                  <p className="text-[11px] text-slate-400">Hasil dibatasi ke kota terpilih. Ketik nama hotel, atau Hotel ID manual.</p>
+                </div>
+              </>
             )}
             <div className="space-y-1">
               <Label>Check-in</Label>

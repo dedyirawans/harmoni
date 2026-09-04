@@ -3,7 +3,7 @@ import os, requests
 from dotenv import load_dotenv
 load_dotenv(os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env"))
 
-BASE = os.environ["REACT_APP_BACKEND_URL"].rstrip("/") if os.environ.get("REACT_APP_BACKEND_URL") else "https://crm-access-control-3.preview.emergentagent.com"
+BASE = os.environ["REACT_APP_BACKEND_URL"].rstrip("/") if os.environ.get("REACT_APP_BACKEND_URL") else "https://git-continue-5.preview.emergentagent.com"
 # fallback: read from frontend .env if REACT_APP_BACKEND_URL not exported into backend
 try:
     with open("/app/frontend/.env") as f:

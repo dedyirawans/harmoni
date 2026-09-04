@@ -35,7 +35,7 @@ Prasyarat: di CRM buka **Integration ➜ N8N API Credentials ➜ Generate** ➜ 
 
 1. Klik node **"Buat Signature HMAC"** ➜ edit 3 baris paling atas:
    ```js
-   const CRM_API_URL = 'https://crm-access-control-3.preview.emergentagent.com';
+   const CRM_API_URL = 'https://git-continue-5.preview.emergentagent.com';
    const API_KEY     = 'PASTE_API_KEY_ANDA';
    const API_SECRET  = 'PASTE_API_SECRET_ANDA';
    ```
