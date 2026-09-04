@@ -9,7 +9,7 @@ import json
 from datetime import datetime, timedelta
 
 # Configuration
-BASE_URL = "https://git-continue-5.preview.emergentagent.com/api"
+BASE_URL = "https://github-workflow-14.preview.emergentagent.com/api"
 
 # Test credentials
 SUPER_ADMIN = {"email": "dedyirawan18@gmail.com", "password": "Admin@123"}

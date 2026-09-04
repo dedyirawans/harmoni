@@ -5,7 +5,7 @@ load_dotenv(os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env"))
 from motor.motor_asyncio import AsyncIOMotorClient
 
 PFX = "QA4B-"
-BASE = os.environ["PUBLIC_BASE"] if "PUBLIC_BASE" in os.environ else "https://git-continue-5.preview.emergentagent.com/api"
+BASE = os.environ["PUBLIC_BASE"] if "PUBLIC_BASE" in os.environ else "https://github-workflow-14.preview.emergentagent.com/api"
 
 async def cleanup(db):
     await db.bookings.delete_many({"booking_number": {"$regex": f"^{PFX}"}})

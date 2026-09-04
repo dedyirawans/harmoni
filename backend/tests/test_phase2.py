@@ -4,7 +4,7 @@ import uuid
 import pytest
 import requests
 
-BASE_URL = os.environ["REACT_APP_BACKEND_URL"].rstrip("/") if os.environ.get("REACT_APP_BACKEND_URL") else "https://git-continue-5.preview.emergentagent.com"
+BASE_URL = os.environ["REACT_APP_BACKEND_URL"].rstrip("/") if os.environ.get("REACT_APP_BACKEND_URL") else "https://github-workflow-14.preview.emergentagent.com"
 API = f"{BASE_URL}/api"
 
 SUPER = {"email": "dedyirawan18@gmail.com", "password": "Admin@123"}
