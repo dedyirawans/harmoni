@@ -13993,20 +13993,24 @@ async def seed():
         elif role != "super_admin":
             await db.role_permissions.update_one({"role": role}, {"$addToSet": {"permissions": {"$each": perms}}})
 
+    seed_demo = os.environ.get("SEED_DEMO_DATA", "false").lower() == "true"
     seed_users = [
         {"email": os.environ["SUPER_ADMIN_EMAIL"], "password": os.environ["SUPER_ADMIN_PASSWORD"],
-         "name": "Dedy Irawan", "username": "superadmin", "role": "super_admin", "phone": "+62 811 0000 001",
-         "branch": "HQ Jakarta", "data_scope": "all"},
-        {"email": os.environ["SALES_EMAIL"], "password": os.environ["SALES_PASSWORD"],
-         "name": "Rina Sales", "username": "rina.sales", "role": "sales", "phone": "+62 811 0000 002",
-         "branch": "Bandung", "data_scope": "own"},
-        {"email": os.environ["SALES_B_EMAIL"], "password": os.environ["SALES_B_PASSWORD"],
-         "name": "Andi Sales", "username": "andi.sales", "role": "sales", "phone": "+62 811 0000 004",
-         "branch": "Surabaya", "data_scope": "own"},
-        {"email": os.environ["ACCOUNTING_EMAIL"], "password": os.environ["ACCOUNTING_PASSWORD"],
-         "name": "Budi Accounting", "username": "budi.acc", "role": "accounting", "phone": "+62 811 0000 003",
-         "branch": "HQ Jakarta", "data_scope": "all"},
+         "name": "Super Admin", "username": "superadmin", "role": "super_admin", "phone": "+62 811 0000 001",
+         "branch": "HQ", "data_scope": "all"},
     ]
+    if seed_demo:
+        seed_users += [
+            {"email": os.environ["SALES_EMAIL"], "password": os.environ["SALES_PASSWORD"],
+             "name": "Rina Sales", "username": "rina.sales", "role": "sales", "phone": "+62 811 0000 002",
+             "branch": "Bandung", "data_scope": "own"},
+            {"email": os.environ["SALES_B_EMAIL"], "password": os.environ["SALES_B_PASSWORD"],
+             "name": "Andi Sales", "username": "andi.sales", "role": "sales", "phone": "+62 811 0000 004",
+             "branch": "Surabaya", "data_scope": "own"},
+            {"email": os.environ["ACCOUNTING_EMAIL"], "password": os.environ["ACCOUNTING_PASSWORD"],
+             "name": "Budi Accounting", "username": "budi.acc", "role": "accounting", "phone": "+62 811 0000 003",
+             "branch": "HQ Jakarta", "data_scope": "all"},
+        ]
     for su in seed_users:
         existing = await db.users.find_one({"email": su["email"]})
         if not existing:
@@ -14021,10 +14025,9 @@ async def seed():
 
     if not await db.company_settings.find_one({"key": "company"}):
         await db.company_settings.insert_one({
-            "key": "company", "company_name": "Safar Travel Indonesia", "logo": "",
-            "address": "Jl. Sudirman No. 21, Jakarta Pusat", "phone": "+62 21 5000 1234",
-            "email": "info@safartravel.co.id", "website": "www.safartravel.co.id",
-            "npwp": "01.234.567.8-901.000", "nib": "1234567890123", "bank_account": "BSI 7001234567 a.n Safar Travel",
+            "key": "company", "company_name": "PT Harmoni Wisata Internusa", "logo": "",
+            "address": "", "phone": "", "email": "", "website": "",
+            "npwp": "", "nib": "", "bank_account": "",
         })
     if not await db.system_settings.find_one({"key": "system"}):
         await db.system_settings.insert_one({"key": "system", "settings": {
@@ -14041,8 +14044,8 @@ async def seed():
             "login_page": DEFAULT_LOGIN_PAGE,
         }})
 
-    # Phase 2 demo data (only if empty)
-    if await db.customers.count_documents({}) == 0:
+    # Phase 2 demo data (only if empty AND demo seeding enabled)
+    if seed_demo and await db.customers.count_documents({}) == 0:
         sales = await db.users.find_one({"email": os.environ["SALES_EMAIL"]})
         if sales:
             sid = str(sales["_id"])
@@ -14163,7 +14166,7 @@ async def seed():
             "config_name": "PPN Besaran Tertentu 1.1% (V1)", "tax_type": "PPN", "tax_rate": 1.1, "dpp_percentage": 100,
             "effective_from": "2024-01-01", "effective_until": "", "status": "ACTIVE",
             "description": "Konfigurasi PPN default (besaran tertentu 1.1%).", "created_at": now_iso(), "created_by": "system"})
-    if await db.packages.count_documents({}) == 0:
+    if seed_demo and await db.packages.count_documents({}) == 0:
         umrah = {
             "package_code": "UMR-0001", "package_name": "Umrah Reguler 9 Hari", "product_type": "UMRAH",
             "category": "Umrah Regular", "destination": "Makkah & Madinah", "country": "Saudi Arabia",

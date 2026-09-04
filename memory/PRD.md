@@ -1,3 +1,10 @@
+## PUBLISH PREP — Clean Slate + Rebranding (PT Harmoni Wisata Internusa) — DONE ✅
+- Reset akun demo: hapus semua akun demo lama; hanya 1 Super Admin ter-seed = irawandedy185@gmail.com (password kuat di backend/.env SUPER_ADMIN_PASSWORD). User sales/accounting dibuat in-app oleh Super Admin.
+- Clean slate data: wipe customers/leads/follow_ups/quotations/bookings/invoices/payments/travelers/documents/packages/departures/komisi/notifikasi/mmbc_bookings/history dll. Konfigurasi (role_permissions, system_settings, tax_masters, deduction_types, ppn_config) DIPERTAHANKAN.
+- Demo seeding di-gate env SEED_DEMO_DATA (default "false"). Set "true" untuk seed ulang data+user demo.
+- Rebranding: company_name default -> "PT Harmoni Wisata Internusa" (backend seed + BrandingContext + Reports fallback). Panel "Demo accounts" dihapus dari Login.jsx.
+- Script pembersihan: /app/scripts/prepare_publish_cleanup.py. Login baru terverifikasi 200 + token.
+
 ## HOTEL — Master Hotel Agoda (1,35 juta) + Pencarian Hotel by-Nama (2026-08) — DONE ✅ (live terbukti)
 - **Impor master hotel** dari CSV Agoda → koleksi `agoda_hotels`: **1.354.615 hotel** (hotelId, name, cityId, city, country, starRating, lat/lng, photo, url, reviewCount, ratingAverage, currency, type). Index: name_lower, (cityId, reviewCount), hotelId, reviewCount. Waktu impor ~132 detik.
 - **Endpoint** `GET /api/hotel/hotels/search?q=&cityId=&limit=` (semua staff): prefix match nama (index-backed, cepat), opsional filter cityId, sort by jumlah ulasan; q kosong tanpa cityId → [] (hindari dump).

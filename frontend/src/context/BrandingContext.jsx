@@ -2,7 +2,7 @@ import { createContext, useContext, useEffect, useState, useCallback } from "rea
 import api from "@/lib/api";
 
 const BrandingContext = createContext(null);
-const DEFAULT = { company_name: "Safar Travel CRM", logo: "" };
+const DEFAULT = { company_name: "PT Harmoni Wisata Internusa", logo: "" };
 
 export function BrandingProvider({ children }) {
   const [branding, setBranding] = useState(DEFAULT);

@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
 import { useBranding } from "@/context/BrandingContext";
 import api, { formatApiErrorDetail } from "@/lib/api";
-import { Building2, Plane } from "lucide-react";
+import { Plane } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -123,17 +123,6 @@ export default function Login() {
               Forgot your password?
             </button>
           </form>
-
-          <div className="mt-10 rounded-md border border-slate-200 bg-white p-4 text-xs text-slate-500">
-            <div className="flex items-center gap-1.5 font-semibold text-slate-700 mb-2">
-              <Building2 className="h-3.5 w-3.5" aria-hidden="true" /> Demo accounts
-            </div>
-            <ul className="space-y-1">
-              <li>Super Admin — dedyirawan18@gmail.com / Admin@123</li>
-              <li>Sales — sales@safarcrm.com / Sales@123</li>
-              <li>Accounting — accounting@safarcrm.com / Account@123</li>
-            </ul>
-          </div>
         </div>
       </div>
     </div>

@@ -147,7 +147,7 @@ export default function Reports() {
 
       <div id="print-area">
         <div className="print-only mb-4">
-          <div className="text-xl font-bold">{brand.company_name || "Safar Travel CRM"}</div>
+          <div className="text-xl font-bold">{brand.company_name || "PT Harmoni Wisata Internusa"}</div>
           <div className="text-lg font-semibold">{meta?.label} — {data && !data.__err && data.title ? data.title : ""}</div>
           <div className="text-sm text-slate-600">Periode: {periodLabel} · Generated: {new Date().toISOString().slice(0, 10)}</div>
         </div>
