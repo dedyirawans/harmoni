@@ -410,73 +410,72 @@ async def update_my_profile(body: MyProfileUpdate, request: Request, user: dict 
 
 
 # ----------------------------------------------------------------------------
-# HOTEL MODULE — Agoda Affiliate Long Tail Search (foundation)
+# HOTEL MODULE — MMBC (klikmbc.co.id) Hotel API integration
 # ----------------------------------------------------------------------------
+MMBC_DEFAULT_BASE_URL = "https://klikmbc.co.id/json/hotel/"
+
+
 class HotelSettings(BaseModel):
-    provider: str = "Agoda"
-    site_id: Optional[str] = ""
-    api_key: Optional[str] = ""
-    endpoint: Optional[str] = "http://affiliateapi7643.agoda.com/affiliateservice/lt_v1"
-    language: Optional[str] = "id-id"
+    provider: str = "MMBC"
+    base_url: Optional[str] = MMBC_DEFAULT_BASE_URL
+    username: Optional[str] = ""
+    password: Optional[str] = ""
+    markup_pct: Optional[float] = 15
     currency: Optional[str] = "IDR"
     active: bool = True
 
 
 async def _hotel_settings_raw():
-    doc = await db.company_settings.find_one({"key": "hotel_agoda"})
-    return (doc or {}).get("settings", {}) if doc else {}
+    doc = await db.company_settings.find_one({"key": "hotel_mmbc"})
+    s = (doc or {}).get("settings", {}) if doc else {}
+    if not s:
+        # bootstrap from environment on first use (editable later via Settings)
+        env_user = os.environ.get("MMBC_USERNAME", "")
+        env_pass = os.environ.get("MMBC_PASSWORD", "")
+        env_base = os.environ.get("MMBC_BASE_URL", MMBC_DEFAULT_BASE_URL)
+        if env_user or env_pass:
+            s = {"provider": "MMBC", "base_url": env_base or MMBC_DEFAULT_BASE_URL,
+                 "username": env_user, "password_enc": _enc(env_pass) if env_pass else "",
+                 "markup_pct": 15, "currency": "IDR", "active": True}
+            try:
+                await db.company_settings.update_one({"key": "hotel_mmbc"},
+                                                     {"$set": {"settings": s}}, upsert=True)
+            except Exception:
+                pass
+    return s
 
 
-def _mask_key(k):
+def _hotel_password(s):
+    if s.get("password_enc"):
+        return _dec(s.get("password_enc"))
+    return s.get("password", "")
+
+
+def _mask_secret(k):
     if not k:
         return ""
-    return ("•" * max(len(k) - 4, 0)) + k[-4:] if len(k) > 4 else "••••"
-
-
-def _hotel_api_key(s):
-    # Prefer encrypted-at-rest key; fall back to legacy plaintext for backward compat.
-    if s.get("api_key_enc"):
-        return _dec(s.get("api_key_enc"))
-    return s.get("api_key", "")
+    return ("•" * max(len(k) - 3, 0)) + k[-3:] if len(k) > 3 else "••••"
 
 
 def _hotel_settings_public(s):
-    _k = _hotel_api_key(s)
-    return {"provider": s.get("provider", "Agoda"), "site_id": s.get("site_id", ""),
-            "api_key_masked": _mask_key(_k), "api_key_set": bool(_k),
-            "endpoint": s.get("endpoint") or "http://affiliateapi7643.agoda.com/affiliateservice/lt_v1",
-            "language": s.get("language", "id-id"), "currency": s.get("currency", "IDR"),
+    _p = _hotel_password(s)
+    return {"provider": s.get("provider", "MMBC"),
+            "base_url": s.get("base_url") or MMBC_DEFAULT_BASE_URL,
+            "username": s.get("username", ""),
+            "password_masked": _mask_secret(_p),
+            "password_set": bool(_p),
+            "markup_pct": float(s.get("markup_pct", 15) or 0),
+            "currency": s.get("currency", "IDR"),
             "active": s.get("active", True)}
 
 
-def _normalize_hotel(r):
-    return {"hotelId": r.get("hotelId"), "hotelName": r.get("hotelName"), "roomtypeName": r.get("roomtypeName"),
-            "starRating": r.get("starRating"), "reviewScore": r.get("reviewScore"), "reviewCount": r.get("reviewCount"),
-            "currency": r.get("currency"), "dailyRate": r.get("dailyRate"), "crossedOutRate": r.get("crossedOutRate"),
-            "discountPercentage": r.get("discountPercentage"), "imageURL": r.get("imageURL"), "landingURL": r.get("landingURL"),
-            "includeBreakfast": r.get("includeBreakfast"), "freeWifi": r.get("freeWifi")}
-
-
-# --- Hotel provider abstraction (future: add other providers without rebuilding CRM) ---
-class HotelProvider:
-    name = "generic"
-
-    async def search(self, criteria, user, search_type, log_meta):
-        raise NotImplementedError
-
-
-class AgodaProvider(HotelProvider):
-    name = "AGODA_API"
-
-    async def search(self, criteria, user, search_type, log_meta):
-        return await _agoda_call(criteria, user, search_type=search_type, log_meta=log_meta)
-
-
-HOTEL_PROVIDERS = {"AGODA_API": AgodaProvider()}
-
-
-def get_hotel_provider(name="AGODA_API"):
-    return HOTEL_PROVIDERS.get(name, HOTEL_PROVIDERS["AGODA_API"])
+def _to_num(v):
+    try:
+        if v is None or v == "":
+            return None
+        return float(v)
+    except Exception:
+        return None
 
 
 def _nights_between(ci, co):
@@ -485,71 +484,6 @@ def _nights_between(ci, co):
         return max((_dt.strptime(str(co), "%Y-%m-%d") - _dt.strptime(str(ci), "%Y-%m-%d")).days, 0)
     except Exception:
         return 0
-
-
-def _hotel_item_snapshot(it: dict):
-    """Freeze the hotel figures at quotation time so old quotations never depend on live API data."""
-    it = it or {}
-    ci, co = str(it.get("checkInDate") or ""), str(it.get("checkOutDate") or "")
-    nights = _nights_between(ci, co)
-    rooms = int(it.get("numberOfRooms") or 1)
-    rate = float(it.get("dailyRate") or it.get("agoda_daily_rate") or 0)
-    return {"hotelId": it.get("hotelId"), "hotelName": it.get("hotelName") or "Hotel",
-            "roomtypeName": it.get("roomtypeName") or "", "checkInDate": ci, "checkOutDate": co,
-            "nights": nights, "numberOfRooms": rooms,
-            "numberOfAdults": int(it.get("numberOfAdults") or 1), "numberOfChildren": int(it.get("numberOfChildren") or 0),
-            "currency": it.get("currency") or "IDR", "agoda_daily_rate": rate,
-            "crossedOutRate": it.get("crossedOutRate"), "discountPercentage": it.get("discountPercentage"),
-            "total": round(rate * nights * rooms), "landingURL": it.get("landingURL") or "",
-            "imageURL": it.get("imageURL") or "", "includeBreakfast": it.get("includeBreakfast"),
-            "freeWifi": it.get("freeWifi"), "specialRequest": (it.get("specialRequest") or "").strip(),
-            "agoda_base_rate": it.get("agodaBaseRate"), "markup_pct": it.get("markupPct"),
-            "source": it.get("source") or "AGODA_API", "added_at": now_iso()}
-
-
-async def _hotel_log(user, req_type, search_type, params, status, ms, count, err_code=None, err_msg=None):
-    safe = {k: v for k, v in (params or {}).items() if k not in ("api_key", "authorization", "site_id")}
-    await db.hotel_api_logs.insert_one({
-        "timestamp": now_iso(), "request_type": req_type, "search_type": search_type, "params": safe,
-        "response_status": status, "response_time_ms": ms, "result_count": count,
-        "error_code": err_code, "error_message": err_msg, "by": user.get("name") if user else None})
-
-
-DEFAULT_HOTEL_ENDPOINT = "http://affiliateapi7643.agoda.com/affiliateservice/lt_v1"
-
-
-def _hotel_user_msg(status, code=None):
-    if code == "TIMEOUT":
-        return "Pencarian hotel memakan waktu terlalu lama. Silakan coba lagi."
-    return {400: "Permintaan pencarian tidak valid.",
-            401: "Autentikasi layanan hotel gagal. Silakan hubungi administrator.",
-            403: "Batas permintaan atau pembatasan akses layanan hotel.",
-            404: "Data tidak ditemukan.",
-            410: "Sumber daya sudah tidak tersedia lagi.",
-            500: "Layanan hotel mengalami gangguan. Silakan coba lagi nanti.",
-            503: "Layanan hotel sementara tidak tersedia. Silakan coba lagi nanti.",
-            506: "Konfigurasi layanan hotel bermasalah."}.get(status, "Terjadi kesalahan pada layanan hotel.")
-
-
-class HotelSearchRequest(BaseModel):
-    searchType: str = "city"  # "city" | "hotel"
-    cityId: Optional[int] = None
-    hotelId: Optional[List[int]] = None
-    checkInDate: str
-    checkOutDate: str
-    language: Optional[str] = None
-    currency: Optional[str] = None
-    sortBy: Optional[str] = None
-    maxResult: Optional[int] = 30
-    discountOnly: Optional[bool] = False
-    minimumStarRating: Optional[float] = None
-    minimumReviewScore: Optional[float] = None
-    dailyRateMin: Optional[float] = None
-    dailyRateMax: Optional[float] = None
-    numberOfAdult: int = 2
-    numberOfChildren: int = 0
-    childrenAges: Optional[List[int]] = None
-    customer_id: Optional[str] = None  # optional: log a "Hotel Search" activity to this customer's timeline
 
 
 def _valid_ymd(d):
@@ -561,59 +495,57 @@ def _valid_ymd(d):
         return False
 
 
-def _build_agoda_criteria(req: "HotelSearchRequest"):
-    from datetime import date as _date
-    if not _valid_ymd(req.checkInDate) or not _valid_ymd(req.checkOutDate):
-        raise HTTPException(status_code=400, detail="Format tanggal harus YYYY-MM-DD.")
-    if req.checkOutDate <= req.checkInDate:
-        raise HTTPException(status_code=400, detail="Check-out harus setelah check-in.")
-    if req.checkInDate < _date.today().isoformat():
-        raise HTTPException(status_code=400, detail="Tanggal check-in tidak boleh di masa lalu.")
-    ages = [int(a) for a in (req.childrenAges or [])]
-    if int(req.numberOfChildren) != len(ages):
-        raise HTTPException(status_code=400,
-                            detail=f"Jumlah 'Children Ages' ({len(ages)}) harus sama dengan jumlah anak ({req.numberOfChildren}).")
-    occ = {"numberOfAdult": max(int(req.numberOfAdult), 1), "numberOfChildren": int(req.numberOfChildren)}
-    if ages:
-        occ["childrenAges"] = ages
-    additional = {"currency": req.currency or "IDR", "language": req.language or "id-id",
-                  "maxResult": int(req.maxResult or 30), "discountOnly": bool(req.discountOnly),
-                  "occupancy": occ}
-    criteria = {"checkInDate": req.checkInDate, "checkOutDate": req.checkOutDate, "additional": additional}
-    st = (req.searchType or "city").lower()
-    if st == "hotel":
-        ids = [int(h) for h in (req.hotelId or []) if str(h).strip() != ""]
-        if not ids:
-            raise HTTPException(status_code=400, detail="Minimal satu Hotel ID diperlukan untuk Hotel List Search.")
-        criteria["hotelId"] = ids
-        search_type = "hotel"
-    else:
-        if not req.cityId:
-            raise HTTPException(status_code=400, detail="City ID diperlukan untuk City Search.")
-        criteria["cityId"] = int(req.cityId)
-        if req.sortBy:
-            additional["sortBy"] = req.sortBy
-        if req.minimumStarRating is not None:
-            additional["minimumStarRating"] = float(req.minimumStarRating)
-        if req.minimumReviewScore is not None:
-            additional["minimumReviewScore"] = float(req.minimumReviewScore)
-        dr = {}
-        if req.dailyRateMin is not None:
-            dr["minimum"] = float(req.dailyRateMin)
-        if req.dailyRateMax is not None:
-            dr["maximum"] = float(req.dailyRateMax)
-        if dr:
-            additional["dailyRate"] = dr
-        search_type = "city"
-    log_meta = {"searchType": search_type, "cityId": criteria.get("cityId"), "hotelId": criteria.get("hotelId"),
-                "checkInDate": req.checkInDate, "checkOutDate": req.checkOutDate,
-                "numberOfAdult": occ["numberOfAdult"], "numberOfChildren": occ["numberOfChildren"],
-                "currency": additional["currency"], "language": additional["language"],
-                "sortBy": additional.get("sortBy"), "discountOnly": additional["discountOnly"]}
-    import json as _hj
-    import hashlib as _hh
-    cache_key = _hh.sha256(_hj.dumps({"c": criteria, "st": search_type}, sort_keys=True, default=str).encode()).hexdigest()
-    return criteria, search_type, log_meta, cache_key
+def _mmbc_url(base, path):
+    base = (base or MMBC_DEFAULT_BASE_URL).strip()
+    if not base.endswith("/"):
+        base += "/"
+    return base + str(path).lstrip("/")
+
+
+async def _hotel_log(user, req_type, params, status, ms, count, err_code=None, err_msg=None):
+    safe = {k: v for k, v in (params or {}).items() if k not in ("username", "password")}
+    await db.hotel_api_logs.insert_one({
+        "timestamp": now_iso(), "request_type": req_type,
+        "search_type": (params or {}).get("searchType"), "params": safe,
+        "response_status": status, "response_time_ms": ms, "result_count": count,
+        "error_code": err_code, "error_message": err_msg, "by": user.get("name") if user else None})
+
+
+async def _mmbc_call(path, payload, user=None, req_type="CALL"):
+    s = await _hotel_settings_raw()
+    if not s.get("active", True):
+        raise HTTPException(status_code=400, detail="Hotel API status non-aktif.")
+    username = s.get("username", "")
+    password = _hotel_password(s)
+    if not username or not password:
+        raise HTTPException(status_code=400, detail="Kredensial MMBC belum diisi di API Settings.")
+    url = _mmbc_url(s.get("base_url") or MMBC_DEFAULT_BASE_URL, path)
+    body = {"username": username, "password": password, **(payload or {})}
+    import time as _t
+    t0 = _t.time()
+    status_code, data, err_code, err_msg = 0, None, None, None
+    try:
+        resp = _requests.post(url, json=body,
+                              headers={"Content-Type": "application/json", "Accept": "application/json"},
+                              timeout=40)
+        status_code = resp.status_code
+        try:
+            data = resp.json()
+        except Exception:
+            data = {"result": "no", "reason": "Respons tidak valid dari server MMBC."}
+        if isinstance(data, dict) and str(data.get("result")).lower() == "no":
+            err_code = "API"
+            err_msg = data.get("reason") or "Permintaan ditolak MMBC."
+    except _requests.exceptions.Timeout:
+        err_code = "TIMEOUT"
+        err_msg = "Permintaan ke MMBC memakan waktu terlalu lama."
+    except Exception as e:
+        err_code = "EXC"
+        err_msg = str(e)[:200]
+    ms = int((_t.time() - t0) * 1000)
+    await _hotel_log(user, req_type, payload or {}, status_code, ms, 0, err_code, err_msg)
+    return {"status": status_code, "data": data, "error_code": err_code,
+            "error_message": err_msg, "response_time_ms": ms}
 
 
 async def _hotel_cache_get(key):
@@ -632,56 +564,111 @@ async def _hotel_cache_set(key, payload):
                                            {"$set": {"key": key, "ts": _t.time(), "payload": payload}}, upsert=True)
 
 
-async def _agoda_call(criteria, user, search_type="city", log_meta=None, req_type="SEARCH"):
-    s = await _hotel_settings_raw()
-    _api_key = _hotel_api_key(s)
-    if not s.get("site_id") or not _api_key:
-        raise HTTPException(status_code=400, detail="Kredensial Agoda belum diisi di API Settings.")
-    if not s.get("active", True):
-        raise HTTPException(status_code=400, detail="Hotel API status non-aktif.")
-    endpoint = s.get("endpoint") or DEFAULT_HOTEL_ENDPOINT
-    body = {"criteria": criteria}
-    headers = {"Authorization": f"{s['site_id']}:{_api_key}", "Accept-Encoding": "gzip,deflate",
-               "Content-Type": "application/json"}
-    import time as _t
-    t0 = _t.time()
-    status_code, count, results, err_code, err_msg = 0, 0, [], None, None
-    try:
-        resp = _requests.post(endpoint, json=body, headers=headers, timeout=25)
-        status_code = resp.status_code
-        if status_code in (200, 206):
-            try:
-                data = resp.json()
-            except Exception:
-                data = {}
-            raw = data.get("results") or data.get("Results") or []
-            results = [_normalize_hotel(r) for r in raw]
-            _mk = float(s.get("markup_pct", 15) or 0)
-            for _h in results:
-                _h["markupPct"] = _mk
-                if _h.get("dailyRate"):
-                    _h["agodaBaseRate"] = _h["dailyRate"]
-                    _h["dailyRate"] = round(float(_h["dailyRate"]) * (1 + _mk / 100))
-                if _h.get("crossedOutRate"):
-                    _h["crossedOutRate"] = round(float(_h["crossedOutRate"]) * (1 + _mk / 100))
-            count = len(results)
-        elif status_code == 204:
-            err_msg = "No content"
+def _mmbc_flatten(hotels_data, nights, rooms_count, markup):
+    """Convert MMBC hotel+rooms structure into flat, UI-friendly room items (one card per room)."""
+    out = []
+    for h in (hotels_data or []):
+        imgs = h.get("hotel_image")
+        if isinstance(imgs, str):
+            images = [imgs] if imgs else []
+        elif isinstance(imgs, list):
+            images = [x for x in imgs if x]
         else:
-            err_code = str(status_code)
-            err_msg = _hotel_user_msg(status_code)
-    except _requests.exceptions.Timeout:
-        err_code = "TIMEOUT"
-        err_msg = "Request timed out"
-    except Exception as e:
-        err_code = "EXC"
-        err_msg = str(e)[:200]
-    ms = int((_t.time() - t0) * 1000)
-    await _hotel_log(user, req_type, search_type, log_meta or {}, status_code, ms, count, err_code, err_msg)
-    return {"status": status_code, "count": count, "results": results, "error_code": err_code,
-            "error_message": err_msg, "response_time_ms": ms}
+            images = []
+        base = {"hotelId": str(h.get("hotel_code") or ""), "hotelKey": h.get("hotel_key"),
+                "hotelName": h.get("hotel_name") or "Hotel", "starRating": _to_num(h.get("hotel_rating")),
+                "address": h.get("hotel_address"), "city": h.get("hotel_city"), "country": h.get("hotel_country"),
+                "latitude": h.get("hotel_latitude"), "longitude": h.get("hotel_longitude"),
+                "images": images, "remark": h.get("hotel_remark"), "extrabeds": h.get("hotel_extrabeds")}
+        for r in (h.get("hotel_room") or []):
+            nta = _to_num(r.get("room_nta")) or 0
+            retail = _to_num(r.get("room_price")) or 0
+            sell_total = round(nta * (1 + markup / 100)) if nta else round(retail)
+            per_night = round(sell_total / nights) if nights else sell_total
+            board = r.get("room_boardname") or ""
+            room_img = r.get("room_image")
+            item = {**base,
+                    "imageURL": (images[0] if images else None) or room_img,
+                    "roomName": r.get("room_name"), "boardName": board,
+                    "roomtypeName": (r.get("room_name") or "") + (f" · {board}" if board else ""),
+                    "roomRateKey": r.get("room_rate_key"), "roomCode": str(r.get("room_code") or ""),
+                    "roomImage": room_img, "cancellation": r.get("room_cancellation"),
+                    "included": r.get("room_included"), "surcharge": r.get("room_surcharge"),
+                    "currency": "IDR", "nta": round(nta), "retail": round(retail), "markupPct": markup,
+                    "sellTotal": sell_total, "dailyRate": per_night, "agoda_daily_rate": per_night,
+                    "crossedOutRate": None, "discountPercentage": None,
+                    "reviewScore": None, "reviewCount": None, "freeWifi": None,
+                    "includeBreakfast": bool(board and "breakfast" in board.lower()),
+                    "landingURL": None, "source": "MMBC_API"}
+            out.append(item)
+    return out
 
 
+def _hotel_item_snapshot(it: dict):
+    """Freeze hotel figures at quotation time so old quotations never depend on live API data."""
+    it = it or {}
+    ci, co = str(it.get("checkInDate") or ""), str(it.get("checkOutDate") or "")
+    nights = _nights_between(ci, co)
+    rooms = int(it.get("numberOfRooms") or 1)
+    rate = float(it.get("dailyRate") or it.get("agoda_daily_rate") or 0)
+    return {"hotelId": it.get("hotelId"), "hotelKey": it.get("hotelKey"),
+            "hotelName": it.get("hotelName") or "Hotel", "roomtypeName": it.get("roomtypeName") or "",
+            "roomName": it.get("roomName"), "boardName": it.get("boardName"),
+            "roomRateKey": it.get("roomRateKey"), "roomCode": it.get("roomCode"),
+            "checkInDate": ci, "checkOutDate": co, "nights": nights, "numberOfRooms": rooms,
+            "numberOfAdults": int(it.get("numberOfAdults") or 1), "numberOfChildren": int(it.get("numberOfChildren") or 0),
+            "currency": it.get("currency") or "IDR", "agoda_daily_rate": rate, "dailyRate": rate,
+            "nta": it.get("nta"), "retail": it.get("retail"), "markup_pct": it.get("markupPct"),
+            "cancellation": it.get("cancellation"),
+            "crossedOutRate": it.get("crossedOutRate"), "discountPercentage": it.get("discountPercentage"),
+            "total": round(rate * nights * rooms), "landingURL": it.get("landingURL") or "",
+            "imageURL": it.get("imageURL") or "", "includeBreakfast": it.get("includeBreakfast"),
+            "freeWifi": it.get("freeWifi"), "specialRequest": (it.get("specialRequest") or "").strip(),
+            "address": it.get("address"), "city": it.get("city"), "country": it.get("country"),
+            "source": it.get("source") or "MMBC_API", "added_at": now_iso()}
+
+
+# ---------------------------- Request models --------------------------------
+class HotelRoomTarget(BaseModel):
+    hotelId: str
+    cityId: Optional[str] = None
+    countryCode: Optional[str] = None
+
+
+class HotelSearchRequest(BaseModel):
+    searchType: str = "city"  # "city" | "hotel"
+    countryCode: Optional[str] = None
+    cityId: Optional[str] = None
+    hotels: Optional[List[HotelRoomTarget]] = None
+    checkInDate: str
+    checkOutDate: str
+    numberOfRooms: int = 1
+    numberOfAdult: int = 2
+    numberOfChildren: int = 0
+    childrenAges: Optional[List[int]] = None
+    currency: Optional[str] = None
+    maxResult: Optional[int] = 50
+    customer_id: Optional[str] = None
+
+
+class MmbcSyncReq(BaseModel):
+    country_code: Optional[str] = None
+
+
+class HotelBookingHold(BaseModel):
+    hotel: dict
+    paxName: str
+    email: Optional[str] = ""
+    phone: Optional[str] = ""
+    request: Optional[str] = ""
+    customer_id: Optional[str] = None
+
+
+class PaymentCodeReq(BaseModel):
+    paymentcode: str
+
+
+# ---------------------------- Settings endpoints ----------------------------
 @api_router.get("/hotel/settings")
 async def hotel_get_settings(user: dict = Depends(require_role("super_admin"))):
     return _hotel_settings_public(await _hotel_settings_raw())
@@ -690,63 +677,296 @@ async def hotel_get_settings(user: dict = Depends(require_role("super_admin"))):
 @api_router.put("/hotel/settings")
 async def hotel_put_settings(body: HotelSettings, request: Request, user: dict = Depends(require_role("super_admin"))):
     cur = await _hotel_settings_raw()
-    new = {**cur, "provider": body.provider, "site_id": (body.site_id or "").strip(),
-           "endpoint": (body.endpoint or "").strip(), "language": body.language, "currency": body.currency,
-           "active": body.active}
-    if body.api_key:  # only overwrite when a new key is provided (encrypted at rest)
-        new["api_key_enc"] = _enc(body.api_key.strip())
-        new.pop("api_key", None)
-    await db.company_settings.update_one({"key": "hotel_agoda"}, {"$set": {"settings": new}}, upsert=True)
-    await log_audit(user, "hotel", "update_settings", request, new={"site_id": new.get("site_id"), "active": new.get("active")})
+    new = {**cur, "provider": "MMBC",
+           "base_url": (body.base_url or MMBC_DEFAULT_BASE_URL).strip(),
+           "username": (body.username or "").strip(),
+           "markup_pct": float(body.markup_pct or 0),
+           "currency": body.currency or "IDR", "active": body.active}
+    if body.password:  # only overwrite when a new password is provided (encrypted at rest)
+        new["password_enc"] = _enc(body.password.strip())
+        new.pop("password", None)
+    await db.company_settings.update_one({"key": "hotel_mmbc"}, {"$set": {"settings": new}}, upsert=True)
+    await log_audit(user, "hotel", "update_settings", request,
+                    new={"username": new.get("username"), "active": new.get("active")})
     return _hotel_settings_public(new)
 
 
 @api_router.post("/hotel/test-connection")
 async def hotel_test_connection(user: dict = Depends(require_role("super_admin"))):
-    from datetime import date, timedelta as _td
-    ci = (date.today() + _td(days=14)).isoformat()
-    co = (date.today() + _td(days=15)).isoformat()
-    req = HotelSearchRequest(searchType="city", cityId=9395, checkInDate=ci, checkOutDate=co, maxResult=1)
     try:
-        criteria, st, meta, _ = _build_agoda_criteria(req)
-        res = await _agoda_call(criteria, user, search_type=st, log_meta=meta, req_type="TEST")
+        res = await _mmbc_call("hotel_listofcountries", {}, user, "TEST")
     except HTTPException as e:
-        return {"success": False, "message": "Agoda API connection failed.", "detail": e.detail}
-    ok = res["status"] in (200, 202, 204, 206)
-    return {"success": ok, "message": "Agoda API connection successful." if ok else "Agoda API connection failed.",
-            "detail": {"status": res["status"], "error_code": res["error_code"], "error_message": res["error_message"],
-                       "response_time_ms": res["response_time_ms"]}}
+        return {"success": False, "message": "Koneksi MMBC gagal.", "detail": {"error_message": e.detail}}
+    d = res.get("data") or {}
+    ok = isinstance(d, dict) and str(d.get("result")).lower() == "ok"
+    return {"success": ok, "message": "Koneksi MMBC berhasil." if ok else "Koneksi MMBC gagal.",
+            "detail": {"status": res["status"], "result": (d.get("result") if isinstance(d, dict) else None),
+                       "reason": (d.get("reason") if isinstance(d, dict) else None),
+                       "error_message": res["error_message"], "response_time_ms": res["response_time_ms"]}}
 
 
+# ---------------------------- Countries & master sync -----------------------
+@api_router.get("/hotel/countries")
+async def hotel_countries(refresh: bool = False, user: dict = Depends(get_current_user)):
+    docs = await db.mmbc_countries.find({}).sort("country_name", 1).to_list(500)
+    if not docs or refresh:
+        try:
+            res = await _mmbc_call("hotel_listofcountries", {}, user, "COUNTRIES")
+            d = res.get("data") or {}
+            rows = d.get("data") if isinstance(d, dict) else []
+            for r in (rows or []):
+                if r.get("country_code"):
+                    await db.mmbc_countries.update_one({"country_code": r.get("country_code")},
+                                                       {"$set": {**r, "updated_at": now_iso()}}, upsert=True)
+            docs = await db.mmbc_countries.find({}).sort("country_name", 1).to_list(500)
+        except HTTPException:
+            pass
+    return [serialize(d) for d in docs]
+
+
+_MMBC_SYNC_STATE = {"running": False}
+
+
+async def _mmbc_sync_country(iso_code, user=None):
+    from pymongo import UpdateOne
+    res = await _mmbc_call("hotel_listsbycountry", {"hotel_country_code": iso_code}, user, "SYNC")
+    d = res.get("data")
+    if not isinstance(d, dict) or str(d.get("result")).lower() != "ok":
+        reason = d.get("reason") if isinstance(d, dict) else res.get("error_message")
+        return {"country": iso_code, "ok": False, "reason": reason, "hotels": 0, "cities": 0}
+    rows = d.get("data") or []
+    hotels_ops = []
+    cities = {}
+    for row in rows:
+        raw = row.get("hotel") if isinstance(row, dict) else row
+        if not raw:
+            continue
+        parts = str(raw).split("|")
+        if len(parts) < 6:
+            continue
+        c_code = parts[0].strip()
+        c_name = parts[1].strip()
+        city_code = parts[2].strip()
+        city_name = parts[3].strip()
+        hotel_code = parts[4].strip()
+        supplier = parts[-1].strip()
+        hotel_name = ("|".join(parts[5:-1]) if len(parts) > 6 else parts[5]).strip()
+        doc = {"countryCode": c_code, "country": c_name, "cityId": city_code, "city": city_name,
+               "hotelId": hotel_code, "name": hotel_name, "name_lower": hotel_name.lower(),
+               "supplier": supplier, "iso": iso_code, "updated_at": now_iso()}
+        hotels_ops.append(UpdateOne({"countryCode": c_code, "hotelId": hotel_code}, {"$set": doc}, upsert=True))
+        key = (c_code, city_code)
+        if key not in cities:
+            cities[key] = {"countryCode": c_code, "country": c_name, "cityId": city_code,
+                           "name": city_name, "name_lower": city_name.lower(), "iso": iso_code, "count": 0}
+        cities[key]["count"] += 1
+    for i in range(0, len(hotels_ops), 1000):
+        try:
+            await db.mmbc_hotels.bulk_write(hotels_ops[i:i + 1000], ordered=False)
+        except Exception:
+            pass
+    for _k, cv in cities.items():
+        try:
+            await db.mmbc_cities.update_one({"countryCode": cv["countryCode"], "cityId": cv["cityId"]},
+                                            {"$set": cv}, upsert=True)
+        except Exception:
+            pass
+    return {"country": iso_code, "ok": True, "hotels": len(hotels_ops), "cities": len(cities)}
+
+
+async def _mmbc_sync_job(iso, user):
+    _MMBC_SYNC_STATE["running"] = True
+    await db.mmbc_sync_status.update_one({"_id": "status"},
+                                         {"$set": {"running": True, "started_at": now_iso(),
+                                                   "error": None, "per_country": []}}, upsert=True)
+    try:
+        try:
+            await db.mmbc_hotels.create_index([("countryCode", 1), ("hotelId", 1)], unique=True)
+            await db.mmbc_hotels.create_index([("name_lower", 1)])
+            await db.mmbc_hotels.create_index([("cityId", 1)])
+            await db.mmbc_cities.create_index([("countryCode", 1), ("cityId", 1)], unique=True)
+            await db.mmbc_cities.create_index([("name_lower", 1)])
+        except Exception:
+            pass
+        res = await _mmbc_call("hotel_listofcountries", {}, user, "COUNTRIES")
+        cd = res.get("data") or {}
+        crows = cd.get("data") if isinstance(cd, dict) else []
+        for r in (crows or []):
+            if r.get("country_code"):
+                await db.mmbc_countries.update_one({"country_code": r.get("country_code")},
+                                                   {"$set": {**r, "updated_at": now_iso()}}, upsert=True)
+        if iso:
+            targets = [iso]
+        else:
+            targets = [r.get("country_code") for r in (crows or [])
+                       if r.get("country_code") and str(r.get("status", "on")).lower() != "off"]
+            if not targets:
+                targets = [d.get("country_code") for d in await db.mmbc_countries.find({}).to_list(500)]
+        per = []
+        for code in targets:
+            try:
+                r = await _mmbc_sync_country(code, user)
+            except Exception as e:
+                r = {"country": code, "ok": False, "reason": str(e)[:200], "hotels": 0, "cities": 0}
+            per.append(r)
+            await db.mmbc_sync_status.update_one({"_id": "status"},
+                                                 {"$set": {"per_country": per, "updated_at": now_iso()}}, upsert=True)
+        await db.mmbc_sync_status.update_one({"_id": "status"},
+                                             {"$set": {"running": False, "finished_at": now_iso(),
+                                                       "per_country": per}}, upsert=True)
+    except Exception as e:
+        await db.mmbc_sync_status.update_one({"_id": "status"},
+                                             {"$set": {"running": False, "error": str(e)[:300]}}, upsert=True)
+    finally:
+        _MMBC_SYNC_STATE["running"] = False
+
+
+@api_router.post("/hotel/sync")
+async def hotel_sync(body: MmbcSyncReq, user: dict = Depends(require_role("super_admin"))):
+    if _MMBC_SYNC_STATE.get("running"):
+        return {"started": False, "message": "Sinkronisasi sedang berjalan."}
+    iso = (body.country_code or "").strip() or None
+    asyncio.create_task(_mmbc_sync_job(iso, user))
+    return {"started": True, "message": "Sinkronisasi master hotel dimulai di latar belakang."}
+
+
+@api_router.get("/hotel/sync-status")
+async def hotel_sync_status(user: dict = Depends(require_role("super_admin"))):
+    doc = await db.mmbc_sync_status.find_one({"_id": "status"}) or {}
+    doc.pop("_id", None)
+    doc["counts"] = {"countries": await db.mmbc_countries.count_documents({}),
+                     "cities": await db.mmbc_cities.count_documents({}),
+                     "hotels": await db.mmbc_hotels.count_documents({})}
+    return doc
+
+
+@api_router.get("/hotel/cities")
+async def hotel_cities_list(q: Optional[str] = None, countryCode: Optional[str] = None,
+                            iso: Optional[str] = None, limit: int = 30,
+                            user: dict = Depends(get_current_user)):
+    """Autocomplete kota dari master data MMBC (mmbc_cities)."""
+    limit = max(1, min(int(limit or 30), 50))
+    query = {}
+    if iso:
+        query["iso"] = str(iso)
+    if countryCode:
+        query["countryCode"] = str(countryCode)
+    if q and q.strip():
+        query["name_lower"] = {"$regex": re.escape(q.strip().lower())}
+    cur = db.mmbc_cities.find(query).sort("count", -1).limit(limit)
+    return [serialize(d) for d in await cur.to_list(limit)]
+
+
+@api_router.get("/hotel/hotels/search")
+async def hotel_hotels_search(q: Optional[str] = None, cityId: Optional[str] = None,
+                              countryCode: Optional[str] = None, iso: Optional[str] = None,
+                              limit: int = 20, user: dict = Depends(get_current_user)):
+    """Cari hotel by nama dari master data MMBC (mmbc_hotels)."""
+    limit = max(1, min(int(limit or 20), 30))
+    query = {}
+    if iso:
+        query["iso"] = str(iso)
+    if countryCode:
+        query["countryCode"] = str(countryCode)
+    if cityId:
+        query["cityId"] = str(cityId)
+    if q and q.strip():
+        query["name_lower"] = {"$regex": re.escape(q.strip().lower())}
+    elif not cityId:
+        return []
+    cur = db.mmbc_hotels.find(query).limit(limit)
+    return [serialize(d) for d in await cur.to_list(limit)]
+
+
+# ---------------------------- Search ----------------------------------------
 @api_router.post("/hotel/search")
 async def hotel_search(req: HotelSearchRequest, user: dict = Depends(get_current_user)):
-    criteria, search_type, log_meta, cache_key = _build_agoda_criteria(req)
+    from datetime import date as _date
+    if not _valid_ymd(req.checkInDate) or not _valid_ymd(req.checkOutDate):
+        raise HTTPException(status_code=400, detail="Format tanggal harus YYYY-MM-DD.")
+    if req.checkOutDate <= req.checkInDate:
+        raise HTTPException(status_code=400, detail="Check-out harus setelah check-in.")
+    if req.checkInDate < _date.today().isoformat():
+        raise HTTPException(status_code=400, detail="Tanggal check-in tidak boleh di masa lalu.")
+    nights = _nights_between(req.checkInDate, req.checkOutDate) or 1
+    rooms_count = max(int(req.numberOfRooms or 1), 1)
+    s = await _hotel_settings_raw()
+    markup = float(s.get("markup_pct", 15) or 0)
+    st = (req.searchType or "city").lower()
+
+    import json as _hj
+    import hashlib as _hh
+    cache_key = _hh.sha256(_hj.dumps(
+        {"st": st, "cc": req.countryCode, "cy": req.cityId,
+         "h": [t.model_dump() for t in (req.hotels or [])],
+         "ci": req.checkInDate, "co": req.checkOutDate, "r": rooms_count, "m": markup},
+        sort_keys=True, default=str).encode()).hexdigest()
     cached = await _hotel_cache_get(cache_key)
     if cached is not None:
         return {**cached, "cached": True}
-    res = await _agoda_call(criteria, user, search_type=search_type, log_meta=log_meta, req_type="SEARCH")
-    status = res["status"]
+
+    payload_base = {"hotel_checkin": req.checkInDate, "hotel_checkout": req.checkOutDate, "hotel_room": rooms_count}
+    results = []
+    status = 200
+    err = None
+    if st == "hotel":
+        targets = req.hotels or []
+        if not targets:
+            raise HTTPException(status_code=400, detail="Minimal satu hotel diperlukan untuk pencarian by hotel.")
+        for tg in targets:
+            cc = tg.countryCode or req.countryCode
+            cy = tg.cityId or req.cityId
+            if not cc or not cy or not tg.hotelId:
+                continue
+            res = await _mmbc_call("hotel_searchbyid",
+                                   {**payload_base, "hotel_country_code": str(cc),
+                                    "hotel_city_code": str(cy), "hotel_code": str(tg.hotelId)},
+                                   user, "SEARCH")
+            status = res["status"]
+            d = res.get("data") or {}
+            if isinstance(d, dict) and str(d.get("result")).lower() == "ok":
+                results += _mmbc_flatten(d.get("data") or [], nights, rooms_count, markup)
+            else:
+                err = err or (d.get("reason") if isinstance(d, dict) else res.get("error_message"))
+    else:
+        if not req.countryCode or not req.cityId:
+            raise HTTPException(status_code=400, detail="Negara & kota diperlukan untuk City Search.")
+        res = await _mmbc_call("hotel_searchbycity",
+                               {**payload_base, "hotel_country_code": str(req.countryCode),
+                                "hotel_city_code": str(req.cityId)},
+                               user, "SEARCH")
+        status = res["status"]
+        d = res.get("data") or {}
+        if isinstance(d, dict) and str(d.get("result")).lower() == "ok":
+            results = _mmbc_flatten(d.get("data") or [], nights, rooms_count, markup)
+        else:
+            err = d.get("reason") if isinstance(d, dict) else res.get("error_message")
+
+    for it in results:
+        it["checkInDate"] = req.checkInDate
+        it["checkOutDate"] = req.checkOutDate
+        it["nights"] = nights
+        it["numberOfRooms"] = rooms_count
+        it["numberOfAdults"] = int(req.numberOfAdult or 1)
+        it["numberOfChildren"] = int(req.numberOfChildren or 0)
+    count = len(results)
+
     if req.customer_id and ObjectId.is_valid(req.customer_id):
-        dest = f"City {criteria.get('cityId')}" if search_type == "city" else f"Hotel {criteria.get('hotelId')}"
+        dest = f"Kota {req.cityId}" if st == "city" else "Hotel terpilih"
         await log_activity(req.customer_id, None, "hotel", f"Hotel Search — {dest}",
-                           f"{req.checkInDate} → {req.checkOutDate} · {res['count']} hasil", user)
-    out = {"results": res["results"], "count": res["count"], "status": status, "cached": False,
-           "searchType": search_type, "error": False, "partial": False, "message": None}
-    if status in (200, 206) and res["count"] > 0:
-        if status == 206:
-            out["partial"] = True
-            out["message"] = "Sebagian hasil mungkin belum lengkap."
+                           f"{req.checkInDate} → {req.checkOutDate} · {count} hasil", user)
+
+    out = {"results": results, "count": count, "status": status, "cached": False,
+           "searchType": st, "error": False, "partial": False, "message": None}
+    if count > 0:
         await _hotel_cache_set(cache_key, out)
         return out
-    if status in (200, 206, 204):
-        out["message"] = "Tidak ada hotel untuk kriteria yang dipilih."
-        return out
-    # error path — return graceful 200 with user-friendly message; details live in API Logs
-    out["error"] = True
-    out["message"] = _hotel_user_msg(status, res["error_code"])
+    out["message"] = err or "Tidak ada hotel untuk kriteria yang dipilih."
+    out["error"] = bool(err)
     return out
 
 
+# ---------------------------- Logs / history / stats ------------------------
 @api_router.get("/hotel/logs")
 async def hotel_logs(user: dict = Depends(require_role("super_admin"))):
     return [serialize(d) for d in await db.hotel_api_logs.find({}).sort("timestamp", -1).to_list(200)]
@@ -758,23 +978,42 @@ async def hotel_search_history(user: dict = Depends(get_current_user)):
     out = []
     for d in [serialize(x) for x in docs]:
         p = d.get("params") or {}
-        out.append({"timestamp": d.get("timestamp"), "searchType": p.get("searchType"),
-                    "cityId": p.get("cityId"), "hotelId": p.get("hotelId"),
-                    "checkInDate": p.get("checkInDate"), "checkOutDate": p.get("checkOutDate"),
-                    "numberOfAdult": p.get("numberOfAdult"), "numberOfChildren": p.get("numberOfChildren"),
-                    "currency": p.get("currency"), "language": p.get("language"),
+        out.append({"timestamp": d.get("timestamp"),
+                    "searchType": p.get("searchType") or ("hotel" if p.get("hotel_code") else "city"),
+                    "cityId": p.get("hotel_city_code"), "hotelId": p.get("hotel_code"),
+                    "countryCode": p.get("hotel_country_code"),
+                    "checkInDate": p.get("hotel_checkin"), "checkOutDate": p.get("hotel_checkout"),
+                    "numberOfRooms": p.get("hotel_room"),
                     "result_count": d.get("result_count"), "response_status": d.get("response_status"),
                     "by": d.get("by")})
     return out
 
 
+@api_router.get("/hotel/stats")
+async def hotel_stats(user: dict = Depends(get_current_user)):
+    if user["role"] not in ("super_admin", "sales", "accounting"):
+        raise HTTPException(status_code=403, detail="403 Forbidden")
+    log_q = {"request_type": "SEARCH"}
+    if user["role"] == "sales":
+        log_q["by"] = user["name"]
+    searches = await db.hotel_api_logs.count_documents(log_q)
+    q_scope = {**owner_filter(user), "hotel_items.0": {"$exists": True}}
+    qs = await db.quotations.find(q_scope).to_list(5000)
+    revenue = sum(float(q.get("hotel_total") or 0) for q in qs)
+    booking_q = {} if user["role"] != "sales" else {"sales_pic_id": user["_id"]}
+    bookings = await db.mmbc_bookings.count_documents(booking_q)
+    return {"hotel_searches": searches, "hotel_quotations": len(qs),
+            "hotel_revenue": round(revenue), "hotel_bookings": bookings}
+
+
+# ---------------------------- Add to quotation ------------------------------
 class HotelAddToQuotation(BaseModel):
     customer_id: Optional[str] = None
-    new_customer: Optional[dict] = None   # {full_name, whatsapp, email} — create if no existing match
-    quotation_id: Optional[str] = None    # append to this existing quotation
-    package_id: Optional[str] = None      # optional package for a NEW quotation (else hotel-only)
+    new_customer: Optional[dict] = None
+    quotation_id: Optional[str] = None
+    package_id: Optional[str] = None
     sales_pic_id: Optional[str] = None
-    hotel: dict                           # hotel snapshot input (from search result + rooms)
+    hotel: dict
 
 
 async def _resolve_or_create_customer(body: "HotelAddToQuotation", user):
@@ -786,7 +1025,6 @@ async def _resolve_or_create_customer(body: "HotelAddToQuotation", user):
     nc = body.new_customer or {}
     wa = str(nc.get("whatsapp") or "").strip()
     name = str(nc.get("full_name") or "").strip()
-    # avoid duplicates: match on whatsapp, then exact name
     match = None
     if wa:
         match = await db.customers.find_one({"whatsapp": wa, "is_deleted": {"$ne": True}})
@@ -853,7 +1091,7 @@ async def hotel_add_to_quotation(body: HotelAddToQuotation, request: Request,
         "activity_type": "Hotel Added to Quotation", "customer_id": cid, "customer_name": cust.get("full_name", ""),
         "lead_id": None, "notes": f"{snap['hotelName']} · {snap['checkInDate']}→{snap['checkOutDate']} · {snap['nights']} malam × {snap['numberOfRooms']} kamar · Total {snap['total']} · Quotation {qnum}",
         "sales_pic_id": (user["_id"] if user["role"] == "sales" else cust.get("sales_pic_id")), "sales_pic_name": user["name"],
-        "branch": user.get("branch"), "hotel": snap, "quotation_id": qid, "source": "AGODA_API", "timestamp": now_iso()})
+        "branch": user.get("branch"), "hotel": snap, "quotation_id": qid, "source": "MMBC_API", "timestamp": now_iso()})
     await log_activity(cid, None, "hotel", f"Hotel added to Quotation {qnum}",
                        f"{snap['hotelName']} — {snap['nights']} malam × {snap['numberOfRooms']} kamar (Total {snap['total']})", user)
     await log_audit(user, "hotel", "add_to_quotation", request, record_id=qid,
@@ -862,50 +1100,90 @@ async def hotel_add_to_quotation(body: HotelAddToQuotation, request: Request,
             "hotel_total": snap["total"], "grand_total_with_hotel": None}
 
 
-@api_router.get("/hotel/stats")
-async def hotel_stats(user: dict = Depends(get_current_user)):
+# ---------------------------- Booking flow ----------------------------------
+@api_router.post("/hotel/booking/hold")
+async def hotel_booking_hold(body: HotelBookingHold, request: Request, user: dict = Depends(get_current_user)):
+    if user["role"] not in ("super_admin", "sales", "accounting"):
+        raise HTTPException(status_code=403, detail="Tidak diizinkan melakukan booking hotel.")
+    h = body.hotel or {}
+    hkey, hcode, rrk = h.get("hotelKey"), str(h.get("hotelId") or ""), h.get("roomRateKey")
+    if not hkey or not hcode or not rrk:
+        raise HTTPException(status_code=400, detail="Data kamar tidak lengkap (hotelKey/hotelId/roomRateKey).")
+    if not (body.paxName or "").strip():
+        raise HTTPException(status_code=400, detail="Nama tamu (pax) wajib diisi.")
+    ci, co = h.get("checkInDate"), h.get("checkOutDate")
+    rooms = int(h.get("numberOfRooms") or 1)
+    payload = {"hotel_key": hkey, "hotel_code": hcode, "room_rate_key": rrk,
+               "hotel_checkin": ci, "hotel_checkout": co, "hotel_room": rooms,
+               "hotel_paxname": body.paxName.strip(), "email": body.email or "",
+               "phone": body.phone or "", "hotel_request": body.request or ""}
+    res = await _mmbc_call("hotel_bookinghold", payload, user, "BOOKING_HOLD")
+    d = res.get("data") or {}
+    if not isinstance(d, dict) or str(d.get("result")).lower() != "ok":
+        raise HTTPException(status_code=400,
+                            detail=(d.get("reason") if isinstance(d, dict) else None) or res.get("error_message") or "Booking gagal.")
+    doc = {"payment_code": d.get("paymentcode"), "mmbc_id": d.get("id"), "session": d.get("session"),
+           "kodebooking": d.get("kodebooking"), "status": d.get("hotel_statusbooking") or "waiting",
+           "hotel_name": d.get("hotel_name"), "room_name": d.get("room_name"),
+           "checkin": d.get("hotel_checkin"), "checkout": d.get("hotel_checkout"),
+           "timelimit": d.get("hotel_timelimit"), "totalfare": d.get("hotel_totalfare"),
+           "nta": d.get("hotel_nta"),
+           "raw": d, "hotel_snapshot": _hotel_item_snapshot(h),
+           "pax_name": body.paxName.strip(), "email": body.email, "phone": body.phone, "request": body.request,
+           "customer_id": body.customer_id, "created_by": user["name"],
+           "sales_pic_id": user["_id"] if user["role"] == "sales" else None,
+           "branch": user.get("branch"), "created_at": now_iso(), "updated_at": now_iso()}
+    r = await db.mmbc_bookings.insert_one(doc)
+    await log_audit(user, "hotel", "booking_hold", request, record_id=str(r.inserted_id),
+                    new={"paymentcode": d.get("paymentcode"), "hotel": d.get("hotel_name")})
+    if body.customer_id and ObjectId.is_valid(body.customer_id):
+        await log_activity(body.customer_id, None, "hotel", f"Hotel Booking (Hold) — {d.get('hotel_name')}",
+                           f"Payment code {d.get('paymentcode')} · time limit {d.get('hotel_timelimit')}", user)
+    return {"booking_id": str(r.inserted_id), "data": d}
+
+
+@api_router.post("/hotel/booking/issue")
+async def hotel_booking_issue(body: PaymentCodeReq, request: Request, user: dict = Depends(get_current_user)):
+    if user["role"] not in ("super_admin", "accounting"):
+        raise HTTPException(status_code=403, detail="Hanya Super Admin / Accounting yang dapat meng-issue booking.")
+    res = await _mmbc_call("hotel_issued", {"paymentcode": body.paymentcode}, user, "BOOKING_ISSUE")
+    d = res.get("data") or {}
+    if not isinstance(d, dict) or str(d.get("result")).lower() != "ok":
+        raise HTTPException(status_code=400,
+                            detail=(d.get("reason") if isinstance(d, dict) else None) or res.get("error_message") or "Issue booking gagal.")
+    await db.mmbc_bookings.update_one({"payment_code": body.paymentcode},
+                                      {"$set": {"status": d.get("hotel_statusbooking") or "issued",
+                                                "kodebooking": d.get("kodebooking"), "raw": d,
+                                                "issued_at": now_iso(), "updated_at": now_iso()}})
+    await log_audit(user, "hotel", "booking_issue", request,
+                    new={"paymentcode": body.paymentcode, "kodebooking": d.get("kodebooking")})
+    return {"data": d}
+
+
+@api_router.post("/hotel/booking/status")
+async def hotel_booking_status(body: PaymentCodeReq, user: dict = Depends(get_current_user)):
+    res = await _mmbc_call("hotel_statuspaymentcode", {"paymentcode": body.paymentcode}, user, "BOOKING_STATUS")
+    d = res.get("data") or {}
+    if isinstance(d, dict) and str(d.get("result")).lower() == "ok":
+        await db.mmbc_bookings.update_one({"payment_code": body.paymentcode},
+                                          {"$set": {"status": d.get("hotel_statusbooking"),
+                                                    "kodebooking": d.get("kodebooking"), "raw": d,
+                                                    "updated_at": now_iso()}})
+    else:
+        raise HTTPException(status_code=400,
+                            detail=(d.get("reason") if isinstance(d, dict) else None) or res.get("error_message") or "Gagal cek status.")
+    return {"data": d}
+
+
+@api_router.get("/hotel/bookings")
+async def hotel_bookings(user: dict = Depends(get_current_user)):
     if user["role"] not in ("super_admin", "sales", "accounting"):
         raise HTTPException(status_code=403, detail="403 Forbidden")
-    log_q = {"request_type": "SEARCH"}
+    q = {}
     if user["role"] == "sales":
-        log_q["by"] = user["name"]
-    searches = await db.hotel_api_logs.count_documents(log_q)
-    q_scope = {**owner_filter(user), "hotel_items.0": {"$exists": True}}
-    qs = await db.quotations.find(q_scope).to_list(5000)
-    revenue = sum(float(q.get("hotel_total") or 0) for q in qs)
-    return {"hotel_searches": searches, "hotel_quotations": len(qs), "hotel_revenue": round(revenue)}
-
-
-@api_router.get("/hotel/cities")
-async def hotel_cities_list(q: Optional[str] = None, limit: int = 30, user: dict = Depends(get_current_user)):
-    """Autocomplete kota dari master data resmi Agoda (agoda_cities)."""
-    limit = max(1, min(int(limit or 30), 50))
-    if q and q.strip():
-        term = q.strip().lower()
-        _aliases = {"makkah": "mecca", "mekah": "mecca", "mekkah": "mecca", "makkatul": "mecca",
-                    "madinah": "medina", "madina": "medina", "madinatul": "medina"}
-        term = _aliases.get(term, term)
-        term = re.escape(term)
-        cur = db.agoda_cities.find({"name_lower": {"$regex": term}}).sort("count", -1).limit(limit)
-    else:
-        cur = db.agoda_cities.find({}).sort("count", -1).limit(limit)
-    return [serialize(d) for d in await cur.to_list(limit)]
-
-
-@api_router.get("/hotel/hotels/search")
-async def hotel_hotels_search(q: Optional[str] = None, cityId: Optional[int] = None, limit: int = 20,
-                              user: dict = Depends(get_current_user)):
-    """Cari hotel by nama dari master data Agoda (agoda_hotels). Prefix match (index-backed)."""
-    limit = max(1, min(int(limit or 20), 30))
-    query = {}
-    if cityId:
-        query["cityId"] = int(cityId)
-    if q and q.strip():
-        query["name_lower"] = {"$regex": "^" + re.escape(q.strip().lower())}
-    elif not cityId:
-        return []
-    cur = db.agoda_hotels.find(query).sort("reviewCount", -1).limit(limit)
-    return [serialize(d) for d in await cur.to_list(limit)]
+        q["sales_pic_id"] = user["_id"]
+    docs = await db.mmbc_bookings.find(q).sort("created_at", -1).to_list(300)
+    return [serialize(d) for d in docs]
 
 
 # ----------------------------------------------------------------------------

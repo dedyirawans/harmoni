@@ -3,12 +3,13 @@ import { useAuth } from "@/context/AuthContext";
 import api from "@/lib/api";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Card, CardContent } from "@/components/ui/card";
-import { Search, History, Settings2, ScrollText, SearchCheck, FileText, Wallet } from "lucide-react";
+import { Search, History, Settings2, ScrollText, SearchCheck, FileText, Wallet, CalendarCheck } from "lucide-react";
 import { PageHeader } from "@/components/PageHeader";
 import HotelSearch from "@/pages/hotel/HotelSearch";
 import SearchHistory from "@/pages/hotel/SearchHistory";
 import ApiSettings from "@/pages/hotel/ApiSettings";
 import ApiLogs from "@/pages/hotel/ApiLogs";
+import HotelBookings from "@/pages/hotel/HotelBookings";
 
 const rupiah = (n) => {
   try { return new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(Number(n) || 0); }
@@ -40,6 +41,7 @@ export default function HotelWorkspace() {
 
   const SUB = [
     ["search", "Hotel Search", Search, HotelSearch, true],
+    ["bookings", "Bookings", CalendarCheck, HotelBookings, canStats],
     ["history", "Search History", History, SearchHistory, true],
     ["settings", "API Settings", Settings2, ApiSettings, isAdmin],
     ["logs", "API Logs", ScrollText, ApiLogs, isAdmin],
@@ -47,7 +49,7 @@ export default function HotelWorkspace() {
 
   return (
     <div className="space-y-6" data-testid="hotel-workspace">
-      <PageHeader title="Hotel" subtitle="Pencarian hotel, integrasi Agoda, & integrasi ke Sales/Quotation." />
+      <PageHeader title="Hotel" subtitle="Pencarian hotel & booking via API MMBC, terintegrasi ke Sales/Quotation." />
 
       {stats && (
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4" data-testid="hotel-stats">

@@ -62,14 +62,15 @@ export default function AddToQuotationDialog({ open, onClose, hotel, searchCtx, 
       const payload = {
         sales_pic_id: null,
         hotel: {
-          hotelId: hotel.hotelId, hotelName: hotel.hotelName, roomtypeName: roomType || hotel.roomtypeName,
+          hotelId: hotel.hotelId, hotelKey: hotel.hotelKey, hotelName: hotel.hotelName,
+          roomtypeName: roomType || hotel.roomtypeName, roomName: hotel.roomName, boardName: hotel.boardName,
+          roomRateKey: hotel.roomRateKey, roomCode: hotel.roomCode, cancellation: hotel.cancellation,
           checkInDate: searchCtx.checkInDate, checkOutDate: searchCtx.checkOutDate, numberOfRooms: Number(rooms) || 1,
           numberOfAdults: Number(searchCtx.adults) || 1, numberOfChildren: Number(searchCtx.children) || 0,
           currency: hotel.currency || searchCtx.currency || "IDR", dailyRate: Number(hotel.dailyRate) || 0,
-          crossedOutRate: hotel.crossedOutRate, discountPercentage: hotel.discountPercentage,
-          agodaBaseRate: hotel.agodaBaseRate, markupPct: hotel.markupPct,
-          landingURL: hotel.landingURL, imageURL: hotel.imageURL,
-          includeBreakfast: breakfast, freeWifi: hotel.freeWifi, specialRequest: special, source: "AGODA_API",
+          nta: hotel.nta, retail: hotel.retail, markupPct: hotel.markupPct,
+          address: hotel.address, city: hotel.city, country: hotel.country, imageURL: hotel.imageURL,
+          includeBreakfast: breakfast, specialRequest: special, source: "MMBC_API",
         },
       };
       if (mode === "new") payload.new_customer = nc; else payload.customer_id = customerId;
@@ -120,7 +121,7 @@ export default function AddToQuotationDialog({ open, onClose, hotel, searchCtx, 
           )}
 
           <div className="space-y-1">
-            <Label>Tipe Kamar (dari Agoda)</Label>
+            <Label>Tipe Kamar (dari MMBC)</Label>
             <Input value={roomType} onChange={(e) => setRoomType(e.target.value)} placeholder="mis. Deluxe Double Room" data-testid="addquote-roomtype" />
           </div>
 

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import api, { formatApiErrorDetail } from "@/lib/api";
 import { toast } from "sonner";
 import { Card, CardContent } from "@/components/ui/card";
@@ -8,25 +8,25 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Loader2, Save, PlugZap, ShieldCheck, KeyRound } from "lucide-react";
+import { Loader2, Save, PlugZap, ShieldCheck, KeyRound, RefreshCw, Database, DownloadCloud } from "lucide-react";
 
-const DEFAULT_ENDPOINT = "http://affiliateapi7643.agoda.com/affiliateservice/lt_v1";
+const DEFAULT_BASE = "https://klikmbc.co.id/json/hotel/";
 
 export default function ApiSettings() {
   const [form, setForm] = useState({
-    provider: "Agoda",
-    site_id: "",
-    api_key: "",
-    endpoint: DEFAULT_ENDPOINT,
-    language: "id-id",
-    currency: "IDR",
-    active: true,
+    base_url: DEFAULT_BASE, username: "", password: "", markup_pct: 15, currency: "IDR", active: true,
   });
-  const [meta, setMeta] = useState({ api_key_set: false, api_key_masked: "" });
+  const [meta, setMeta] = useState({ password_set: false, password_masked: "" });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState(null);
+
+  const [countries, setCountries] = useState([]);
+  const [syncIso, setSyncIso] = useState("__all");
+  const [syncStatus, setSyncStatus] = useState(null);
+  const [syncing, setSyncing] = useState(false);
+  const poll = useRef();
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
 
@@ -35,67 +35,76 @@ export default function ApiSettings() {
     try {
       const { data } = await api.get("/hotel/settings");
       setForm((f) => ({
-        ...f,
-        provider: data.provider || "Agoda",
-        site_id: data.site_id || "",
-        api_key: "",
-        endpoint: data.endpoint || DEFAULT_ENDPOINT,
-        language: data.language || "id-id",
-        currency: data.currency || "IDR",
-        active: data.active !== false,
+        ...f, base_url: data.base_url || DEFAULT_BASE, username: data.username || "", password: "",
+        markup_pct: data.markup_pct ?? 15, currency: data.currency || "IDR", active: data.active !== false,
       }));
-      setMeta({ api_key_set: !!data.api_key_set, api_key_masked: data.api_key_masked || "" });
+      setMeta({ password_set: !!data.password_set, password_masked: data.password_masked || "" });
     } catch (e) {
       toast.error(formatApiErrorDetail(e?.response?.data?.detail));
-    } finally {
-      setLoading(false);
-    }
+    } finally { setLoading(false); }
   };
 
-  useEffect(() => { load(); }, []);
+  const loadCountries = () => api.get("/hotel/countries").then((r) => setCountries(r.data || [])).catch(() => {});
+  const loadSyncStatus = () => api.get("/hotel/sync-status").then((r) => {
+    setSyncStatus(r.data);
+    if (r.data && r.data.running === false && poll.current) { clearInterval(poll.current); poll.current = null; setSyncing(false); loadCountries(); }
+  }).catch(() => {});
+
+  useEffect(() => { load(); loadCountries(); loadSyncStatus(); return () => poll.current && clearInterval(poll.current); }, []); // eslint-disable-line
 
   const save = async () => {
-    if (!form.site_id.trim()) return toast.error("Site ID wajib diisi.");
     setSaving(true);
     try {
       const payload = {
-        provider: form.provider,
-        site_id: form.site_id.trim(),
-        endpoint: form.endpoint.trim() || DEFAULT_ENDPOINT,
-        language: form.language,
-        currency: form.currency,
-        active: form.active,
+        base_url: form.base_url.trim() || DEFAULT_BASE, username: form.username.trim(),
+        markup_pct: Number(form.markup_pct) || 0, currency: form.currency, active: form.active,
       };
-      if (form.api_key.trim()) payload.api_key = form.api_key.trim();
+      if (form.password.trim()) payload.password = form.password.trim();
       const { data } = await api.put("/hotel/settings", payload);
-      setMeta({ api_key_set: !!data.api_key_set, api_key_masked: data.api_key_masked || "" });
-      setForm((f) => ({ ...f, api_key: "" }));
-      toast.success("Pengaturan API Agoda tersimpan.");
+      setMeta({ password_set: !!data.password_set, password_masked: data.password_masked || "" });
+      setForm((f) => ({ ...f, password: "" }));
+      toast.success("Pengaturan API MMBC tersimpan.");
     } catch (e) {
       toast.error(formatApiErrorDetail(e?.response?.data?.detail));
-    } finally {
-      setSaving(false);
-    }
+    } finally { setSaving(false); }
   };
 
   const testConnection = async () => {
-    setTesting(true);
-    setTestResult(null);
+    setTesting(true); setTestResult(null);
     try {
       const { data } = await api.post("/hotel/test-connection");
       setTestResult(data);
-      if (data.success) toast.success("Koneksi Agoda API berhasil.");
-      else toast.error("Koneksi Agoda API gagal.");
+      if (data.success) { toast.success("Koneksi MMBC berhasil."); loadCountries(); }
+      else toast.error("Koneksi MMBC gagal.");
     } catch (e) {
       const detail = formatApiErrorDetail(e?.response?.data?.detail);
       setTestResult({ success: false, message: detail });
       toast.error(detail);
-    } finally {
-      setTesting(false);
+    } finally { setTesting(false); }
+  };
+
+  const startSync = async () => {
+    setSyncing(true);
+    try {
+      const body = syncIso && syncIso !== "__all" ? { country_code: syncIso } : {};
+      const { data } = await api.post("/hotel/sync", body);
+      if (data.started) {
+        toast.success(data.message || "Sinkronisasi dimulai.");
+        loadSyncStatus();
+        if (poll.current) clearInterval(poll.current);
+        poll.current = setInterval(loadSyncStatus, 3000);
+      } else {
+        toast.info(data.message || "Sinkronisasi sedang berjalan.");
+        if (!poll.current) poll.current = setInterval(loadSyncStatus, 3000);
+      }
+    } catch (e) {
+      setSyncing(false);
+      toast.error(formatApiErrorDetail(e?.response?.data?.detail));
     }
   };
 
   if (loading) return <p className="text-sm text-slate-400 py-8 text-center">Memuat pengaturan…</p>;
+  const counts = syncStatus?.counts || {};
 
   return (
     <div className="space-y-5" data-testid="hotel-api-settings">
@@ -103,46 +112,41 @@ export default function ApiSettings() {
         <CardContent className="p-5 space-y-5">
           <div className="flex items-center gap-2 text-slate-700">
             <ShieldCheck className="h-4 w-4 text-emerald-600" />
-            <p className="text-xs text-slate-500">API Key dienkripsi saat disimpan (Fernet) dan tidak pernah ditampilkan penuh maupun dicatat di log.</p>
+            <p className="text-xs text-slate-500">Kredensial MMBC dienkripsi saat disimpan (Fernet) & tidak pernah ditampilkan penuh maupun dicatat di log.</p>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-1">
               <Label>Provider</Label>
-              <Input value={form.provider} disabled data-testid="hotel-settings-provider" />
+              <Input value="MMBC (klikmbc.co.id)" disabled data-testid="hotel-settings-provider" />
             </div>
             <div className="space-y-1">
-              <Label>Site ID</Label>
-              <Input value={form.site_id} data-testid="hotel-settings-siteid"
-                onChange={(e) => set("site_id", e.target.value)} placeholder="mis. 1234567" />
+              <Label>Markup Agen (%)</Label>
+              <Input type="number" min="0" step="0.5" value={form.markup_pct} data-testid="hotel-settings-markup"
+                onChange={(e) => set("markup_pct", e.target.value)} placeholder="mis. 15" />
             </div>
-            <div className="space-y-1 sm:col-span-2">
+            <div className="space-y-1">
+              <Label>Username</Label>
+              <Input value={form.username} data-testid="hotel-settings-username"
+                onChange={(e) => set("username", e.target.value)} placeholder="username MMBC" />
+            </div>
+            <div className="space-y-1">
               <Label className="flex items-center gap-2">
-                API Key
-                {meta.api_key_set && (
-                  <Badge variant="secondary" className="text-[10px]" data-testid="hotel-settings-key-status">
-                    <KeyRound className="h-3 w-3 mr-1" />Tersimpan: {meta.api_key_masked}
+                Password
+                {meta.password_set && (
+                  <Badge variant="secondary" className="text-[10px]" data-testid="hotel-settings-pass-status">
+                    <KeyRound className="h-3 w-3 mr-1" />Tersimpan: {meta.password_masked}
                   </Badge>
                 )}
               </Label>
-              <Input type="password" value={form.api_key} data-testid="hotel-settings-apikey"
-                onChange={(e) => set("api_key", e.target.value)}
-                placeholder={meta.api_key_set ? "•••• (biarkan kosong untuk mempertahankan key lama)" : "Masukkan API Key Agoda"} />
+              <Input type="password" value={form.password} data-testid="hotel-settings-password"
+                onChange={(e) => set("password", e.target.value)}
+                placeholder={meta.password_set ? "•••• (biarkan kosong untuk mempertahankan)" : "Masukkan password MMBC"} />
             </div>
             <div className="space-y-1 sm:col-span-2">
-              <Label>API Endpoint</Label>
-              <Input value={form.endpoint} data-testid="hotel-settings-endpoint"
-                onChange={(e) => set("endpoint", e.target.value)} placeholder={DEFAULT_ENDPOINT} />
-            </div>
-            <div className="space-y-1">
-              <Label>Bahasa</Label>
-              <Select value={form.language} onValueChange={(v) => set("language", v)}>
-                <SelectTrigger data-testid="hotel-settings-language"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="id-id">id-id (Indonesia)</SelectItem>
-                  <SelectItem value="en-us">en-us (English)</SelectItem>
-                </SelectContent>
-              </Select>
+              <Label>Base URL API</Label>
+              <Input value={form.base_url} data-testid="hotel-settings-baseurl"
+                onChange={(e) => set("base_url", e.target.value)} placeholder={DEFAULT_BASE} />
             </div>
             <div className="space-y-1">
               <Label>Mata Uang</Label>
@@ -155,7 +159,7 @@ export default function ApiSettings() {
                 </SelectContent>
               </Select>
             </div>
-            <div className="flex items-center gap-3 pt-2">
+            <div className="flex items-center gap-3 pt-6">
               <Switch checked={form.active} onCheckedChange={(v) => set("active", v)} data-testid="hotel-settings-active" />
               <Label className="cursor-pointer">Status Aktif</Label>
             </div>
@@ -178,9 +182,56 @@ export default function ApiSettings() {
               {testResult.detail && (
                 <p className="text-xs mt-1 opacity-80">
                   Status: {testResult.detail.status ?? "-"} · {testResult.detail.response_time_ms ?? "-"}ms
-                  {testResult.detail.error_message ? ` · ${testResult.detail.error_message}` : ""}
+                  {testResult.detail.reason ? ` · ${testResult.detail.reason}` : ""}
                 </p>
               )}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card className="border-slate-200 shadow-sm">
+        <CardContent className="p-5 space-y-4">
+          <div className="flex items-center gap-2 text-slate-700">
+            <Database className="h-4 w-4 text-blue-600" />
+            <p className="text-sm font-semibold">Master Data Hotel (Negara / Kota / Hotel)</p>
+          </div>
+          <p className="text-xs text-slate-500">Sinkronkan daftar hotel & kota dari MMBC agar pencarian by-nama cepat. Proses berjalan di latar belakang.</p>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="rounded-lg border border-slate-200 p-3 text-center"><p className="text-xs text-slate-500">Negara</p><p className="text-lg font-bold text-slate-800">{counts.countries ?? 0}</p></div>
+            <div className="rounded-lg border border-slate-200 p-3 text-center"><p className="text-xs text-slate-500">Kota</p><p className="text-lg font-bold text-slate-800">{(counts.cities ?? 0).toLocaleString("id-ID")}</p></div>
+            <div className="rounded-lg border border-slate-200 p-3 text-center"><p className="text-xs text-slate-500">Hotel</p><p className="text-lg font-bold text-slate-800">{(counts.hotels ?? 0).toLocaleString("id-ID")}</p></div>
+          </div>
+
+          <div className="flex flex-wrap items-end gap-3">
+            <div className="space-y-1">
+              <Label className="text-xs">Negara</Label>
+              <Select value={syncIso} onValueChange={setSyncIso}>
+                <SelectTrigger className="w-56" data-testid="hotel-sync-country"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__all">Semua negara</SelectItem>
+                  {countries.map((c) => <SelectItem key={c.country_code} value={c.country_code}>{c.country_name} ({c.country_code})</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            <Button onClick={startSync} disabled={syncing || syncStatus?.running} data-testid="hotel-sync-start">
+              {(syncing || syncStatus?.running) ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <DownloadCloud className="h-4 w-4 mr-2" />}
+              {(syncing || syncStatus?.running) ? "Menyinkron…" : "Mulai Sinkronisasi"}
+            </Button>
+            <Button variant="outline" onClick={loadSyncStatus} data-testid="hotel-sync-refresh"><RefreshCw className="h-4 w-4 mr-2" />Refresh</Button>
+          </div>
+
+          {syncStatus?.error && <p className="text-xs text-red-600">Error: {syncStatus.error}</p>}
+          {Array.isArray(syncStatus?.per_country) && syncStatus.per_country.length > 0 && (
+            <div className="space-y-1" data-testid="hotel-sync-percountry">
+              {syncStatus.per_country.map((p, i) => (
+                <div key={i} className="flex items-center justify-between text-xs border-b border-slate-100 py-1">
+                  <span className="font-medium">{p.country}</span>
+                  {p.ok ? <span className="text-emerald-600">{p.hotels} hotel · {p.cities} kota</span>
+                    : <span className="text-red-500">{p.reason || "gagal"}</span>}
+                </div>
+              ))}
             </div>
           )}
         </CardContent>
