@@ -204,6 +204,20 @@ backend:
           comment: "✅ PASS - KEY FUNCTIONAL TEST PASSED! POST /api/hotel/add-to-quotation creates quotations correctly without needing live MMBC. Test 1 (super_admin): Created QT-00001 with hotel_total=2,000,000 IDR (1,000,000/night × 2 nights × 1 room) - calculation correct. Test 2 (sales): Created QT-00002 with hotel_total=1,600,000 IDR (800,000/night × 2 nights × 1 room) - calculation correct. Both quotations persisted to database with correct MMBC fields (hotelKey, roomRateKey, nta, source=MMBC_API). Customer creation working. This endpoint is fully functional and does not depend on live MMBC API."
 
 frontend:
+  - task: "Login works via same-origin relative /api (self-hosting fix)"
+    implemented: true
+    working: true
+    file: "frontend/src/lib/api.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: "USER BUG (VPS self-host): cannot login after moving to VPS accessed via http://<public-ip>. Root cause: frontend was built with REACT_APP_BACKEND_URL pointing to a wrong/internal IP (install.sh used 'hostname -I' = private IP), so browser POSTed login to an unreachable host. FIX: api.js now falls back to relative '/api' when REACT_APP_BACKEND_URL is empty (`${process.env.REACT_APP_BACKEND_URL || ''}/api`); portalApi.js same. install.sh now builds frontend with empty REACT_APP_BACKEND_URL (same-origin via nginx) + nginx server_name '_' for IP access. IMPORTANT for verification: on the Emergent PREVIEW, REACT_APP_BACKEND_URL IS set, so behavior is unchanged — please verify LOGIN STILL WORKS (no regression). Creds: irawandedy185@gmail.com / Harmoni#Wisata2025. After login, dashboard should load."
+        - working: true
+          agent: "testing"
+          comment: "✅ PASS - NO REGRESSION CONFIRMED! Login flow works end-to-end after api.js change. Comprehensive test results: (1) Login page loads correctly for 'PT Harmoni Wisata Internusa' with all required fields (Email/Username, Password, Sign in button). (2) NO demo accounts panel found (correctly removed). (3) Login with super_admin credentials (irawandedy185@gmail.com / Harmoni#Wisata2025) succeeded. (4) Successfully redirected to /dashboard URL. (5) Token stored in localStorage (244 chars). (6) Dashboard loaded with sidebar/navigation visible. (7) 16 authenticated API calls succeeded (all 200 status): /api/public/branding, /api/public/login-config, /api/auth/login, and other dashboard data endpoints. (8) No console errors detected. (9) Only 1 minor network error (cdn-cgi/rum - Cloudflare RUM, not app-related). Since REACT_APP_BACKEND_URL IS set in preview environment to 'https://github-workflow-14.preview.emergentagent.com', behavior is UNCHANGED as expected. The fallback to relative '/api' when REACT_APP_BACKEND_URL is empty does NOT affect this environment. Login functionality fully operational."
   - task: "Hotel UI migrated to MMBC (country select, city/hotel pickers, per-room results, booking dialog, settings sync, bookings tab)"
     implemented: true
     working: "NA"
@@ -223,7 +237,8 @@ metadata:
   run_ui: false
 
 test_plan:
-  current_focus: []
+  current_focus:
+    - "Hotel UI migrated to MMBC (country select, city/hotel pickers, per-room results, booking dialog, settings sync, bookings tab)"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
@@ -235,3 +250,5 @@ agent_communication:
       message: "BUG FIX (pip ResolutionImpossible on fresh VPS install): removed duplicate hashed 'litellm @ <cdn wheel>' line from backend/requirements.txt because emergentintegrations==0.2.0 already pins the same wheel (unhashed) -> pip saw conflicting direct refs. Verified fresh-venv dry-run resolves cleanly now; running backend restarted healthy (200). Please verify backend RUNTIME is unaffected after the requirements change: (1) server up (GET /api/ -> 200), (2) super_admin login works (irawandedy185@gmail.com / Harmoni#Wisata2025) and returns a token, (3) GET /api/users returns the single super_admin, (4) GET /api/company-settings + GET /api/system-settings return 200. Note: this is a clean-slate production instance (SEED_DEMO_DATA=false) — only one user exists, no demo data. Do NOT treat empty lists / MMBC 'invalid login' as bugs."
     - agent: "testing"
       message: "✅ BACKEND RUNTIME HEALTH VERIFIED - Completed comprehensive testing of backend runtime after requirements.txt dependency fix. All 6 critical tests passed (100% success rate). Backend server is fully operational with no import/startup errors. Core endpoints (health check, authentication, users, company-settings, system-settings, user creation) all responding correctly. The removal of duplicate litellm line from requirements.txt did NOT cause any runtime breakage. Clean-slate production environment confirmed (only 1 super_admin user exists, no demo data). Backend is ready for production use."
+    - agent: "testing"
+      message: "✅ LOGIN REGRESSION TEST PASSED - Verified login flow works end-to-end after api.js change (fallback to relative '/api' when REACT_APP_BACKEND_URL is empty). Since REACT_APP_BACKEND_URL IS set in preview environment, behavior is UNCHANGED. Test results: Login page loads correctly, no demo accounts panel (removed), super_admin login succeeded, redirected to /dashboard, token stored in localStorage, 16 authenticated API calls succeeded (all 200), dashboard loaded with navigation. NO REGRESSION detected. The api.js change is safe and does not affect environments where REACT_APP_BACKEND_URL is set."

@@ -32,15 +32,19 @@ ADMIN_EMAIL="${ADMIN_EMAIL:-irawandedy185@gmail.com}"
 read -rp "4) Password Super Admin [Harmoni#Wisata2025]: " ADMIN_PASS
 ADMIN_PASS="${ADMIN_PASS:-Harmoni#Wisata2025}"
 
-# Tentukan URL backend untuk frontend
+# Tentukan URL publik + nama server nginx.
+# PENTING: frontend memanggil backend via path relatif (/api) origin yang sama,
+# jadi REACT_APP_BACKEND_URL dikosongkan agar anti-salah IP/domain/http/https.
 if [ -n "${DOMAIN}" ]; then
   SERVER_NAME="${DOMAIN}"
-  BACKEND_URL="https://${DOMAIN}"
+  PUBLIC_URL="https://${DOMAIN}"
 else
-  IP="$(hostname -I | awk '{print $1}')"
-  SERVER_NAME="${IP}"
-  BACKEND_URL="http://${IP}"
-  warn "Tidak ada domain — memakai IP ${IP} (HTTPS dilewati)."
+  # deteksi IP publik (best-effort), fallback ke IP lokal
+  IP="$(curl -s --max-time 5 https://api.ipify.org || true)"
+  [ -n "${IP}" ] || IP="$(hostname -I | awk '{print $1}')"
+  SERVER_NAME="_"            # catch-all: bisa diakses via IP publik apa pun
+  PUBLIC_URL="http://${IP}"
+  warn "Tidak ada domain — akses via IP ${IP} (HTTPS dilewati)."
 fi
 
 echo
@@ -109,7 +113,7 @@ JWT_SECRET="${JWT}"
 SUPER_ADMIN_EMAIL="${ADMIN_EMAIL}"
 SUPER_ADMIN_PASSWORD="${ADMIN_PASS}"
 SEED_DEMO_DATA="false"
-FRONTEND_URL="${BACKEND_URL}"
+FRONTEND_URL="${PUBLIC_URL}"
 EOF
 
 # ----- LANGKAH 7: systemd service -----
@@ -136,7 +140,8 @@ systemctl is-active --quiet harmoni-backend && say "Backend RUNNING." || warn "B
 # ----- LANGKAH 8: build frontend -----
 say "Membangun tampilan web (frontend)... (agak lama)"
 cd "${APP_DIR}/frontend"
-echo "REACT_APP_BACKEND_URL=${BACKEND_URL}" > .env
+# Kosong = frontend pakai path relatif /api (origin sama, via nginx). Anti-salah URL.
+echo "REACT_APP_BACKEND_URL=" > .env
 yarn install
 CI=false yarn build
 
@@ -178,7 +183,7 @@ fi
 
 echo
 echo "=================================================="
-say "SELESAI! Buka:  ${BACKEND_URL}"
+say "SELESAI! Buka:  ${PUBLIC_URL}"
 echo "   Login  : ${ADMIN_EMAIL}"
 echo "   Sandi  : ${ADMIN_PASS}"
 echo "   (Segera ganti sandi dari menu profil.)"

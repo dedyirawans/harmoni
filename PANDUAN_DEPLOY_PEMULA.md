@@ -142,12 +142,14 @@ Kalau tulisannya **active (running)** hijau → berhasil. Tekan `q` untuk keluar
 ## LANGKAH 8 — Bangun Tampilan Web (Frontend)
 ```bash
 cd /opt/harmoni-crm/frontend
-echo 'REACT_APP_BACKEND_URL=https://DOMAIN_ANDA' > .env
+# Kosongkan REACT_APP_BACKEND_URL -> frontend memanggil backend via /api di origin
+# yang sama (lewat Nginx). Ini ANTI-SALAH untuk IP maupun domain, http/https.
+echo 'REACT_APP_BACKEND_URL=' > .env
 yarn install
-yarn build
+CI=false yarn build
 ```
-> Kalau belum punya domain, sementara pakai: `echo 'REACT_APP_BACKEND_URL=http://IP_VPS_ANDA' > .env`
-> `yarn build` juga agak lama, sabar ya.
+> Frontend akan otomatis memakai `/api` pada alamat yang sama dengan situs Anda,
+> jadi tidak perlu menuliskan IP/domain di sini.
 
 ---
 
@@ -176,7 +178,7 @@ server {
 }
 EOF
 ```
-> Ganti `DOMAIN_ANDA`. Belum punya domain? Ganti jadi IP VPS Anda.
+> Ganti `DOMAIN_ANDA` dengan domain Anda. **Belum punya domain / akses via IP?** Tulis `server_name _;` (garis bawah) agar bisa diakses lewat IP publik apa pun.
 
 Aktifkan:
 ```bash
